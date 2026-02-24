@@ -2,8 +2,6 @@
 
 A private, self-hosted AI assistant system with multi-user support, two-tier inference, and full data ownership.
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
 ## Overview
 
 Local AI Assistant is a production-ready chat application that provides a ChatGPT-like experience while running entirely on your own infrastructure. It features:
@@ -65,7 +63,10 @@ Local AI Assistant is a production-ready chat application that provides a ChatGP
 ## Project Structure
 
 ```
-assistant-staging/
+Local_AI_Project/
+├── Makefile                 # Development commands (make dev, make test)
+├── README.md
+│
 ├── gateway/                 # FastAPI Backend (Python)
 │   ├── app/
 │   │   ├── main.py         # Application entry point
@@ -74,8 +75,15 @@ assistant-staging/
 │   │   ├── models/         # Pydantic models
 │   │   ├── routes/         # API endpoints (chat, health)
 │   │   └── services/       # Database & inference services
-│   ├── requirements.txt    # Python dependencies
-│   └── GPU_SETUP_GUIDE.md  # GPU deployment instructions
+│   ├── docs/               # Gateway-specific documentation
+│   │   ├── GPU_SETUP_GUIDE.md
+│   │   └── GPU_SETUP_GUIDE_THINKING.md
+│   ├── tests/              # Pytest test suite
+│   │   ├── conftest.py     # Shared fixtures
+│   │   └── test_*.py       # Test files
+│   ├── .env.example        # Environment template
+│   ├── pyproject.toml      # Python project config
+│   └── requirements.txt    # Python dependencies
 │
 ├── webapp/                  # Next.js Frontend (TypeScript)
 │   ├── src/
@@ -86,6 +94,7 @@ assistant-staging/
 │   │   └── lib/            # Utility libraries
 │   │       ├── gateway.ts  # Gateway API client
 │   │       └── supabase.ts # Supabase client
+│   ├── .env.example        # Environment template
 │   ├── package.json
 │   └── tsconfig.json
 │
@@ -93,9 +102,9 @@ assistant-staging/
 │   ├── config.toml         # Supabase local config
 │   ├── migrations/         # SQL migrations
 │   │   └── 20260222000000_initial_schema.sql
-│   └── snippets/           # SQL reference snippets
+│   └── snippets/           # SQL reference snippets (00-07)
 │
-└── README.md
+└── docs/                    # Project documentation (private, not in git)
 ```
 
 ## Quick Start
@@ -107,6 +116,59 @@ assistant-staging/
 - **Node.js 18+** (for Web App)
 - **Python 3.10+** (for Gateway API)
 - **Git** (for version control)
+- **Supabase CLI** (`brew install supabase/tap/supabase`)
+
+### Quick Commands (Makefile)
+
+```bash
+make help           # Show all available commands
+make install        # Install all dependencies (gateway + webapp)
+make dev            # Instructions for starting all services
+make dev-gateway    # Start Gateway API only
+make dev-webapp     # Start Web App only
+make dev-supabase   # Start Supabase only
+make test           # Run all tests
+make test-gateway   # Run gateway tests with pytest
+make lint           # Lint gateway code
+make format         # Format gateway code with black
+make clean          # Remove build artifacts
+make stop           # Stop all services
+```
+
+### Startup Checklist (Daily Use)
+
+Once everything is installed, start these **3 services in order** every time you work on the project:
+
+```bash
+# Step 1 — Start Supabase (make sure Docker Desktop is running first)
+cd /path/to/Local_AI_Project
+supabase start
+
+# Step 2 — Start the Gateway API
+cd gateway
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Step 3 — Start the Web App
+cd webapp
+npm run dev
+```
+
+Verify everything is up:
+
+```bash
+curl http://127.0.0.1:54321/auth/v1/health   # Supabase Auth
+curl http://127.0.0.1:8000/health             # Gateway API
+open http://localhost:3000                     # Web App
+```
+
+| Service | URL | What it does |
+|---------|-----|--------------|
+| **Supabase** | http://127.0.0.1:54321 | Auth + Database (runs in Docker) |
+| **Supabase Studio** | http://127.0.0.1:54323 | DB admin dashboard |
+| **Gateway API** | http://127.0.0.1:8000 | Python backend — routes chat to DB & LLM |
+| **Web App** | http://localhost:3000 | Next.js frontend |
+
+> **Note:** The Gateway is required for all chat operations (send message, load history, manage sessions). Login/signup talks to Supabase directly, but everything else goes through the Gateway.
 
 ### 1. Clone the Repository
 
@@ -146,26 +208,15 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Create .env file
-cat > .env << 'EOF'
-# Application
-DEBUG=true
-
-# Supabase Configuration
-SUPABASE_URL=http://127.0.0.1:54321
-SUPABASE_ANON_KEY=<your-anon-key>
-SUPABASE_SERVICE_ROLE_KEY=<your-service-role-key>
-
-# JWT Configuration (from supabase start output)
-JWT_SECRET=<your-jwt-secret>
-
-# Inference Endpoints (configure when GPU is ready)
-INFERENCE_INSTANT_URL=
-INFERENCE_THINKING_URL=
-EOF
+# Copy environment template and fill in your values
+cp .env.example .env.local
+# Edit .env.local with your Supabase credentials from step 2
 
 # Start the server
 uvicorn app.main:app --reload --port 8000
+
+# Or use Makefile
+make dev-gateway
 ```
 
 The Gateway API will be available at http://localhost:8000
@@ -178,15 +229,15 @@ cd webapp
 # Install dependencies
 npm install
 
-# Create .env.local file
-cat > .env.local << 'EOF'
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<your-anon-key>
-NEXT_PUBLIC_GATEWAY_URL=http://localhost:8000
-EOF
+# Copy environment template and fill in your values
+cp .env.example .env.local
+# Edit .env.local with your Supabase credentials from step 2
 
 # Start development server
 npm run dev
+
+# Or use Makefile
+make dev-webapp
 ```
 
 The Web App will be available at http://localhost:3000
@@ -299,10 +350,12 @@ All tables have RLS enabled. Users can only access their own data:
 
 ## Documentation
 
-Detailed documentation is available in the `/docs` folder:
+Detailed documentation is maintained locally in the `/docs` folder (not included in git for privacy).
+
+Documentation structure:
 
 | Section | Description |
-|---------|-------------|
+|---------|-----------|
 | `00_README/` | Project overview, glossary, getting started |
 | `01_PRODUCT/` | MVP scope, vision, success metrics |
 | `02_ARCHITECTURE/` | System design, data flow, environments |
@@ -313,6 +366,8 @@ Detailed documentation is available in the `/docs` folder:
 | `07_SECURITY/` | Threat model, secrets, hardening |
 | `08_ROADMAP/` | Development phases |
 | `09_DECISIONS/` | Architecture Decision Records (ADRs) |
+
+Gateway-specific docs (GPU setup guides) are in `gateway/docs/`.
 
 ## Roadmap
 
@@ -356,13 +411,16 @@ cd gateway
 source venv/bin/activate
 
 # Run all tests
-pytest
+pytest tests/
 
 # Run with coverage
-pytest --cov=app
+pytest tests/ --cov=app --cov-report=html
 
 # Run specific test file
-pytest test_chat_full.py
+pytest tests/test_chat_full.py -v
+
+# Or use Makefile (from project root)
+make test-gateway
 ```
 
 ### Web App Type Check
@@ -428,7 +486,9 @@ supabase migration list
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+All Rights Reserved © 2026
+
+This is a private project. Unauthorized copying, modification, distribution, or use of this software is strictly prohibited.
 
 ## Acknowledgments
 
