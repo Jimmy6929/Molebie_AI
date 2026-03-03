@@ -64,6 +64,7 @@ Local AI Assistant is a production-ready chat application that provides a ChatGP
 
 ```
 Local_AI_Project/
+├── .env.local               # Shared environment config (all services)
 ├── Makefile                 # Development commands (make dev, make test)
 ├── README.md
 │
@@ -81,7 +82,6 @@ Local_AI_Project/
 │   ├── tests/              # Pytest test suite
 │   │   ├── conftest.py     # Shared fixtures
 │   │   └── test_*.py       # Test files
-│   ├── .env.example        # Environment template
 │   ├── pyproject.toml      # Python project config
 │   └── requirements.txt    # Python dependencies
 │
@@ -94,7 +94,6 @@ Local_AI_Project/
 │   │   └── lib/            # Utility libraries
 │   │       ├── gateway.ts  # Gateway API client
 │   │       └── supabase.ts # Supabase client
-│   ├── .env.example        # Environment template
 │   ├── package.json
 │   └── tsconfig.json
 │
@@ -152,6 +151,9 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 cd webapp
 npm run dev
 ```
+
+> **Note:** All services share a single `.env.local` at the project root.
+> Gateway and webapp both read from `../.env.local` automatically — no per-folder env files needed.
 
 Verify everything is up:
 
@@ -236,11 +238,7 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Copy environment template and fill in your values
-cp .env.example .env.local
-# Edit .env.local with your Supabase credentials from step 2
-
-# Start the server
+# Start the server (reads .env.local from project root automatically)
 uvicorn app.main:app --reload --port 8000
 
 # Or use Makefile
@@ -257,11 +255,7 @@ cd webapp
 # Install dependencies
 npm install
 
-# Copy environment template and fill in your values
-cp .env.example .env.local
-# Edit .env.local with your Supabase credentials from step 2
-
-# Start development server
+# Start development server (reads .env.local from project root automatically)
 npm run dev
 
 # Or use Makefile
@@ -467,7 +461,14 @@ npm run lint
 
 ### Environment Variables
 
-#### Gateway (.env)
+All environment variables live in a **single `.env.local` at the project root**. Both the gateway and webapp read from this file automatically.
+
+```bash
+# First-time setup: copy the template and fill in your values
+cp .env.example .env.local
+```
+
+#### Gateway Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -483,7 +484,7 @@ npm run lint
 | `INFERENCE_TEMPERATURE` | Model temperature | `0.7` |
 | `INFERENCE_TIMEOUT` | Request timeout (seconds) | `120.0` |
 
-#### Web App (.env.local)
+#### Web App Variables
 
 | Variable | Description |
 |----------|-------------|
