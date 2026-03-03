@@ -1,19 +1,22 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0a0a0a;
+  --background: #050505;
   --foreground: #00ff41;
   --foreground-muted: #33cc55;
   --foreground-dim: #77bb88;
   --surface: #111111;
   --surface-hover: #1a1a1a;
-  --border: #3a3a3a;
+  --border: rgba(255, 255, 255, 0.06);
   --border-focus: #00ff41;
   --accent: #00ff41;
   --accent-dim: #003300;
   --danger: #ff3333;
   --user-bg: #0d1f0d;
   --assistant-bg: #111111;
+  --glass: rgba(17, 17, 17, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-hover: rgba(255, 255, 255, 0.04);
 }
 
 @theme inline {
@@ -23,9 +26,20 @@
   --font-mono: var(--font-geist-mono);
 }
 
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3a3a3a #0a0a0a;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -46,15 +60,17 @@ body {
   color: var(--accent);
 }
 
-/* Scanline effect (subtle) */
-@keyframes scanline {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100vh); }
+/* Glow effect */
+.glow {
+  text-shadow: 0 0 6px var(--accent), 0 0 12px rgba(0, 255, 65, 0.3);
 }
 
-/* Glow effect for active elements */
-.glow {
-  text-shadow: 0 0 5px var(--accent), 0 0 10px var(--accent);
+/* Glass surface */
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  border: 1px solid var(--glass-border);
 }
 
 /* Input styling */
@@ -62,16 +78,42 @@ input, textarea {
   caret-color: var(--accent);
 }
 
+/* Selection */
+::selection {
+  background: rgba(0, 255, 65, 0.18);
+}
+
 /* Code blocks inside messages */
 pre {
-  background: #050505 !important;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.4) !important;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
   padding: 12px;
   overflow-x: auto;
+  margin: 8px 0;
 }
 
 code {
   font-family: var(--font-mono), 'Courier New', monospace;
   font-size: 0.9em;
+}
+
+/* Webkit scrollbar — ultra-thin, translucent */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.18);
+}
+
+/* Smooth transitions globally */
+button, a, input {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }

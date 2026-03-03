@@ -65,42 +65,43 @@ export default function Sidebar({
   }
 
   return (
-    <div className="w-64 border-r border-[#3a3a3a] flex flex-col min-h-screen bg-[#080808]">
+    <div className="w-64 shrink-0 flex flex-col h-full glass rounded-2xl overflow-hidden">
       {/* Header */}
-      <div className="p-3 border-b border-[#3a3a3a]">
-        <div className="text-xs text-[#00ff41] glow font-bold">
-          LOCAL_AI v0.1
+      <div className="px-4 py-3 flex items-center justify-between">
+        <div className="text-[11px] text-[#00ff41] glow font-bold tracking-wider">
+          LOCAL_AI
         </div>
+        <span className="text-[9px] text-[#555] bg-white/[0.05] px-1.5 py-0.5 rounded-full">v0.1</span>
       </div>
 
       {/* New Chat */}
-      <div className="p-2">
+      <div className="px-3 pt-3 pb-1">
         <button
           onClick={onNewChat}
-          className="w-full text-left text-xs px-2 py-2 border border-dashed border-[#3a3a3a] text-[#77bb88] hover:border-[#00ff41] hover:text-[#00ff41] transition-colors"
+          className="w-full text-[11px] px-3 py-2.5 rounded-xl border border-dashed border-white/[0.1] text-[#77bb88] hover:border-[#00ff41]/30 hover:text-[#00ff41] hover:bg-[#00ff41]/5 transition-all flex items-center gap-2"
         >
-          + new_session
+          <span className="text-sm">+</span> new session
         </button>
       </div>
 
       {/* Sessions List */}
-      <div className="flex-1 overflow-y-auto px-2 space-y-1">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5 min-h-0">
         {sessions.length === 0 && (
-          <div className="text-[10px] text-[#555555] p-2 text-center">
+          <div className="text-[10px] text-[#444] p-4 text-center">
             no sessions yet
           </div>
         )}
         {sessions.map((s) => (
           <div
             key={s.id}
-            className={`group flex items-center text-xs cursor-pointer transition-colors ${
+            className={`group flex items-center text-[11px] cursor-pointer transition-all rounded-xl ${
               activeSessionId === s.id
-                ? "bg-[#0d1f0d] border border-[#00ff41]/30 text-[#00ff41]"
-                : "border border-transparent text-[#77bb88] hover:text-[#00ff41] hover:bg-[#111111]"
+                ? "bg-[#00ff41]/10 border border-[#00ff41]/15 text-[#00ff41]"
+                : "border border-transparent text-[#888] hover:text-[#ccc] hover:bg-white/[0.04]"
             }`}
           >
             {editingId === s.id ? (
-              <div className="flex-1 px-2 py-1.5">
+              <div className="flex-1 px-3 py-2">
                 <input
                   ref={editInputRef}
                   type="text"
@@ -111,46 +112,46 @@ export default function Sidebar({
                     if (e.key === "Escape") cancelRename();
                   }}
                   onBlur={commitRename}
-                  className="w-full bg-[#0a0a0a] border border-[#00ff41] text-[#00ff41] px-1 py-0.5 text-xs font-mono focus:outline-none"
+                  className="w-full bg-black/30 border border-[#00ff41]/40 rounded-lg text-[#00ff41] px-2 py-1 text-[11px] font-mono focus:outline-none"
                   maxLength={200}
                 />
-                <div className="text-[10px] text-[#555555] mt-0.5">
-                  enter to save · esc to cancel
+                <div className="text-[9px] text-[#444] mt-1">
+                  enter · esc
                 </div>
               </div>
             ) : (
               <button
                 onClick={() => onSelectSession(s.id)}
                 onDoubleClick={() => startRename(s)}
-                className="flex-1 text-left px-2 py-2 min-w-0"
+                className="flex-1 text-left px-3 py-2.5 min-w-0"
               >
                 <div className="truncate">{s.title || "untitled"}</div>
-                <div className="text-[10px] text-[#555555] mt-0.5">
+                <div className="text-[9px] text-[#555] mt-0.5">
                   {timeAgo(s.updated_at)}
                 </div>
               </button>
             )}
             {editingId !== s.id && (
-              <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="flex shrink-0 opacity-0 group-hover:opacity-100 transition-opacity pr-2 gap-0.5">
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     startRename(s);
                   }}
-                  className="px-1 text-[#555555] hover:text-[#00ff41]"
+                  className="w-6 h-6 rounded-md flex items-center justify-center text-[10px] text-[#555] hover:text-[#00ff41] hover:bg-white/[0.05] transition-all"
                   title="rename session"
                 >
-                  [r]
+                  ✎
                 </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onDeleteSession(s.id);
                   }}
-                  className="px-1 text-[#555555] hover:text-[#ff3333]"
+                  className="w-6 h-6 rounded-md flex items-center justify-center text-[10px] text-[#555] hover:text-[#ff3333] hover:bg-[#ff3333]/10 transition-all"
                   title="delete session"
                 >
-                  [x]
+                  ✕
                 </button>
               </div>
             )}
@@ -159,15 +160,15 @@ export default function Sidebar({
       </div>
 
       {/* User Info */}
-      <div className="border-t border-[#3a3a3a] p-3 space-y-2">
-        <div className="text-[10px] text-[#555555] truncate">
+      <div className="px-4 py-3 flex items-center justify-between">
+        <div className="text-[10px] text-[#555] truncate min-w-0 flex-1">
           {userEmail}
         </div>
         <button
           onClick={onLogout}
-          className="text-[10px] text-[#77bb88] hover:text-[#ff3333] transition-colors"
+          className="text-[10px] text-[#555] hover:text-[#ff3333] transition-all shrink-0 ml-2 px-2 py-1 rounded-md hover:bg-[#ff3333]/10"
         >
-          [logout]
+          logout
         </button>
       </div>
     </div>

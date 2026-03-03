@@ -40,13 +40,19 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     
-    # Configure CORS for local development
+    # Configure CORS for local + LAN development
+    # (webapp may be accessed via localhost or the server's LAN IP)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
             "http://localhost:3000",
             "http://127.0.0.1:3000",
+            "http://0.0.0.0:3000",
+            # LAN access — any device on the local network
+            # Regex-like patterns aren't supported; we use a wildcard
+            # for development. Tighten this in production.
         ],
+        allow_origin_regex=r"^http://192\.168\.\d+\.\d+:3000$|^http://172\.\d+\.\d+\.\d+:3000$|^http://10\.\d+\.\d+\.\d+:3000$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

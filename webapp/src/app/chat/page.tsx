@@ -35,6 +35,7 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const isStreamingRef = useRef(false);
 
   // Auth check
   useEffect(() => {
@@ -82,6 +83,9 @@ export default function ChatPage() {
       setMessages([]);
       return;
     }
+
+    // Don't reload from DB while streaming — the stream handler manages state
+    if (isStreamingRef.current) return;
 
     async function loadMessages() {
       try {
@@ -131,6 +135,7 @@ export default function ChatPage() {
     };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    isStreamingRef.current = true;
 
     try {
       await sendMessageStream(
@@ -173,6 +178,7 @@ export default function ChatPage() {
         )
       );
     } finally {
+      isStreamingRef.current = false;
       setLoading(false);
       inputRef.current?.focus();
     }
@@ -228,14 +234,14 @@ export default function ChatPage() {
 
   if (!token) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="glow">authenticating...</div>
+      <div className="h-screen flex items-center justify-center bg-[#050505]">
+        <div className="glow text-sm">authenticating...</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex">
+    <div className="h-screen flex overflow-hidden bg-[#050505] p-2 gap-2">
       {/* Sidebar */}
       {sidebarOpen && (
         <Sidebar
@@ -251,122 +257,116 @@ export default function ChatPage() {
       )}
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col min-h-screen">
-        {/* Header */}
-        <header className="border-b border-[#3a3a3a] px-4 py-2 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
+      <div className="flex-1 flex flex-col h-full min-w-0 glass rounded-2xl overflow-hidden relative">
+        {/* Floating Header Island */}
+        <div className="absolute top-3 left-0 right-0 z-10 flex justify-center px-5 pointer-events-none">
+          <header className="pointer-events-auto inline-flex items-center gap-3 px-1.5 py-1.5 rounded-full bg-black/50 backdrop-blur-2xl border border-white/[0.08] shadow-lg shadow-black/20">
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="text-[#77bb88] hover:text-[#00ff41] text-sm"
+              className="w-7 h-7 rounded-full flex items-center justify-center text-[#77bb88] hover:text-[#00ff41] hover:bg-white/[0.08] text-xs transition-all"
             >
-              {sidebarOpen ? "[≡]" : "[≡]"}
+              ≡
             </button>
-            <span className="text-xs text-[#77bb88]">
+            <span className="text-[10px] text-[#555] font-normal px-1">
               {activeSessionId
-                ? `session:${activeSessionId.slice(0, 8)}...`
-                : "new_session"}
+                ? `${activeSessionId.slice(0, 8)}…`
+                : "new session"}
             </span>
-          </div>
-          <div className="flex items-center gap-3">
-            {/* Mode toggle */}
             <button
               onClick={() =>
                 setMode(mode === "instant" ? "thinking" : "instant")
               }
-              className={`text-xs px-2 py-1 border transition-colors ${
+              className={`text-[10px] px-2.5 py-1 rounded-full transition-all ${
                 mode === "thinking"
-                  ? "border-[#ff9900] text-[#ff9900] bg-[#ff9900]/10"
-                  : "border-[#3a3a3a] text-[#77bb88] hover:border-[#77bb88]"
+                  ? "text-[#ff9900] bg-[#ff9900]/15"
+                  : "text-[#77bb88] bg-white/[0.06] hover:bg-white/[0.1]"
               }`}
             >
-              {mode === "thinking" ? "[think]" : "[instant]"}
+              {mode === "thinking" ? "◆ think" : "⚡ instant"}
             </button>
-          </div>
-        </header>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-          {messages.length === 0 && (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center text-[#555555] space-y-2">
-                <pre className="text-xs leading-tight">
-{`
-  ┌─────────────────────────┐
-  │  ready for input...     │
-  │                         │
-  │  type a message below   │
-  │  to start a session     │
-  └─────────────────────────┘
-`}
-                </pre>
-              </div>
-            </div>
-          )}
-
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${
-                msg.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div
-                className={`max-w-[80%] px-3 py-2 text-sm ${
-                  msg.role === "user"
-                    ? "bg-[#0d1f0d] border border-[#00ff41]/20 text-[#00ff41]"
-                    : "bg-[#111111] border border-[#3a3a3a] text-[#b0b0b0]"
-                }`}
-              >
-                <div className="text-[10px] text-[#77bb88] mb-1">
-                  {msg.role === "user" ? "> you" : "> ai"}
-                  {msg.mode_used === "thinking" && " [think]"}
-                </div>
-                <div className="whitespace-pre-wrap break-words">
-                  {msg.content}
-                  {msg.streaming && (
-                    <span className="inline-block w-2 h-4 bg-[#00ff41] ml-0.5 animate-pulse" />
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
+          </header>
         </div>
 
-        {/* Input Area */}
-        <div className="border-t border-[#3a3a3a] p-4 shrink-0">
-          <div className="flex gap-2 items-end max-w-4xl mx-auto">
-            <div className="text-[#77bb88] text-sm pt-2">{">"}</div>
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="type your message..."
-              rows={1}
-              className="flex-1 bg-transparent text-[#00ff41] text-sm resize-none focus:outline-none placeholder-[#555555] min-h-[36px] max-h-[200px] py-2"
-              style={{
-                height: "auto",
-                overflow: "hidden",
-              }}
-              onInput={(e) => {
-                const t = e.target as HTMLTextAreaElement;
-                t.style.height = "auto";
-                t.style.height = t.scrollHeight + "px";
-              }}
-              disabled={loading}
-              autoFocus
-            />
-            <button
-              onClick={handleSend}
-              disabled={loading || !input.trim()}
-              className="text-sm px-3 py-2 border border-[#3a3a3a] text-[#77bb88] hover:border-[#00ff41] hover:text-[#00ff41] transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-            >
-              {loading ? "[...]" : "[send]"}
-            </button>
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto min-h-0 px-5 pt-16 pb-40">
+          <div className="max-w-3xl mx-auto space-y-3">
+            {messages.length === 0 && (
+              <div className="flex items-center justify-center" style={{ minHeight: 'calc(100vh - 200px)' }}>
+                <div className="text-center space-y-3">
+                  <div className="text-3xl opacity-20">⌘</div>
+                  <div className="text-xs text-[#555]">ready for input…</div>
+                  <div className="text-[10px] text-[#333]">type a message below to start a session</div>
+                </div>
+              </div>
+            )}
+
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${
+                  msg.role === "user" ? "justify-end" : "justify-start"
+                }`}
+              >
+                <div
+                  className={`max-w-[85%] px-4 py-3 text-sm transition-all ${
+                    msg.role === "user"
+                      ? "rounded-2xl rounded-br-md bg-[#00ff41]/10 border border-[#00ff41]/15 text-[#00ff41]"
+                      : "rounded-2xl rounded-bl-md bg-white/[0.04] border border-white/[0.06] text-[#b0b0b0]"
+                  }`}
+                >
+                  <div className="text-[10px] mb-1.5 select-none flex items-center gap-1.5">
+                    <span className={msg.role === "user" ? "text-[#00ff41]/50" : "text-[#555]"}>
+                      {msg.role === "user" ? "> you" : "> ai"}
+                    </span>
+                    {msg.mode_used === "thinking" && (
+                      <span className="text-[#ff9900]/70 text-[9px] bg-[#ff9900]/10 px-1.5 py-0.5 rounded-full">think</span>
+                    )}
+                  </div>
+                  <div className="whitespace-pre-wrap break-words overflow-hidden leading-relaxed">
+                    {msg.content}
+                    {msg.streaming && (
+                      <span className="inline-block w-1.5 h-4 bg-[#00ff41] ml-0.5 animate-pulse rounded-full" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
           </div>
-          <div className="text-[10px] text-[#555555] mt-1 text-center">
-            enter to send · shift+enter for new line
+        </div>
+
+        {/* Floating Input Island */}
+        <div className="absolute bottom-3 left-0 right-0 z-10 px-5 pointer-events-none">
+          <div className="max-w-3xl mx-auto pointer-events-auto">
+            <div className="flex gap-2 items-end rounded-2xl bg-black/50 backdrop-blur-2xl border border-white/[0.08] shadow-lg shadow-black/20 px-4 py-2.5 focus-within:border-[#00ff41]/20 transition-all">
+              <div className="text-[#555] text-sm pt-0.5 select-none shrink-0">{">"}</div>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  const t = e.target as HTMLTextAreaElement;
+                  t.style.height = "0px";
+                  t.style.height = Math.min(t.scrollHeight, 200) + "px";
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder="type your message…"
+                rows={1}
+                className="flex-1 bg-transparent text-[#00ff41] text-sm resize-none focus:outline-none placeholder-[#333] py-0.5 min-h-[24px] max-h-[200px] overflow-y-auto"
+                disabled={loading}
+                autoFocus
+              />
+              <button
+                onClick={handleSend}
+                disabled={loading || !input.trim()}
+                className="text-[11px] px-3.5 py-1.5 rounded-full bg-[#00ff41]/10 border border-[#00ff41]/20 text-[#00ff41] hover:bg-[#00ff41]/20 hover:border-[#00ff41]/30 transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0"
+              >
+                {loading ? "···" : "send ↵"}
+              </button>
+            </div>
+            <div className="text-[10px] text-[#333] mt-1.5 text-center">
+              enter to send · shift+enter for new line
+            </div>
           </div>
         </div>
       </div>
