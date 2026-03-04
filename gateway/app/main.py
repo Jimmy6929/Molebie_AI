@@ -47,10 +47,7 @@ def create_app() -> FastAPI:
         allow_origins=[
             "http://localhost:3000",
             "http://127.0.0.1:3000",
-            "http://0.0.0.0:3000",
-            # LAN access — any device on the local network
-            # Regex-like patterns aren't supported; we use a wildcard
-            # for development. Tighten this in production.
+            "http://100.99.189.104:3000",
         ],
         allow_origin_regex=r"^http://192\.168\.\d+\.\d+:3000$|^http://172\.\d+\.\d+\.\d+:3000$|^http://10\.\d+\.\d+\.\d+:3000$",
         allow_credentials=True,
