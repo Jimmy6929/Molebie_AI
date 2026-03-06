@@ -25,6 +25,9 @@ class JWTPayload(BaseModel):
     aud: Optional[str] = None
     exp: Optional[int] = None
     iat: Optional[int] = None
+    raw_token: Optional[str] = None
+    
+    model_config = {"arbitrary_types_allowed": True}
     
     @property
     def user_id(self) -> str:
@@ -86,9 +89,9 @@ async def get_current_user(
     uses ES256 with rotating keys. In production with Supabase Cloud,
     you would verify against the JWKS endpoint.
     """
-    # For local development, decode without verification
-    # The token is still validated for expiration
-    return decode_jwt_simple(credentials.credentials)
+    payload = decode_jwt_simple(credentials.credentials)
+    payload.raw_token = credentials.credentials
+    return payload
 
 
 async def get_optional_user(

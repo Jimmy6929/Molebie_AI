@@ -39,19 +39,19 @@ async def send_message(
     - Returns the AI response with session info
     """
     user_id = user.user_id
+    token = user.raw_token
     
     # Get or create session
     if request.session_id:
-        session = db.get_session(request.session_id, user_id)
+        session = db.get_session(request.session_id, user_id, user_token=token)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Session not found"
             )
     else:
-        # Create new session with first message as title hint
         title = request.message[:50] + "..." if len(request.message) > 50 else request.message
-        session = db.create_session(user_id, title)
+        session = db.create_session(user_id, title, user_token=token)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -66,6 +66,7 @@ async def send_message(
         user_id=user_id,
         role="user",
         content=request.message,
+        user_token=token,
     )
     if not user_msg:
         raise HTTPException(
@@ -74,7 +75,7 @@ async def send_message(
         )
     
     # Get conversation history for context
-    history = db.get_session_messages(session_id, user_id, limit=20)
+    history = db.get_session_messages(session_id, user_id, limit=20, user_token=token)
     messages = [
         {"role": msg["role"], "content": msg["content"]}
         for msg in history
@@ -94,6 +95,7 @@ async def send_message(
         content=inference_result["content"],
         mode_used=inference_result["mode_used"],
         tokens_used=inference_result.get("tokens_used"),
+        user_token=token,
     )
     if not assistant_msg:
         raise HTTPException(
@@ -135,7 +137,7 @@ async def list_sessions(
     db: DatabaseService = Depends(get_database_service),
 ) -> SessionListResponse:
     """List all chat sessions for the current user."""
-    sessions = db.list_sessions(user.user_id)
+    sessions = db.list_sessions(user.user_id, user_token=user.raw_token)
     return SessionListResponse(
         sessions=[
             SessionInfo(
@@ -157,15 +159,15 @@ async def get_session_messages(
     db: DatabaseService = Depends(get_database_service),
 ) -> List[ChatMessage]:
     """Get all messages in a session."""
-    # Verify session ownership
-    session = db.get_session(session_id, user.user_id)
+    token = user.raw_token
+    session = db.get_session(session_id, user.user_id, user_token=token)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Session not found"
         )
     
-    messages = db.get_session_messages(session_id, user.user_id)
+    messages = db.get_session_messages(session_id, user.user_id, user_token=token)
     return [
         ChatMessage(
             id=m["id"],
@@ -187,14 +189,15 @@ async def rename_session(
     db: DatabaseService = Depends(get_database_service),
 ) -> SessionInfo:
     """Rename a chat session."""
-    session = db.get_session(session_id, user.user_id)
+    token = user.raw_token
+    session = db.get_session(session_id, user.user_id, user_token=token)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Session not found"
         )
-    db.update_session_title(session_id, user.user_id, request.title)
-    updated = db.get_session(session_id, user.user_id)
+    db.update_session_title(session_id, user.user_id, request.title, user_token=token)
+    updated = db.get_session(session_id, user.user_id, user_token=token)
     return SessionInfo(
         id=updated["id"],
         title=updated["title"],
@@ -211,7 +214,7 @@ async def delete_session(
     db: DatabaseService = Depends(get_database_service),
 ):
     """Delete a chat session and all its messages."""
-    success = db.delete_session(session_id, user.user_id)
+    success = db.delete_session(session_id, user.user_id, user_token=user.raw_token)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -236,10 +239,11 @@ async def send_message_stream(
     import json
     
     user_id = user.user_id
+    token = user.raw_token
     
     # Get or create session
     if request.session_id:
-        session = db.get_session(request.session_id, user_id)
+        session = db.get_session(request.session_id, user_id, user_token=token)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -247,7 +251,7 @@ async def send_message_stream(
             )
     else:
         title = request.message[:50] + "..." if len(request.message) > 50 else request.message
-        session = db.create_session(user_id, title)
+        session = db.create_session(user_id, title, user_token=token)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -262,6 +266,7 @@ async def send_message_stream(
         user_id=user_id,
         role="user",
         content=request.message,
+        user_token=token,
     )
     if not user_msg:
         raise HTTPException(
@@ -270,7 +275,7 @@ async def send_message_stream(
         )
     
     # Get conversation history
-    history = db.get_session_messages(session_id, user_id, limit=20)
+    history = db.get_session_messages(session_id, user_id, limit=20, user_token=token)
     messages = [
         {"role": msg["role"], "content": msg["content"]}
         for msg in history
@@ -308,6 +313,7 @@ async def send_message_stream(
                 role="assistant",
                 content=content,
                 mode_used=request.mode.value,
+                user_token=token,
             )
     
     return StreamingResponse(

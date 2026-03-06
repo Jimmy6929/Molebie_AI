@@ -14,17 +14,21 @@ class DatabaseService:
     
     def __init__(self, settings: Settings):
         self.base_url = f"{settings.supabase_url}/rest/v1"
-        self.headers = {
-            "apikey": settings.supabase_service_role_key,
-            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        self.anon_key = settings.supabase_anon_key
+    
+    def _build_headers(self, user_token: Optional[str] = None) -> dict:
+        """Build request headers, using the user's JWT for RLS auth."""
+        return {
+            "apikey": self.anon_key,
+            "Authorization": f"Bearer {user_token}" if user_token else f"Bearer {self.anon_key}",
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
     
-    def _request(self, method: str, endpoint: str, **kwargs) -> Any:
+    def _request(self, method: str, endpoint: str, user_token: Optional[str] = None, **kwargs) -> Any:
         """Make a synchronous HTTP request to Supabase REST API."""
         url = f"{self.base_url}/{endpoint}"
-        headers = {**self.headers, **kwargs.pop("headers", {})}
+        headers = {**self._build_headers(user_token), **kwargs.pop("headers", {})}
         
         with httpx.Client() as client:
             response = client.request(method, url, headers=headers, **kwargs)
@@ -35,44 +39,48 @@ class DatabaseService:
     
     # ==================== Sessions ====================
     
-    def create_session(self, user_id: str, title: str = "New Chat") -> Dict[str, Any]:
+    def create_session(self, user_id: str, title: str = "New Chat", user_token: Optional[str] = None) -> Dict[str, Any]:
         """Create a new chat session."""
-        result = self._request("POST", "chat_sessions", json={
+        result = self._request("POST", "chat_sessions", user_token=user_token, json={
             "user_id": user_id,
             "title": title,
         })
         return result[0] if result else None
     
-    def get_session(self, session_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    def get_session(self, session_id: str, user_id: str, user_token: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get a session by ID (only if owned by user)."""
         result = self._request(
             "GET",
-            f"chat_sessions?id=eq.{session_id}&user_id=eq.{user_id}&select=*"
+            f"chat_sessions?id=eq.{session_id}&user_id=eq.{user_id}&select=*",
+            user_token=user_token,
         )
         return result[0] if result else None
     
-    def list_sessions(self, user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_sessions(self, user_id: str, limit: int = 50, user_token: Optional[str] = None) -> List[Dict[str, Any]]:
         """List user's chat sessions, newest first."""
         result = self._request(
             "GET",
-            f"chat_sessions?user_id=eq.{user_id}&is_archived=eq.false&order=updated_at.desc&limit={limit}"
+            f"chat_sessions?user_id=eq.{user_id}&is_archived=eq.false&order=updated_at.desc&limit={limit}",
+            user_token=user_token,
         )
         return result or []
     
-    def update_session_title(self, session_id: str, user_id: str, title: str) -> bool:
+    def update_session_title(self, session_id: str, user_id: str, title: str, user_token: Optional[str] = None) -> bool:
         """Update session title."""
         result = self._request(
             "PATCH",
             f"chat_sessions?id=eq.{session_id}&user_id=eq.{user_id}",
-            json={"title": title}
+            user_token=user_token,
+            json={"title": title},
         )
         return bool(result)
     
-    def delete_session(self, session_id: str, user_id: str) -> bool:
+    def delete_session(self, session_id: str, user_id: str, user_token: Optional[str] = None) -> bool:
         """Delete a session (cascades to messages)."""
         self._request(
             "DELETE",
-            f"chat_sessions?id=eq.{session_id}&user_id=eq.{user_id}"
+            f"chat_sessions?id=eq.{session_id}&user_id=eq.{user_id}",
+            user_token=user_token,
         )
         return True
     
@@ -86,6 +94,7 @@ class DatabaseService:
         content: str,
         mode_used: Optional[str] = None,
         tokens_used: Optional[int] = None,
+        user_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new chat message."""
         data = {
@@ -99,34 +108,34 @@ class DatabaseService:
         if tokens_used:
             data["tokens_used"] = tokens_used
             
-        result = self._request("POST", "chat_messages", json=data)
+        result = self._request("POST", "chat_messages", user_token=user_token, json=data)
         return result[0] if result else None
     
     def get_session_messages(
         self,
         session_id: str,
         user_id: str,
-        limit: int = 100
+        limit: int = 100,
+        user_token: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get messages for a session, oldest first."""
         result = self._request(
             "GET",
-            f"chat_messages?session_id=eq.{session_id}&user_id=eq.{user_id}&order=created_at.asc&limit={limit}"
+            f"chat_messages?session_id=eq.{session_id}&user_id=eq.{user_id}&order=created_at.asc&limit={limit}",
+            user_token=user_token,
         )
         return result or []
     
     # ==================== User Profile ====================
     
-    def get_or_create_profile(self, user_id: str, email: Optional[str] = None) -> Dict[str, Any]:
+    def get_or_create_profile(self, user_id: str, email: Optional[str] = None, user_token: Optional[str] = None) -> Dict[str, Any]:
         """Get user profile, creating if needed."""
-        # Try to get existing profile
-        result = self._request("GET", f"profiles?id=eq.{user_id}&select=*")
+        result = self._request("GET", f"profiles?id=eq.{user_id}&select=*", user_token=user_token)
         if result:
             return result[0]
         
-        # Profile should be auto-created by trigger, but fallback just in case
         if email:
-            result = self._request("POST", "profiles", json={
+            result = self._request("POST", "profiles", user_token=user_token, json={
                 "id": user_id,
                 "email": email,
             })
