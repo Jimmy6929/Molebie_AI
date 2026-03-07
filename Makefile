@@ -76,7 +76,7 @@ dev-supabase:
 
 dev-gateway:
 	@echo "⚡ Starting Gateway API on http://localhost:8000..."
-	cd gateway && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	cd gateway && python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 dev-webapp:
 	@echo "🌐 Starting Webapp on http://localhost:3000..."
