@@ -14,6 +14,27 @@ export interface MessageBubbleProps {
   mode?: string | null;
   model?: string | null;
   metadata?: Record<string, unknown>;
+  streamStartedAt?: number;
+}
+
+function useElapsedSeconds(startedAt?: number, running?: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!startedAt || !running) return;
+    setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [startedAt, running]);
+  return elapsed;
+}
+
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${s}s`;
 }
 
 export default function MessageBubble({
@@ -21,9 +42,11 @@ export default function MessageBubble({
   content,
   streaming = false,
   mode,
+  streamStartedAt,
 }: MessageBubbleProps) {
   const parsed = useMemo(() => parseThinkingContent(content), [content]);
   const [thinkOpen, setThinkOpen] = useState(false);
+  const elapsed = useElapsedSeconds(streamStartedAt, streaming);
 
   // Auto-expand while the model is actively thinking, collapse when done
   useEffect(() => {
@@ -78,8 +101,10 @@ export default function MessageBubble({
               <span>
                 {parsed.isThinking ? "thinking" : "thought process"}
               </span>
-              {parsed.isThinking && (
-                <span className="inline-block w-1.5 h-3 bg-[#ff9900] ml-auto animate-pulse" />
+              {streamStartedAt && (
+                <span className={`ml-auto tabular-nums ${parsed.isThinking ? "text-[#ff9900]" : "text-[#555]"}`}>
+                  {formatElapsed(elapsed)}
+                </span>
               )}
             </button>
             {thinkOpen && (
@@ -139,6 +164,13 @@ export default function MessageBubble({
             {streaming && (
               <span className="inline-block w-2 h-4 bg-[#00ff41] ml-0.5 animate-pulse" />
             )}
+          </div>
+        )}
+
+        {/* Elapsed time footer */}
+        {!isUser && streamStartedAt && elapsed > 0 && (
+          <div className="text-[10px] text-[#555] mt-1.5 tabular-nums">
+            {streaming ? `generating · ${formatElapsed(elapsed)}` : `${formatElapsed(elapsed)}`}
           </div>
         )}
       </div>

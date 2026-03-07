@@ -274,7 +274,7 @@ class InferenceService:
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                     "stream": False,
-                    "enable_thinking": mode == "thinking",
+                    "enable_thinking": True,
                 }
                 response = await client.post(
                     f"{endpoint}{api_prefix}/chat/completions",
@@ -384,7 +384,7 @@ class InferenceService:
                         "max_tokens": resolved_max_tokens,
                         "temperature": resolved_temperature,
                         "stream": True,
-                        "enable_thinking": mode == "thinking",
+                        "enable_thinking": True,
                     },
                     headers={"Content-Type": "application/json"},
                 ) as response:
@@ -424,7 +424,7 @@ class InferenceService:
                                     else self._get_temperature("instant")
                                 ),
                                 "stream": True,
-                                "enable_thinking": False,
+                                "enable_thinking": True,
                             },
                             headers={"Content-Type": "application/json"},
                         ) as response:

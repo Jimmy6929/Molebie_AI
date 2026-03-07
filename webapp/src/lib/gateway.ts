@@ -73,7 +73,8 @@ export async function sendMessageStream(
   mode: "instant" | "thinking" = "instant",
   sessionId?: string,
   onChunk: (text: string) => void = () => {},
-  onSessionId: (id: string) => void = () => {}
+  onSessionId: (id: string) => void = () => {},
+  signal?: AbortSignal
 ): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/chat/stream`, {
     method: "POST",
@@ -86,6 +87,7 @@ export async function sendMessageStream(
       mode,
       session_id: sessionId || null,
     }),
+    signal,
   });
 
   if (!res.ok) {
