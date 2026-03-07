@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     inference_instant_max_tokens: int = 2048
     inference_instant_temperature: float = 0.7
     inference_instant_timeout: float = 120.0   # seconds
+    inference_instant_enable_thinking: bool = False  # no CoT for fast tier
     
     # Thinking tier — stronger, deeper reasoning (mlx_lm.server for text LLMs)
     inference_thinking_url: str = ""
@@ -53,6 +54,7 @@ class Settings(BaseSettings):
     inference_thinking_max_tokens: int = 4096
     inference_thinking_temperature: float = 0.5  # more focused for reasoning
     inference_thinking_timeout: float = 300.0    # 5 min — cold start + reasoning
+    inference_thinking_enable_thinking: bool = True  # CoT reasoning for deep tier
     
     # Legacy / shared fallback (used when per-mode settings are empty)
     inference_model_name: str = "default"
@@ -104,6 +106,12 @@ class Settings(BaseSettings):
         if mode == "thinking":
             return self.inference_thinking_timeout
         return self.inference_instant_timeout
+    
+    def get_enable_thinking_for_mode(self, mode: str) -> bool:
+        """Return whether to enable chain-of-thought for the given mode."""
+        if mode == "thinking":
+            return self.inference_thinking_enable_thinking
+        return self.inference_instant_enable_thinking
 
 
 @lru_cache

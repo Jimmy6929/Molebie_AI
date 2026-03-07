@@ -79,6 +79,10 @@ class InferenceService:
         """Get the HTTP timeout for the given mode."""
         return self.settings.get_timeout_for_mode(mode)
 
+    def _get_enable_thinking(self, mode: str) -> bool:
+        """Get whether chain-of-thought is enabled for the given mode."""
+        return self.settings.get_enable_thinking_for_mode(mode)
+
     # ==================== Health Check ====================
 
     async def check_health(self, mode: str = "instant") -> Dict[str, Any]:
@@ -204,6 +208,7 @@ class InferenceService:
                                  else self._get_temperature("instant")),
                     timeout=self._get_timeout("instant"),
                     api_prefix=self._get_api_prefix("instant"),
+                    enable_thinking=self._get_enable_thinking("instant"),
                 )
                 result["fallback_used"] = True
                 result["original_mode"] = "thinking"
@@ -225,6 +230,7 @@ class InferenceService:
                          else self._get_temperature(mode)),
             timeout=self._get_timeout(mode),
             api_prefix=self._get_api_prefix(mode),
+            enable_thinking=self._get_enable_thinking(mode),
         )
 
         # If thinking call failed and fallback is enabled, try instant
@@ -243,6 +249,7 @@ class InferenceService:
                              else self._get_temperature("instant")),
                 timeout=self._get_timeout("instant"),
                 api_prefix=self._get_api_prefix("instant"),
+                enable_thinking=self._get_enable_thinking("instant"),
             )
             result["fallback_used"] = True
             result["original_mode"] = "thinking"
@@ -261,6 +268,7 @@ class InferenceService:
         temperature: float,
         timeout: float,
         api_prefix: str = "/v1",
+        enable_thinking: bool = False,
     ) -> Dict[str, Any]:
         """
         Make the actual HTTP call to the inference endpoint.
@@ -274,7 +282,7 @@ class InferenceService:
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                     "stream": False,
-                    "enable_thinking": True,
+                    "enable_thinking": enable_thinking,
                 }
                 response = await client.post(
                     f"{endpoint}{api_prefix}/chat/completions",
@@ -368,6 +376,7 @@ class InferenceService:
                 return
 
         prefix = self._get_api_prefix(mode)
+        resolved_enable_thinking = self._get_enable_thinking(mode)
 
         try:
             # Emit mode metadata as first event
@@ -384,7 +393,7 @@ class InferenceService:
                         "max_tokens": resolved_max_tokens,
                         "temperature": resolved_temperature,
                         "stream": True,
-                        "enable_thinking": True,
+                        "enable_thinking": resolved_enable_thinking,
                     },
                     headers={"Content-Type": "application/json"},
                 ) as response:
@@ -424,7 +433,7 @@ class InferenceService:
                                     else self._get_temperature("instant")
                                 ),
                                 "stream": True,
-                                "enable_thinking": True,
+                                "enable_thinking": self._get_enable_thinking("instant"),
                             },
                             headers={"Content-Type": "application/json"},
                         ) as response:
