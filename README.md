@@ -140,7 +140,7 @@ You need to start **4 services across 2 machines**. Order matters.
 
 ```bash
 # Terminal 1 — Thinking LLM (Qwen 3.5 9B)
-mlx_vlm.server --model mlx-community/Qwen3.5-9B-4bit --host 0.0.0.0 --port 8080
+mlx_vlm.server --host 0.0.0.0 --port 8080
 ```
 
 #### On MacBook 2019 (Home Server) — 3 terminals
@@ -393,7 +393,7 @@ Open **one terminal** on the M2 Pro:
 
 ```bash
 # Thinking tier (Qwen 3.5 9B VLM)
-mlx_vlm.server --model mlx-community/Qwen3.5-9B-4bit --host 0.0.0.0 --port 8080
+mlx_vlm.server --host 0.0.0.0 --port 8080
 ```
 
 #### Verify LLM Server Is Running
@@ -450,7 +450,7 @@ Gateway-specific docs (GPU setup guides) are in `gateway/docs/`.
 pip install -U "mlx-vlm[torch]"          # Qwen 3.5 9B — needs PyTorch
 
 # ── Start LLM Server (every session) ───────────────
-mlx_vlm.server --model mlx-community/Qwen3.5-9B-4bit --host 0.0.0.0 --port 8080   # Thinking (Qwen 3.5 9B)
+mlx_vlm.server --host 0.0.0.0 --port 8080   # Thinking (Qwen 3.5 9B)
 
 # ── Health Checks ──────────────────────────────────
 curl http://localhost:8080/health         # Thinking LLM status

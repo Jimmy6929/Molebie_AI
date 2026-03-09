@@ -340,28 +340,30 @@ async def send_message_stream(
     async def event_generator():
         """Generate SSE events from inference stream."""
         full_content = []
+        full_reasoning = []
         
-        # Emit session ID as first event so frontend can track it
         yield f"data: {json.dumps({'session_id': session_id})}\n\n"
         
         async for chunk in inference.generate_response_stream(
             messages=messages,
             mode=request.mode.value,
         ):
-            # Collect content for final save
             try:
                 if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
                     data = json.loads(chunk[6:])
                     delta = data.get("choices", [{}])[0].get("delta", {})
                     if "content" in delta:
                         full_content.append(delta["content"])
+                    if "reasoning_content" in delta:
+                        full_reasoning.append(delta["reasoning_content"])
             except (json.JSONDecodeError, IndexError, KeyError):
                 pass
             
             yield chunk
         
-        # After stream ends, save assistant message to DB (strip thinking)
-        content = _strip_thinking("".join(full_content))
+        # Build final content for DB (strip thinking tags from either format)
+        raw_content = "".join(full_content)
+        content = _strip_thinking(raw_content)
         if content:
             db.create_message(
                 session_id=session_id,
@@ -371,6 +373,9 @@ async def send_message_stream(
                 mode_used=request.mode.value,
                 user_token=token,
             )
+        elif not content and full_reasoning:
+            # Model returned only reasoning with no visible content — edge case
+            pass
     
     return StreamingResponse(
         event_generator(),

@@ -103,7 +103,9 @@ export async function sendMessageStream(
   if (!reader) throw new Error("No response body");
 
   const decoder = new TextDecoder();
-  let fullContent = "";
+  let reasoning = "";
+  let content = "";
+  let reasoningDone = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -117,17 +119,36 @@ export async function sendMessageStream(
         try {
           const data = JSON.parse(line.slice(6));
 
-          // First event carries session_id metadata
           if (data.session_id && !data.choices) {
             onSessionId(data.session_id);
             continue;
           }
 
-          const content = data.choices?.[0]?.delta?.content;
-          if (content) {
-            fullContent += content;
-            onChunk(fullContent);
+          const delta = data.choices?.[0]?.delta;
+          if (!delta) continue;
+
+          const rc = delta.reasoning_content;
+          const ct = delta.content;
+
+          if (rc) {
+            reasoning += rc;
           }
+
+          if (ct) {
+            if (reasoning && !reasoningDone) {
+              reasoningDone = true;
+            }
+            content += ct;
+          }
+
+          // Synthesize the combined text with <think> wrapper so the
+          // existing parseThinkingContent() in the UI can split them.
+          let assembled = "";
+          if (reasoning) {
+            assembled += "<think>" + reasoning + (reasoningDone ? "</think>" : "");
+          }
+          assembled += content;
+          onChunk(assembled);
         } catch {
           // skip parse errors
         }
@@ -135,7 +156,13 @@ export async function sendMessageStream(
     }
   }
 
-  return fullContent;
+  // Final assembled result
+  let result = "";
+  if (reasoning) {
+    result += "<think>" + reasoning + "</think>";
+  }
+  result += content;
+  return result;
 }
 
 export async function listSessions(
