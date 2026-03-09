@@ -40,17 +40,17 @@ class Settings(BaseSettings):
     
     # Instant tier — fast, always-on (mlx_vlm.server for VLMs)
     inference_instant_url: str = ""
-    inference_instant_model: str = ""          # e.g. mlx-community/Qwen3.5-9B-4bit
+    inference_instant_model: str = ""          # (unused — instant tier currently empty)
     inference_instant_api_prefix: str = ""     # "" for mlx_vlm, "/v1" for mlx_lm
     inference_instant_max_tokens: int = 2048
     inference_instant_temperature: float = 0.7
     inference_instant_timeout: float = 120.0   # seconds
     inference_instant_enable_thinking: bool = False  # no CoT for fast tier
     
-    # Thinking tier — stronger, deeper reasoning (mlx_lm.server for text LLMs)
+    # Thinking tier — deeper reasoning (mlx_vlm.server for Qwen 3.5)
     inference_thinking_url: str = ""
-    inference_thinking_model: str = ""         # e.g. mlx-community/Qwen3-14B-4bit-AWQ
-    inference_thinking_api_prefix: str = "/v1" # "/v1" for mlx_lm, "" for mlx_vlm
+    inference_thinking_model: str = ""         # e.g. mlx-community/Qwen3.5-9B-4bit
+    inference_thinking_api_prefix: str = ""    # "" for mlx_vlm, "/v1" for mlx_lm
     inference_thinking_max_tokens: int = 4096
     inference_thinking_temperature: float = 0.5  # more focused for reasoning
     inference_thinking_timeout: float = 300.0    # 5 min — cold start + reasoning
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     inference_stream: bool = True
     
     # ── Routing ────────────────────────────────────────────────
-    routing_default_mode: str = "instant"
+    routing_default_mode: str = "thinking"
     routing_thinking_fallback_to_instant: bool = True  # Fallback if thinking is down
     routing_cold_start_timeout: float = 60.0           # Max wait for serverless cold start
     

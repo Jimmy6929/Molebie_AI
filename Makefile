@@ -1,7 +1,7 @@
 # Local AI Assistant - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-instant mlx-thinking mlx-install mlx-vlm-install
+.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-install mlx-vlm-install
 
 # Default target
 help:
@@ -23,8 +23,7 @@ help:
 	@echo ""
 	@echo "  make mlx-install      Install mlx-lm on GPU machine"
 	@echo "  make mlx-vlm-install  Install mlx-vlm on GPU machine"
-	@echo "  make mlx-instant      Start MLX-VLM instant server (Qwen3.5-9B, :8080)"
-	@echo "  make mlx-thinking     Start MLX-LM thinking server (Qwen3-14B, :8081)"
+	@echo "  make mlx-thinking     Start MLX-VLM thinking server (Qwen3.5-9B, :8080)"
 	@echo ""
 	@echo "  make clean          Remove build artifacts and caches"
 	@echo "  make stop           Stop all running services"
@@ -100,13 +99,9 @@ mlx-vlm-install:
 	@echo "📦 Installing mlx-vlm (vision-language models)..."
 	pip install -U mlx-vlm
 
-mlx-instant:
-	@echo "⚡ Starting MLX-VLM instant server (Qwen3.5-9B) on :8080..."
-	mlx_vlm.server --host 0.0.0.0 --port 8080
-
 mlx-thinking:
-	@echo "🧠 Starting MLX-LM thinking server (Qwen3-14B) on :8081..."
-	mlx_lm.server --model mlx-community/Qwen3-14B-4bit-AWQ --host 0.0.0.0 --port 8081
+	@echo "🧠 Starting MLX-VLM thinking server (Qwen3.5-9B) on :8080..."
+	mlx_vlm.server --model mlx-community/Qwen3.5-9B-4bit --host 0.0.0.0 --port 8080
 
 # ──────────────────────────────────────────────────────────────
 # TESTING

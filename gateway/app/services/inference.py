@@ -3,8 +3,8 @@ Inference service for calling LLM endpoints.
 
 Supports two-tier inference (Instant + Thinking) via OpenAI-compatible
 APIs. Each tier can use a different server type:
-  - mlx_vlm.server  → VLMs like Qwen3.5 (endpoints at /chat/completions)
-  - mlx_lm.server   → text LLMs like Qwen3  (endpoints at /v1/chat/completions)
+  - mlx_vlm.server  → VLMs like Qwen3.5-9B (endpoints at /chat/completions)
+  - mlx_lm.server   → text LLMs           (endpoints at /v1/chat/completions)
 
 The API prefix ("/v1" or "") is configurable per tier so both server
 types work transparently through the same gateway code.

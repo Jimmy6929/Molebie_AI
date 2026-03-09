@@ -6,7 +6,7 @@ A private, self-hosted AI assistant system with multi-user support, two-tier inf
 
 Local AI Assistant is a production-ready chat application that provides a ChatGPT-like experience while running entirely on your own infrastructure. It features:
 
-- **Two-Tier Inference**: Switch between fast "Instant Mode" and powerful "Thinking Mode"
+- **Thinking Inference**: Deep reasoning with Qwen 3.5 9B (instant tier available for future use)
 - **Full Data Ownership**: All conversations and documents stored in your Supabase instance
 - **Multi-User Ready**: Row-level security (RLS) enabled from day one
 - **No Third-Party LLM Costs**: Use your own GPU infrastructure for inference
@@ -36,17 +36,15 @@ Local AI Assistant is a production-ready chat application that provides a ChatGP
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                     │                    │
-         ┌──────────┘                    └──────────┐
-         │                                          │
-         ▼                                          ▼
-┌─────────────────────┐                ┌─────────────────────┐
-│   INSTANT INFERENCE │                │  THINKING INFERENCE │
-│  ┌───────────────┐  │                │  ┌───────────────┐  │
-│  │ MLX Server    │  │                │  │ MLX Server    │  │
-│  │ :8080         │  │                │  │ :8081         │  │
-│  │ Qwen3.5-9B   │  │                │  │ Qwen3-14B    │  │
-│  └───────────────┘  │                │  └───────────────┘  │
-└─────────────────────┘                └─────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     THINKING INFERENCE                           │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ MLX-VLM Server :8080                                      │  │
+│  │ Qwen 3.5 9B · enable_thinking=True                        │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -136,16 +134,13 @@ make stop           # Stop all services
 
 ### Startup Checklist (Daily Use)
 
-You need to start **5 services across 2 machines**. Order matters.
+You need to start **4 services across 2 machines**. Order matters.
 
-#### On M2 Pro (GPU Machine) — 2 terminals
+#### On M2 Pro (GPU Machine) — 1 terminal
 
 ```bash
-# Terminal 1 — Instant LLM (Qwen 3.5 9B)
-mlx_vlm.server --host 0.0.0.0 --port 8080
-
-# Terminal 2 — Thinking LLM (Qwen 3 14B)
-mlx_lm.server --model mlx-community/Qwen3-14B-4bit-AWQ --host 0.0.0.0 --port 8081
+# Terminal 1 — Thinking LLM (Qwen 3.5 9B)
+mlx_vlm.server --model mlx-community/Qwen3.5-9B-4bit --host 0.0.0.0 --port 8080
 ```
 
 #### On MacBook 2019 (Home Server) — 3 terminals
@@ -167,9 +162,8 @@ npm run dev
 #### Verify Everything Is Running
 
 ```bash
-# From M2 Pro — check local LLM servers
-curl http://localhost:8080/health                    # Instant LLM
-curl http://localhost:8081/health                    # Thinking LLM
+# From M2 Pro — check local LLM server
+curl http://localhost:8080/health                    # Thinking LLM
 
 # From M2 Pro — check Home Server services via Tailscale
 curl http://100.99.189.104:8000/health               # Gateway
@@ -183,8 +177,7 @@ open http://100.99.189.104:3000                       # Web App
 
 | Service | Machine | URL | What it does |
 |---------|---------|-----|--------------|
-| **Instant LLM** | M2 Pro | http://localhost:8080 | Qwen 3.5 9B via mlx_vlm |
-| **Thinking LLM** | M2 Pro | http://localhost:8081 | Qwen 3 14B via mlx_lm |
+| **Thinking LLM** | M2 Pro | http://localhost:8080 | Qwen 3.5 9B via mlx_vlm |
 | **Supabase** | 2019 MacBook | http://127.0.0.1:54321 | Auth + Database (Docker) |
 | **Supabase Studio** | 2019 MacBook | http://127.0.0.1:54323 | DB admin dashboard |
 | **Gateway API** | 2019 MacBook | http://127.0.0.1:8000 | Routes chat to DB + LLM |
@@ -365,65 +358,49 @@ This project runs across **two machines** connected via Tailscale VPN:
 | **MacBook Pro M2 Pro (16GB)** | GPU Machine: MLX inference servers (both LLMs) | `100.104.193.59` |
 
 ```
-Browser → Webapp (:3000) → Gateway (:8000) → MLX servers on M2 Pro (:8080, :8081)
+Browser → Webapp (:3000) → Gateway (:8000) → MLX-VLM server on M2 Pro (:8080)
               Home Server                          GPU Machine
 ```
 
-## Inference Modes
+## Inference Mode
 
-The two tiers use **different MLX server types** because Qwen 3.5 is a Vision-Language Model (VLM):
+The thinking tier runs Qwen 3.5 9B via `mlx_vlm.server` with chain-of-thought reasoning enabled:
 
 | Tier | Model | Server | Port | API Path | Use Case |
 |------|-------|--------|------|----------|----------|
-| **Instant** | `mlx-community/Qwen3.5-9B-4bit` | `mlx_vlm.server` | 8080 | `/chat/completions` | Fast daily tasks, coding, quick answers |
-| **Thinking** | `mlx-community/Qwen3-14B-4bit-AWQ` | `mlx_lm.server` | 8081 | `/v1/chat/completions` | Complex reasoning, deep analysis |
+| **Thinking** | `mlx-community/Qwen3.5-9B-4bit` | `mlx_vlm.server` | 8080 | `/chat/completions` | Reasoning, coding, analysis |
+| **Instant** | *(not configured)* | — | — | — | Reserved for future use |
 
-> **Why two server types?** Qwen 3.5 is a VLM (Vision-Language Model) that includes an image/video encoder.
-> It requires `mlx-vlm` (which supports vision models). Qwen 3 14B is text-only and uses `mlx-lm`.
-> Both work for text chat — Qwen 3.5 just *also* has vision capabilities.
+> **Why mlx_vlm?** Qwen 3.5 is a VLM (Vision-Language Model) that includes an image/video encoder.
+> It requires `mlx-vlm` (which supports vision models). It works great for text chat and
+> *also* has vision capabilities for future use.
 
 ### MLX Setup (GPU Machine — M2 Pro)
 
 #### One-Time Installation
 
 ```bash
-# Install mlx-lm (for text-only models like Qwen3-14B)
-pip install -U mlx-lm
-
-# Install mlx-vlm with PyTorch (for vision models like Qwen3.5-9B)
+# Install mlx-vlm with PyTorch (for Qwen 3.5 9B)
 pip install -U "mlx-vlm[torch]"
 ```
 
 > **Important:** Qwen 3.5 requires PyTorch + Torchvision for its video/image processor.
 > Use `pip install -U "mlx-vlm[torch]"` to get everything in one command.
 
-#### Starting the LLM Servers (Every Session)
+#### Starting the LLM Server (Every Session)
 
-Open **two terminals** on the M2 Pro:
+Open **one terminal** on the M2 Pro:
 
 ```bash
-# Terminal 1 — Instant tier (Qwen 3.5 9B VLM)
-mlx_vlm.server --host 0.0.0.0 --port 8080
-
-# Terminal 2 — Thinking tier (Qwen 3 14B text)
-mlx_lm.server --model mlx-community/Qwen3-14B-4bit-AWQ --host 0.0.0.0 --port 8081
+# Thinking tier (Qwen 3.5 9B VLM)
+mlx_vlm.server --model mlx-community/Qwen3.5-9B-4bit --host 0.0.0.0 --port 8080
 ```
 
-> **Note:** `mlx_vlm.server` loads models dynamically — the model is specified in each API request.
-> The first chat request will load `Qwen3.5-9B-4bit` into memory (takes ~30s).
-> `mlx_lm.server` loads the model at startup.
-
-#### Verify LLM Servers Are Running
+#### Verify LLM Server Is Running
 
 ```bash
-# Check Instant tier
 curl http://localhost:8080/health
-
-# Check Thinking tier
-curl http://localhost:8081/health
-
-# See loaded models
-curl http://localhost:8081/v1/models
+curl http://localhost:8080/models
 ```
 
 ## Security
@@ -470,18 +447,14 @@ Gateway-specific docs (GPU setup guides) are in `gateway/docs/`.
 
 ```bash
 # ── One-Time Setup ──────────────────────────────────
-pip install -U mlx-lm                    # Text-only models (Qwen3-14B)
-pip install -U "mlx-vlm[torch]"          # Vision models (Qwen3.5-9B) — needs PyTorch
+pip install -U "mlx-vlm[torch]"          # Qwen 3.5 9B — needs PyTorch
 
-# ── Start LLM Servers (every session) ──────────────
-mlx_vlm.server --host 0.0.0.0 --port 8080                                          # Instant (Qwen 3.5 9B)
-mlx_lm.server --model mlx-community/Qwen3-14B-4bit-AWQ --host 0.0.0.0 --port 8081  # Thinking (Qwen 3 14B)
+# ── Start LLM Server (every session) ───────────────
+mlx_vlm.server --model mlx-community/Qwen3.5-9B-4bit --host 0.0.0.0 --port 8080   # Thinking (Qwen 3.5 9B)
 
 # ── Health Checks ──────────────────────────────────
-curl http://localhost:8080/health         # Instant LLM status
-curl http://localhost:8081/health         # Thinking LLM status
+curl http://localhost:8080/health         # Thinking LLM status
 curl http://localhost:8080/models         # List loaded VLM models
-curl http://localhost:8081/v1/models      # List loaded LM models
 ```
 
 ### MacBook 2019 (Home Server)
@@ -582,11 +555,11 @@ supabase status                           # Check keys match .env.local
 - [x] Web App (Next.js)
 - [x] Connect to GPU inference
 
-### Phase 2: Two-Mode Inference ✅ (Current)
-- [x] Instant Mode (Qwen 3.5 9B via mlx_vlm)
-- [x] Thinking Mode (Qwen 3 14B via mlx_lm)
+### Phase 2: Thinking Inference ✅ (Current)
+- [x] Thinking Mode (Qwen 3.5 9B via mlx_vlm, enable_thinking=True)
 - [x] Mode toggle in UI
 - [x] Mode indicator on responses
+- [x] Instant tier reserved for future use
 
 ### Phase 3: RAG (Document Memory)
 - [ ] File upload functionality
