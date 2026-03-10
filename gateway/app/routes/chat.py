@@ -4,7 +4,7 @@ Chat endpoints for the Gateway API.
 
 import re
 from datetime import date
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
@@ -67,7 +67,7 @@ def _build_system_message() -> dict:
     }
 
 
-def _extract_thinking(content: str) -> str | None:
+def _extract_thinking(content: str) -> Optional[str]:
     """Extract thinking block text from raw content, if present."""
     m = _THINK_RE.search(content)
     if m:
