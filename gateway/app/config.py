@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     inference_instant_api_prefix: str = ""     # "" for mlx_vlm, "/v1" for mlx_lm
     inference_instant_max_tokens: int = 2048
     inference_instant_temperature: float = 0.7
+    inference_instant_top_p: float = 0.8
+    inference_instant_top_k: int = 20
     inference_instant_timeout: float = 120.0   # seconds
     inference_instant_enable_thinking: bool = False  # no CoT for fast tier
     
@@ -54,6 +56,8 @@ class Settings(BaseSettings):
     inference_thinking_api_prefix: str = ""    # "" for mlx_vlm, "/v1" for mlx_lm
     inference_thinking_max_tokens: int = 4096
     inference_thinking_temperature: float = 0.5  # more focused for reasoning
+    inference_thinking_top_p: float = 0.95
+    inference_thinking_top_k: int = 20
     inference_thinking_timeout: float = 300.0    # 5 min — cold start + reasoning
     inference_thinking_enable_thinking: bool = True  # CoT reasoning for deep tier
     inference_thinking_budget: int = 2048            # max tokens for the <think> block
@@ -112,6 +116,18 @@ class Settings(BaseSettings):
         if mode in ("thinking", "thinking_harder"):
             return self.inference_thinking_timeout
         return self.inference_instant_timeout
+
+    def get_top_p_for_mode(self, mode: str) -> float:
+        """Return top_p for the given mode."""
+        if mode in ("thinking", "thinking_harder"):
+            return self.inference_thinking_top_p
+        return self.inference_instant_top_p
+
+    def get_top_k_for_mode(self, mode: str) -> int:
+        """Return top_k for the given mode."""
+        if mode in ("thinking", "thinking_harder"):
+            return self.inference_thinking_top_k
+        return self.inference_instant_top_k
     
     def get_enable_thinking_for_mode(self, mode: str) -> bool:
         """Return whether to enable chain-of-thought for the given mode."""

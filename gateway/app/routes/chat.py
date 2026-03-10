@@ -2,10 +2,11 @@
 Chat endpoints for the Gateway API.
 """
 
+import asyncio
 import re
 from datetime import date
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from app.middleware.auth import JWTPayload, get_current_user
@@ -305,6 +306,7 @@ async def delete_session(
 @router.post("/stream")
 async def send_message_stream(
     request: ChatRequest,
+    http_request: Request,
     user: JWTPayload = Depends(get_current_user),
     db: DatabaseService = Depends(get_database_service),
     inference: InferenceService = Depends(get_inference_service),
@@ -365,8 +367,15 @@ async def send_message_stream(
         """Generate SSE events from inference stream."""
         full_content = []
         full_reasoning = []
+        client_disconnected = False
         
-        yield f"data: {json.dumps({'session_id': session_id})}\n\n"
+        if await http_request.is_disconnected():
+            return
+
+        try:
+            yield f"data: {json.dumps({'session_id': session_id})}\n\n"
+        except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+            return
         
         async for chunk in inference.generate_response_stream(
             messages=messages,
@@ -382,8 +391,19 @@ async def send_message_stream(
                         full_reasoning.append(delta["reasoning_content"])
             except (json.JSONDecodeError, IndexError, KeyError):
                 pass
-            
-            yield chunk
+
+            if await http_request.is_disconnected():
+                client_disconnected = True
+                break
+
+            try:
+                yield chunk
+            except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+                client_disconnected = True
+                break
+
+        if client_disconnected:
+            return
         
         # Build final content for DB (strip thinking tags, persist reasoning separately)
         raw_content = "".join(full_content)

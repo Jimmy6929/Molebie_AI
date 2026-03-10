@@ -79,6 +79,14 @@ class InferenceService:
         """Get the HTTP timeout for the given mode."""
         return self.settings.get_timeout_for_mode(mode)
 
+    def _get_top_p(self, mode: str) -> float:
+        """Get the default top_p for the given mode."""
+        return self.settings.get_top_p_for_mode(mode)
+
+    def _get_top_k(self, mode: str) -> int:
+        """Get the default top_k for the given mode."""
+        return self.settings.get_top_k_for_mode(mode)
+
     def _get_enable_thinking(self, mode: str) -> bool:
         """Get whether chain-of-thought is enabled for the given mode."""
         return self.settings.get_enable_thinking_for_mode(mode)
@@ -210,6 +218,8 @@ class InferenceService:
                     max_tokens=max_tokens or self._get_max_tokens("instant"),
                     temperature=(temperature if temperature is not None
                                  else self._get_temperature("instant")),
+                    top_p=self._get_top_p("instant"),
+                    top_k=self._get_top_k("instant"),
                     timeout=self._get_timeout("instant"),
                     api_prefix=self._get_api_prefix("instant"),
                     enable_thinking=self._get_enable_thinking("instant"),
@@ -232,6 +242,8 @@ class InferenceService:
             max_tokens=max_tokens or self._get_max_tokens(mode),
             temperature=(temperature if temperature is not None
                          else self._get_temperature(mode)),
+            top_p=self._get_top_p(mode),
+            top_k=self._get_top_k(mode),
             timeout=self._get_timeout(mode),
             api_prefix=self._get_api_prefix(mode),
             enable_thinking=self._get_enable_thinking(mode),
@@ -252,6 +264,8 @@ class InferenceService:
                 max_tokens=max_tokens or self._get_max_tokens("instant"),
                 temperature=(temperature if temperature is not None
                              else self._get_temperature("instant")),
+                top_p=self._get_top_p("instant"),
+                top_k=self._get_top_k("instant"),
                 timeout=self._get_timeout("instant"),
                 api_prefix=self._get_api_prefix("instant"),
                 enable_thinking=self._get_enable_thinking("instant"),
@@ -271,6 +285,8 @@ class InferenceService:
         mode: str,
         max_tokens: int,
         temperature: float,
+        top_p: float,
+        top_k: int,
         timeout: float,
         api_prefix: str = "/v1",
         enable_thinking: bool = False,
@@ -287,6 +303,8 @@ class InferenceService:
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
+                    "top_p": top_p,
+                    "top_k": top_k,
                     "stream": False,
                     "enable_thinking": enable_thinking,
                 }
@@ -366,6 +384,8 @@ class InferenceService:
         resolved_max_tokens = max_tokens or self._get_max_tokens(mode)
         resolved_temperature = (temperature if temperature is not None
                                 else self._get_temperature(mode))
+        resolved_top_p = self._get_top_p(mode)
+        resolved_top_k = self._get_top_k(mode)
         resolved_timeout = self._get_timeout(mode)
         fallback_used = False
 
@@ -377,6 +397,8 @@ class InferenceService:
                 resolved_max_tokens = max_tokens or self._get_max_tokens("instant")
                 resolved_temperature = (temperature if temperature is not None
                                         else self._get_temperature("instant"))
+                resolved_top_p = self._get_top_p("instant")
+                resolved_top_k = self._get_top_k("instant")
                 resolved_timeout = self._get_timeout("instant")
                 mode = "instant"
                 fallback_used = True
@@ -400,6 +422,8 @@ class InferenceService:
                 "messages": messages,
                 "max_tokens": resolved_max_tokens,
                 "temperature": resolved_temperature,
+                "top_p": resolved_top_p,
+                "top_k": resolved_top_k,
                 "stream": True,
                 "enable_thinking": resolved_enable_thinking,
             }
@@ -450,6 +474,8 @@ class InferenceService:
                                     temperature if temperature is not None
                                     else self._get_temperature("instant")
                                 ),
+                                "top_p": self._get_top_p("instant"),
+                                "top_k": self._get_top_k("instant"),
                                 "stream": True,
                                 "enable_thinking": self._get_enable_thinking("instant"),
                             },
