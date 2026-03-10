@@ -94,6 +94,7 @@ class DatabaseService:
         content: str,
         mode_used: Optional[str] = None,
         tokens_used: Optional[int] = None,
+        reasoning_content: Optional[str] = None,
         user_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new chat message."""
@@ -107,6 +108,8 @@ class DatabaseService:
             data["mode_used"] = mode_used
         if tokens_used:
             data["tokens_used"] = tokens_used
+        if reasoning_content:
+            data["reasoning_content"] = reasoning_content
             
         result = self._request("POST", "chat_messages", user_token=user_token, json=data)
         return result[0] if result else None

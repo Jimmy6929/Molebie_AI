@@ -32,6 +32,7 @@ class ChatMessage(BaseModel):
     content: str
     mode_used: Optional[str] = None
     model_used: Optional[str] = None
+    reasoning_content: Optional[str] = None
     created_at: datetime
 
 

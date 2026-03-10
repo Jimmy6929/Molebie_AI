@@ -307,6 +307,7 @@ class InferenceService:
 
                 return {
                     "content": choice["message"]["content"],
+                    "reasoning_content": choice["message"].get("reasoning_content"),
                     "tokens_used": usage.get("total_tokens"),
                     "prompt_tokens": usage.get("prompt_tokens"),
                     "completion_tokens": usage.get("completion_tokens"),

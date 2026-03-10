@@ -26,6 +26,7 @@ export interface ChatMessage {
   content: string;
   mode_used: string | null;
   model_used?: string | null;
+  reasoning_content?: string | null;
   created_at: string;
 }
 

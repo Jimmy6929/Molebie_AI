@@ -97,13 +97,19 @@ export default function ChatPage() {
       try {
         const msgs = await getSessionMessages(token!, activeSessionId!);
         setMessages(
-          msgs.map((m: ChatMessage) => ({
-            id: m.id,
-            role: m.role as DisplayMessage["role"],
-            content: m.content,
-            mode_used: m.mode_used,
-            model_used: m.model_used ?? null,
-          }))
+          msgs.map((m: ChatMessage) => {
+            let content = m.content;
+            if (m.reasoning_content) {
+              content = `<think>${m.reasoning_content}</think>${content}`;
+            }
+            return {
+              id: m.id,
+              role: m.role as DisplayMessage["role"],
+              content,
+              mode_used: m.mode_used,
+              model_used: m.model_used ?? null,
+            };
+          })
         );
       } catch (err) {
         console.error("Failed to load messages:", err);
@@ -113,35 +119,67 @@ export default function ChatPage() {
   }, [token, activeSessionId]);
 
   useEffect(() => {
-    if (!userScrolledUpRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+    if (userScrolledUpRef.current) return;
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
-    function handleScroll() {
-      const el = container!;
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-      userScrolledUpRef.current = !atBottom;
-      setShowScrollBtn(!atBottom);
+
+    function checkPosition() {
+      requestAnimationFrame(() => {
+        const el = container!;
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        userScrolledUpRef.current = !atBottom;
+        setShowScrollBtn(!atBottom);
+      });
     }
-    container.addEventListener("scroll", handleScroll, { passive: true });
-    return () => container.removeEventListener("scroll", handleScroll);
+
+    container.addEventListener("wheel", checkPosition, { passive: true });
+    container.addEventListener("touchmove", checkPosition, { passive: true });
+    return () => {
+      container.removeEventListener("wheel", checkPosition);
+      container.removeEventListener("touchmove", checkPosition);
+    };
   }, []);
 
   function scrollToBottom() {
     userScrolledUpRef.current = false;
     setShowScrollBtn(false);
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }
+
+  const resizeTextarea = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const maxH = 200;
+    if (el.scrollHeight > maxH) {
+      el.style.height = maxH + "px";
+      el.style.overflowY = "auto";
+    } else {
+      el.style.height = el.scrollHeight + "px";
+      el.style.overflowY = "hidden";
+    }
+  }, []);
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [input, resizeTextarea]);
 
   async function handleSend() {
     if (!input.trim() || !token || loading) return;
 
     const userMessage = input.trim();
     setInput("");
+    if (inputRef.current) {
+      inputRef.current.style.height = "auto";
+      inputRef.current.style.overflowY = "hidden";
+    }
     setLoading(true);
     userScrolledUpRef.current = false;
     setShowScrollBtn(false);
@@ -440,20 +478,15 @@ export default function ChatPage() {
               <textarea
                 ref={inputRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  resizeTextarea();
+                }}
                 onKeyDown={handleKeyDown}
                 placeholder="Send a message..."
                 rows={1}
                 className="flex-1 bg-transparent text-[#f0f0f0] text-sm resize-none focus:outline-none placeholder-[#888] min-h-[36px] max-h-[200px] py-2 px-1"
-                style={{
-                  height: "auto",
-                  overflow: "hidden",
-                }}
-                onInput={(e) => {
-                  const t = e.target as HTMLTextAreaElement;
-                  t.style.height = "auto";
-                  t.style.height = t.scrollHeight + "px";
-                }}
+                style={{ overflowY: "hidden" }}
                 disabled={loading}
                 autoFocus
               />

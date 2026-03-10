@@ -67,6 +67,19 @@ def _build_system_message() -> dict:
     }
 
 
+def _extract_thinking(content: str) -> str | None:
+    """Extract thinking block text from raw content, if present."""
+    m = _THINK_RE.search(content)
+    if m:
+        inner = content[m.start() + len("<think>"):m.end() - len("</think>")].strip()
+        return inner or None
+    close_idx = content.find("</think>")
+    if close_idx != -1:
+        inner = content[:close_idx].strip()
+        return inner or None
+    return None
+
+
 def _strip_thinking(content: str) -> str:
     """Remove thinking blocks so DB history stays clean.
 
@@ -149,8 +162,10 @@ async def send_message(
         mode=request.mode.value,
     )
     
-    # Store assistant response (strip thinking blocks from DB)
-    clean_content = _strip_thinking(inference_result["content"])
+    # Store assistant response (strip thinking blocks, persist reasoning separately)
+    raw = inference_result["content"]
+    reasoning = inference_result.get("reasoning_content") or _extract_thinking(raw)
+    clean_content = _strip_thinking(raw)
     assistant_msg = db.create_message(
         session_id=session_id,
         user_id=user_id,
@@ -158,6 +173,7 @@ async def send_message(
         content=clean_content,
         mode_used=inference_result["mode_used"],
         tokens_used=inference_result.get("tokens_used"),
+        reasoning_content=reasoning,
         user_token=token,
     )
     if not assistant_msg:
@@ -238,6 +254,7 @@ async def get_session_messages(
             content=m["content"],
             mode_used=m.get("mode_used"),
             model_used=m.get("model_used"),
+            reasoning_content=m.get("reasoning_content"),
             created_at=m["created_at"],
         )
         for m in messages
@@ -368,9 +385,14 @@ async def send_message_stream(
             
             yield chunk
         
-        # Build final content for DB (strip thinking tags from either format)
+        # Build final content for DB (strip thinking tags, persist reasoning separately)
         raw_content = "".join(full_content)
         content = _strip_thinking(raw_content)
+
+        reasoning = "".join(full_reasoning) if full_reasoning else _extract_thinking(raw_content)
+        if not reasoning:
+            reasoning = None
+
         if content:
             db.create_message(
                 session_id=session_id,
@@ -378,11 +400,19 @@ async def send_message_stream(
                 role="assistant",
                 content=content,
                 mode_used=request.mode.value,
+                reasoning_content=reasoning,
                 user_token=token,
             )
-        elif not content and full_reasoning:
-            # Model returned only reasoning with no visible content — edge case
-            pass
+        elif not content and reasoning:
+            db.create_message(
+                session_id=session_id,
+                user_id=user_id,
+                role="assistant",
+                content="(no visible response)",
+                mode_used=request.mode.value,
+                reasoning_content=reasoning,
+                user_token=token,
+            )
     
     return StreamingResponse(
         event_generator(),
