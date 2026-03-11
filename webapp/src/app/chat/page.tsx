@@ -233,7 +233,7 @@ export default function ChatPage() {
       role: "assistant",
       content: "",
       streaming: true,
-      mode_used: mode,
+      mode_used: conversationMode ? "instant" : mode,
       streamStartedAt: now,
     };
 
@@ -248,7 +248,7 @@ export default function ChatPage() {
       const finalContent = await sendMessageStream(
         token,
         userMessage,
-        mode,
+        conversationMode ? "instant" : mode,
         activeSessionId || undefined,
         conversationMode,
         (content) => {

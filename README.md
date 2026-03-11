@@ -136,7 +136,7 @@ make stop           # Stop all services
 
 You need to start **4 services across 2 machines**. Order matters.
 
-#### On M2 Pro (GPU Machine) — 1 terminal
+#### On M2 Pro (GPU Machine) — 1–2 terminals
 
 ```bash
 # Terminal 1 — Thinking LLM (Qwen 3.5 9B)
@@ -147,6 +147,15 @@ mlx_vlm.server --host 0.0.0.0 --port 8080 \
   --thinking-start-token "<think>" \
   --thinking-end-token "</think>"
 ```
+
+**Optional — Voice Conversation (Qwen 3.5 4B):** When you enable Voice mode in the chat UI, it uses the *instant* tier. To enable it, run a second model and set `INFERENCE_INSTANT_*` in `.env.local`:
+
+```bash
+# Terminal 2 — Voice/Conversation LLM (Qwen 3.5 4B, lighter)
+mlx_lm.server --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
+```
+
+In `.env.local`: `INFERENCE_INSTANT_URL=http://localhost:8081`, `INFERENCE_INSTANT_MODEL=mlx-community/Qwen3.5-4B-Instruct-4bit`, `INFERENCE_INSTANT_API_PREFIX=/v1`.
 
 #### On MacBook 2019 (Home Server) — 3 terminals
 

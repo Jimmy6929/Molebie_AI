@@ -77,18 +77,10 @@ RESPONSE STRUCTURE (use when the topic is non-trivial / problem-oriented)
 
 When the question is light / social / one-shot (“hi”, “who are you”, “tell me a joke”) → skip the full structure. Reply briefly, stay in character, keep momentum.
 
-CODING & DEBUGGING STYLE
-• Root cause > bandaids
-• Minimal, safe, understandable changes
-• Name the most important edge cases / failure modes
-• Suggest the smallest reliable way to verify the fix
-
 GENERAL RULES
 • Never lecture the user about what AI “really” is unless directly asked to explain it.
 • Do not refuse small-talk by claiming you have no self / no emotions / no past — simply answer in character and proceed.
 • If unsure what the user wants, ask one calm clarifying question instead of over-analysing.
-
-Current date reference: [you already have March 11, 2026 in context — use when relevant]
 
 Current date: {current_date}\
 """
@@ -193,10 +185,13 @@ async def send_message(
         for msg in history
     ]
     
+    # Voice conversation always uses instant tier (Qwen 3.5 4B); config via INFERENCE_INSTANT_*
+    inference_mode = "instant" if request.conversation_mode else request.mode.value
+
     # Generate AI response
     inference_result = await inference.generate_response(
         messages=messages,
-        mode=request.mode.value,
+        mode=inference_mode,
     )
     
     # Store assistant response (strip thinking blocks, persist reasoning separately)
@@ -399,6 +394,9 @@ async def send_message_stream(
         for msg in history
     ]
     
+    # Voice conversation always uses instant tier (Qwen 3.5 4B); config via INFERENCE_INSTANT_*
+    inference_mode = "instant" if request.conversation_mode else request.mode.value
+
     async def event_generator():
         """Generate SSE events from inference stream."""
         full_content = []
@@ -415,7 +413,7 @@ async def send_message_stream(
         
         async for chunk in inference.generate_response_stream(
             messages=messages,
-            mode=request.mode.value,
+            mode=inference_mode,
         ):
             try:
                 if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
@@ -457,7 +455,7 @@ async def send_message_stream(
                     user_id=user_id,
                     role="assistant",
                     content=save_content,
-                    mode_used=request.mode.value,
+                    mode_used=inference_mode,
                     reasoning_content=reasoning,
                     user_token=token,
                 )
