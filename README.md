@@ -1,12 +1,15 @@
 # Local AI Assistant
 
-A private, self-hosted AI assistant system with multi-user support, two-tier inference, and full data ownership.
+A private, self-hosted AI assistant system with multi-user support, three-tier inference, voice conversation, web search, and full data ownership.
 
 ## Overview
 
 Local AI Assistant is a production-ready chat application that provides a ChatGPT-like experience while running entirely on your own infrastructure. It features:
 
-- **Thinking Inference**: Deep reasoning with Qwen 3.5 9B (instant tier available for future use)
+- **Three Inference Modes**: Instant (fast), Thinking (chain-of-thought), and Think Harder (extended reasoning)
+- **SSE Streaming**: Real-time token-by-token response streaming with thinking block support
+- **Voice Conversation ("Alfred")**: Wake-word activation, speech-to-text (Whisper), text-to-speech (Kokoro), and speaker verification
+- **Web Search**: Self-hosted SearXNG integration — the AI can search the web and cite sources
 - **Full Data Ownership**: All conversations and documents stored in your Supabase instance
 - **Multi-User Ready**: Row-level security (RLS) enabled from day one
 - **No Third-Party LLM Costs**: Use your own GPU infrastructure for inference
@@ -18,9 +21,9 @@ Local AI Assistant is a production-ready chat application that provides a ChatGP
 │                         USER LAYER                              │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │              Web App (Next.js 16)                       │   │
-│  │  - Chat UI          - Deep Think Toggle                 │   │
-│  │  - Session History  - File Upload                       │   │
-│  │  - Auth via Supabase                                    │   │
+│  │  - Chat UI (Streaming)    - Deep Think Toggle           │   │
+│  │  - Session History        - Voice / Alfred Mode         │   │
+│  │  - Auth via Supabase      - Web Search Sources          │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -31,20 +34,19 @@ Local AI Assistant is a production-ready chat application that provides a ChatGP
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │              Gateway API (FastAPI)                      │   │
 │  │  - JWT Validation      - Session Management             │   │
-│  │  - Request Routing     - RAG Retrieval (Future)         │   │
-│  │  - Tool Execution      - Logging & Audit                │   │
+│  │  - Request Routing     - SSE Streaming                  │   │
+│  │  - Web Search (SearXNG)- Voice (STT + TTS + Speaker)    │   │
+│  │  - Logging & Audit     - Cost Controls                  │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
-                    │                    │
-                    │
-                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     THINKING INFERENCE                           │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ MLX-VLM Server :8080                                      │  │
-│  │ Qwen 3.5 9B · enable_thinking=True                        │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+          │             │              │              │
+          │             │              │              │
+          ▼             ▼              ▼              ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────┐ ┌──────────────┐
+│ THINKING LLM │ │ INSTANT LLM  │ │ SearXNG  │ │ Kokoro TTS   │
+│ Qwen 3.5 9B  │ │ Qwen 3.5 4B  │ │ :8888    │ │ :8880        │
+│ :8080        │ │ :8081        │ │ (Docker)  │ │ (Docker)     │
+└──────────────┘ └──────────────┘ └──────────┘ └──────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -62,84 +64,163 @@ Local AI Assistant is a production-ready chat application that provides a ChatGP
 
 ```
 Local_AI_Project/
-├── .env.local               # Shared environment config (all services)
-├── Makefile                 # Development commands (make dev, make test)
+├── .env.local                       # Shared environment config (all services)
+├── Makefile                         # Development commands (make dev, make test)
+├── docker-compose.searxng.yml       # SearXNG web search (Docker)
 ├── README.md
 │
-├── gateway/                 # FastAPI Backend (Python)
+├── gateway/                         # FastAPI Backend (Python)
 │   ├── app/
-│   │   ├── main.py         # Application entry point
-│   │   ├── config.py       # Configuration & settings
-│   │   ├── middleware/     # JWT auth middleware
-│   │   ├── models/         # Pydantic models
-│   │   ├── routes/         # API endpoints (chat, health)
-│   │   └── services/       # Database & inference services
-│   ├── docs/               # Gateway-specific documentation
-│   │   ├── GPU_SETUP_GUIDE.md
-│   │   └── GPU_SETUP_GUIDE_THINKING.md
-│   ├── tests/              # Pytest test suite
-│   │   ├── conftest.py     # Shared fixtures
-│   │   └── test_*.py       # Test files
-│   ├── pyproject.toml      # Python project config
-│   └── requirements.txt    # Python dependencies
+│   │   ├── main.py                  # Application entry point
+│   │   ├── config.py                # Configuration & settings (all tiers, TTS, search)
+│   │   ├── middleware/
+│   │   │   └── auth.py              # JWT auth middleware
+│   │   ├── models/
+│   │   │   └── chat.py              # Pydantic models (ChatRequest, TTSRequest, etc.)
+│   │   ├── routes/
+│   │   │   ├── health.py            # Health endpoints (/health, /health/auth, /health/inference)
+│   │   │   └── chat.py              # Chat, voice, TTS, streaming endpoints
+│   │   └── services/
+│   │       ├── inference.py          # LLM inference (instant/thinking/thinking_harder)
+│   │       ├── database.py           # Supabase REST client (sessions, messages, profiles)
+│   │       ├── web_search.py         # SearXNG web search integration
+│   │       ├── transcription.py      # Speech-to-text (faster-whisper, tiny model)
+│   │       └── speaker.py            # Voice enrollment & speaker verification (MFCC)
+│   ├── tests/                        # Pytest test suite
+│   ├── pyproject.toml
+│   └── requirements.txt
 │
-├── webapp/                  # Next.js Frontend (TypeScript)
+├── webapp/                           # Next.js Frontend (TypeScript)
 │   ├── src/
-│   │   ├── app/            # Next.js App Router pages
-│   │   │   ├── page.tsx    # Home page
-│   │   │   ├── chat/       # Chat interface
-│   │   │   └── login/      # Authentication page
-│   │   └── lib/            # Utility libraries
-│   │       ├── gateway.ts  # Gateway API client
-│   │       └── supabase.ts # Supabase client
+│   │   ├── app/
+│   │   │   ├── page.tsx              # Home page (auth redirect)
+│   │   │   ├── layout.tsx            # Root layout (Geist Mono, dark theme)
+│   │   │   ├── globals.css           # Global styles (Tailwind v4)
+│   │   │   ├── chat/
+│   │   │   │   ├── page.tsx          # Main chat interface (streaming, modes, voice)
+│   │   │   │   ├── sidebar.tsx       # Session sidebar (list, rename, delete)
+│   │   │   │   ├── MessageBubble.tsx # Message rendering (markdown, think blocks, sources)
+│   │   │   │   └── VoiceSettings.tsx # Alfred voice panel (voice, speed, enrollment)
+│   │   │   └── login/
+│   │   │       └── page.tsx          # Login / signup page
+│   │   └── lib/
+│   │       ├── gateway.ts            # Gateway API client (chat, streaming, TTS, voice)
+│   │       ├── supabase.ts           # Supabase client (auth)
+│   │       ├── thinkParser.ts        # <think> tag parser for reasoning blocks
+│   │       └── voice.ts              # Voice hooks (STT, TTS, silence detection, wake word)
 │   ├── package.json
 │   └── tsconfig.json
 │
-├── supabase/                # Database Configuration
-│   ├── config.toml         # Supabase local config
-│   ├── migrations/         # SQL migrations
-│   │   └── 20260222000000_initial_schema.sql
-│   └── snippets/           # SQL reference snippets (00-07)
+├── searxng/                          # SearXNG configuration
+│   └── settings.yml                  # Search engines (Google, DuckDuckGo, Brave, Wikipedia)
 │
-└── docs/                    # Project documentation (private, not in git)
+├── supabase/                         # Database Configuration
+│   ├── config.toml                   # Supabase local config
+│   ├── migrations/
+│   │   ├── 20260222000000_initial_schema.sql
+│   │   ├── 20260310000000_add_reasoning_content.sql
+│   │   └── 20260310100000_add_thinking_harder_mode.sql
+│   └── snippets/                     # SQL reference snippets (00-07)
+│
+└── docs/                             # Project documentation (private, not in git)
 ```
+
+## Features
+
+### Chat & Streaming
+
+- **SSE streaming** via `POST /chat/stream` — tokens arrive in real time
+- **Non-streaming** fallback via `POST /chat` for simpler integrations
+- **Markdown rendering** with syntax highlighting (react-markdown + react-syntax-highlighter)
+- **Session management** — create, rename, archive, delete conversations
+- **Context window** — last 20 messages per session sent to the LLM
+
+### Three Inference Modes
+
+| Mode | Model | Budget | Use Case |
+|------|-------|--------|----------|
+| **Instant** | Qwen 3.5 4B (4-bit) | No thinking | Quick answers, voice conversation |
+| **Thinking** | Qwen 3.5 9B (4-bit) | 2,048 tokens | Reasoning, coding, analysis |
+| **Think Harder** | Qwen 3.5 9B (4-bit) | 8,192 tokens | Complex problems, extended reasoning |
+
+- Thinking blocks are collapsible in the UI with a "Show reasoning" toggle
+- Fallback: if the thinking tier is down, requests can fall back to instant
+
+### Voice Conversation ("Alfred" Mode)
+
+A full voice loop with wake-word activation:
+
+1. **Speech-to-Text**: Browser records audio → `POST /chat/transcribe` → faster-whisper (tiny model, ~75 MB)
+2. **AI Response**: Transcribed text sent to chat → streamed response
+3. **Text-to-Speech**: Response spoken aloud via Kokoro TTS (`POST /chat/tts`)
+4. **Speaker Verification**: Optional MFCC-based voice enrollment (3 samples) — only recognized voices can use Alfred mode
+5. **Wake Word**: Say "Hey Alfred" to start listening
+6. **Silence Detection**: Auto-stops recording after silence
+
+Voice profiles are stored locally at `~/.local-ai/voice-profiles/`.
+
+### Web Search (SearXNG)
+
+- Self-hosted SearXNG instance (Docker) — no API keys needed
+- Gateway auto-detects when a question needs web results (skips greetings/trivial messages)
+- Search results injected into the LLM system prompt with source URLs
+- Frontend shows cited sources below the AI response
+- Engines: Google, DuckDuckGo, Brave, Wikipedia
+
+### Authentication & Security
+
+- Supabase Auth (email/password) with JWT tokens
+- Gateway validates JWT on every request (HS256)
+- Row-Level Security on all database tables
+- CORS restricted to allowed origins
+- GPU endpoints only accessible via Tailscale VPN
 
 ## Quick Start
 
 ### Prerequisites
 
 - **macOS/Linux** development machine
-- **Docker Desktop** (for local Supabase)
+- **Docker Desktop** (for Supabase, SearXNG, Kokoro TTS)
 - **Node.js 18+** (for Web App)
 - **Python 3.10+** (for Gateway API)
+- **ffmpeg** (for voice/speaker features: `brew install ffmpeg`)
 - **Git** (for version control)
 - **Supabase CLI** (`brew install supabase/tap/supabase`)
 
-### Quick Commands (Makefile)
+### 1. Clone the Repository
 
 ```bash
-make help           # Show all available commands
-make install        # Install all dependencies (gateway + webapp)
-make dev            # Instructions for starting all services
-make dev-gateway    # Start Gateway API only
-make dev-webapp     # Start Web App only
-make dev-supabase   # Start Supabase only
-make test           # Run all tests
-make test-gateway   # Run gateway tests with pytest
-make lint           # Lint gateway code
-make format         # Format gateway code with black
-make clean          # Remove build artifacts
-make stop           # Stop all services
+git clone git@github.com:Jimmy6929/local_AI.git
+cd local_AI
 ```
 
-### Startup Checklist (Daily Use)
-
-You need to start **4–5 services across 2 machines**. Order matters.
-
-#### On M2 Pro (GPU Machine) — 1–2 terminals
+### 2. Configure Environment
 
 ```bash
-# Terminal 1 — Thinking LLM (Qwen 3.5 9B)
+# Copy the template and fill in your Supabase keys + Tailscale IPs
+cp .env.example .env.local
+```
+
+All services share a single `.env.local` at the project root. Gateway and webapp both read from `../.env.local` automatically — no per-folder env files needed. The `.env.local` must be **copied manually** between machines (it's gitignored).
+
+### 3. Install Dependencies
+
+```bash
+make install          # Installs both gateway + webapp deps
+# Or individually:
+cd gateway && pip3 install -r requirements.txt
+cd webapp && npm install
+```
+
+## Running the Project — Terminal-by-Terminal
+
+You need to start **5–7 services across 2 machines**. Order matters — start from the bottom of the stack up.
+
+### Machine 1: M2 Pro (GPU Machine) — 1–2 terminals
+
+**Terminal 1 — Thinking LLM (required)**
+
+```bash
 mlx_vlm.server --host 0.0.0.0 --port 8080 \
   --model mlx-community/Qwen3.5-9B-4bit \
   --enable-thinking \
@@ -148,63 +229,102 @@ mlx_vlm.server --host 0.0.0.0 --port 8080 \
   --thinking-end-token "</think>"
 ```
 
-**Optional — Voice Conversation (Qwen 3.5 4B):** When you enable Voice mode in the chat UI, it uses the *instant* tier. To enable it, run a second model and set `INFERENCE_INSTANT_*` in `.env.local`:
+**Terminal 2 — Instant LLM (optional, for voice/instant mode)**
 
 ```bash
-# Terminal 2 — Voice/Conversation LLM (Qwen 3.5 4B, lighter)
 mlx_lm.server --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
 ```
 
-In `.env.local`: `INFERENCE_INSTANT_URL=http://localhost:8081`, `INFERENCE_INSTANT_MODEL=mlx-community/Qwen3.5-4B-Instruct-4bit`, `INFERENCE_INSTANT_API_PREFIX=/v1`.
+### Machine 2: MacBook 2019 (Home Server) — 4–5 terminals
 
-#### On MacBook 2019 (Home Server) — 3–4 terminals
+**Terminal 1 — Supabase (start first, requires Docker Desktop)**
 
 ```bash
-# Terminal 1 — Supabase (make sure Docker Desktop is running first)
 cd ~/Documents/App-project/Local_AI_Project/supabase
 supabase start
+```
 
-# Terminal 2 — Gateway API (wait for Supabase to finish)
+Wait for Supabase to finish starting before proceeding.
+
+**Terminal 2 — Gateway API**
+
+```bash
 cd ~/Documents/App-project/Local_AI_Project/gateway
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-# Terminal 3 — Web App
+**Terminal 3 — Web App**
+
+```bash
 cd ~/Documents/App-project/Local_AI_Project/webapp
 npm run dev
 ```
 
-**Optional — Kokoro TTS (Voice for AI responses):** Required for Voice conversation mode. Runs as a Docker container alongside Supabase:
+**Terminal 4 — SearXNG Web Search (optional, for web search)**
 
 ```bash
-# Terminal 4 — Kokoro TTS (first pull ~1 GB, subsequent starts instant)
+cd ~/Documents/App-project/Local_AI_Project
+docker compose -f docker-compose.searxng.yml up -d
+```
+
+Verify at `http://localhost:8888`. Runs in the background (`-d`), persists across restarts.
+
+**Terminal 5 — Kokoro TTS (optional, for voice responses)**
+
+```bash
 docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
 ```
 
-Verify at `http://localhost:8880/docs`. Default voice: `bm_george` (British male, closest to Michael Caine). Change voice in Voice Settings panel.
+Verify at `http://localhost:8880/docs`. First pull downloads ~1 GB; subsequent starts are instant. Default voice: `bm_george` (British male). Change voice in the Voice Settings panel in the UI.
 
-#### Verify Everything Is Running
+### Startup Summary
+
+| # | Terminal | Machine | Command | Port |
+|---|----------|---------|---------|------|
+| 1 | Thinking LLM | M2 Pro | `mlx_vlm.server ...` | 8080 |
+| 2 | Instant LLM | M2 Pro | `mlx_lm.server ...` | 8081 |
+| 3 | Supabase | 2019 MacBook | `supabase start` | 54321-54323 |
+| 4 | Gateway API | 2019 MacBook | `python3 -m uvicorn ...` | 8000 |
+| 5 | Web App | 2019 MacBook | `npm run dev` | 3000 |
+| 6 | SearXNG | 2019 MacBook | `docker compose ... up -d` | 8888 |
+| 7 | Kokoro TTS | 2019 MacBook | `docker run ...` | 8880 |
+
+> Terminals 2, 6, and 7 are optional. The core experience (chat with thinking mode) only needs terminals 1, 3, 4, and 5.
+
+### Verify Everything Is Running
 
 ```bash
-# From M2 Pro — check local LLM server
+# From M2 Pro — check LLM servers
 curl http://localhost:8080/health                    # Thinking LLM
+curl http://localhost:8081/v1/models                  # Instant LLM
 
-# From M2 Pro — check Home Server services via Tailscale
-curl http://100.99.189.104:8000/health               # Gateway
-curl http://100.99.189.104:8000/health/inference      # Gateway → LLM connection
-open http://100.99.189.104:3000                       # Web App
+# From Home Server — check services
+curl http://127.0.0.1:8000/health                    # Gateway
+curl http://127.0.0.1:8000/health/inference           # Gateway → LLM connection
+curl http://localhost:8888/search?q=test&format=json   # SearXNG
+curl http://localhost:8880/docs                        # Kokoro TTS
+open http://localhost:3000                             # Web App
 ```
 
-> **Note:** All services share a single `.env.local` at the project root.
-> Gateway and webapp both read from `../.env.local` automatically — no per-folder env files needed.
-> **The `.env.local` must be copied manually** between machines (it's gitignored).
+### Quick Commands (Makefile)
 
-| Service | Machine | URL | What it does |
-|---------|---------|-----|--------------|
-| **Thinking LLM** | M2 Pro | http://localhost:8080 | Qwen 3.5 9B via mlx_vlm |
-| **Supabase** | 2019 MacBook | http://127.0.0.1:54321 | Auth + Database (Docker) |
-| **Supabase Studio** | 2019 MacBook | http://127.0.0.1:54323 | DB admin dashboard |
-| **Gateway API** | 2019 MacBook | http://127.0.0.1:8000 | Routes chat to DB + LLM |
-| **Web App** | 2019 MacBook | http://localhost:3000 | Next.js frontend |
+```bash
+make help           # Show all available commands
+make install        # Install all dependencies (gateway + webapp)
+make dev            # Instructions for starting all services
+make dev-all        # Start all via tmux (requires tmux)
+make dev-gateway    # Start Gateway API only
+make dev-webapp     # Start Web App only
+make dev-supabase   # Start Supabase only
+make mlx-thinking   # Start MLX-VLM thinking server on GPU machine
+make test           # Run all tests
+make test-gateway   # Run gateway tests with pytest
+make lint           # Lint gateway code
+make format         # Format gateway code with black
+make db-reset       # Reset database and rerun migrations
+make clean          # Remove build artifacts
+make stop           # Stop all services
+```
 
 ### Stopping & Checking Services
 
@@ -214,89 +334,23 @@ Check if a service is running:
 lsof -i :8000    # Gateway
 lsof -i :3000    # Web App
 lsof -i :54321   # Supabase
+lsof -i :8888    # SearXNG
+lsof -i :8880    # Kokoro TTS
 ```
 
 Stop a service:
 
 ```bash
-# Stop Gateway
-kill $(lsof -t -i :8000)
-
-# Stop Web App
-kill $(lsof -t -i :3000)
-
-# Stop Supabase
-supabase stop
-
-# Or if the service is running in a terminal, just press Ctrl+C
+kill $(lsof -t -i :8000)                              # Stop Gateway
+kill $(lsof -t -i :3000)                              # Stop Web App
+supabase stop                                          # Stop Supabase
+docker compose -f docker-compose.searxng.yml down      # Stop SearXNG
+docker stop $(docker ps -q --filter ancestor=ghcr.io/remsky/kokoro-fastapi-cpu:latest)  # Stop Kokoro TTS
+# Or just press Ctrl+C in the terminal running the service
 ```
 
 > **Tip:** If you get `Address already in use` when starting a service, it's already running.
-> Run `curl http://127.0.0.1:8000/health` to confirm, or kill it with `kill $(lsof -t -i :8000)` and restart.
-
-### 1. Clone the Repository
-
-```bash
-git clone git@github.com:Jimmy6929/local_AI.git
-cd local_AI
-```
-
-### 2. Start Local Supabase
-
-```bash
-# Install Supabase CLI (if not installed)
-brew install supabase/tap/supabase
-
-# Start local Supabase services
-supabase start
-
-# Note the credentials printed (or check LOCAL-SUPABASE-INFO.txt)
-```
-
-Local Supabase endpoints:
-| Service | URL |
-|---------|-----|
-| Studio (Dashboard) | http://127.0.0.1:54323 |
-| API | http://127.0.0.1:54321 |
-| Database | postgresql://postgres:postgres@127.0.0.1:54322/postgres |
-
-### 3. Set Up the Gateway API
-
-```bash
-cd gateway
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Start the server (reads .env.local from project root automatically)
-uvicorn app.main:app --reload --port 8000
-
-# Or use Makefile
-make dev-gateway
-```
-
-The Gateway API will be available at http://localhost:8000
-
-### 4. Set Up the Web App
-
-```bash
-cd webapp
-
-# Install dependencies
-npm install
-
-# Start development server (reads .env.local from project root automatically)
-npm run dev
-
-# Or use Makefile
-make dev-webapp
-```
-
-The Web App will be available at http://localhost:3000
+> Run `curl http://127.0.0.1:8000/health` to confirm, or kill it and restart.
 
 ## API Reference
 
@@ -306,26 +360,37 @@ The Web App will be available at http://localhost:3000
 |----------|--------|------|-------------|
 | `/health` | GET | No | Basic health check |
 | `/health/auth` | GET | Yes | Validates JWT and returns user info |
-| `/health/inference` | GET | No | Checks inference endpoint status |
+| `/health/inference` | GET | No | Checks instant + thinking tier status and routing config |
 
 ### Chat Endpoints
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/chat` | POST | Yes | Send message and receive AI response |
+| `/chat` | POST | Yes | Send message, receive full AI response |
+| `/chat/stream` | POST | Yes | Send message, receive SSE-streamed response |
 | `/chat/sessions` | GET | Yes | List user's chat sessions |
-| `/chat/sessions/{id}` | GET | Yes | Get session details |
 | `/chat/sessions/{id}/messages` | GET | Yes | Get messages in a session |
-| `/chat/sessions/{id}` | PATCH | Yes | Update session (rename, archive) |
-| `/chat/sessions/{id}` | DELETE | Yes | Delete a session |
+| `/chat/sessions/{id}` | PATCH | Yes | Rename a session |
+| `/chat/sessions/{id}` | DELETE | Yes | Delete a session and its messages |
 
-### POST /chat Request
+### Voice Endpoints
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/chat/transcribe` | POST | Yes | Transcribe audio to text (faster-whisper) |
+| `/chat/tts` | POST | Yes | Text-to-speech via Kokoro TTS (returns MP3) |
+| `/chat/voice-enroll` | POST | Yes | Enroll a voice sample for speaker verification |
+| `/chat/voice-profile` | GET | Yes | Get voice enrollment status |
+| `/chat/voice-profile` | DELETE | Yes | Delete voice profile |
+
+### POST /chat (and /chat/stream) Request
 
 ```json
 {
   "session_id": "uuid | null",
   "message": "string",
-  "mode": "instant | think"
+  "mode": "instant | thinking | thinking_harder",
+  "conversation_mode": false
 }
 ```
 
@@ -334,13 +399,48 @@ The Web App will be available at http://localhost:3000
 ```json
 {
   "session_id": "uuid",
-  "message_id": "uuid",
-  "content": "string",
-  "mode_used": "instant | think",
-  "tokens_used": 150,
-  "latency_ms": 1200
+  "message": {
+    "id": "uuid",
+    "role": "assistant",
+    "content": "string",
+    "reasoning_content": "string | null",
+    "mode_used": "instant | thinking | thinking_harder",
+    "created_at": "datetime"
+  },
+  "session_title": "string | null",
+  "inference": {
+    "mode_used": "thinking",
+    "model": "mlx-community/Qwen3.5-9B-4bit",
+    "fallback_used": false,
+    "latency_ms": 1200,
+    "tokens_used": 150,
+    "finish_reason": "stop"
+  }
 }
 ```
+
+### POST /chat/stream SSE Events
+
+The streaming endpoint sends Server-Sent Events (SSE):
+
+```
+data: {"delta": {"content": "Hello"}}
+data: {"delta": {"reasoning_content": "Let me think..."}}
+data: {"search_done": true, "sources": [...]}
+data: [DONE]
+```
+
+### POST /chat/tts Request
+
+```json
+{
+  "text": "Hello, how are you?",
+  "voice": "bm_george",
+  "speed": 1.0
+}
+```
+
+Returns `audio/mpeg` binary (MP3).
 
 ## Database Schema
 
@@ -348,9 +448,9 @@ The Web App will be available at http://localhost:3000
 
 | Table | Description |
 |-------|-------------|
-| `profiles` | User profile information (auto-created on signup) |
+| `profiles` | User profile information (auto-created on signup via trigger) |
 | `chat_sessions` | Chat conversation sessions |
-| `chat_messages` | Individual messages within sessions |
+| `chat_messages` | Individual messages with `reasoning_content` and `mode_used` |
 | `documents` | Uploaded document metadata (future RAG) |
 | `document_chunks` | Document chunks with embeddings (future RAG) |
 
@@ -362,6 +462,14 @@ profiles (1) ─────< chat_sessions (1) ─────< chat_messages
     └──────────────< documents (1) ────────< document_chunks
 ```
 
+### Key Schema Details
+
+- `chat_messages.reasoning_content` — stores the `<think>` block content separately
+- `chat_messages.mode_used` — constrained to `instant`, `thinking`, `thinking_harder`
+- `auth.users` trigger auto-creates a `profiles` row on signup
+- `chat_messages` trigger auto-updates `chat_sessions.updated_at`
+- pgvector extension with IVFFlat index for future RAG similarity search
+
 ### Row-Level Security (RLS)
 
 All tables have RLS enabled. Users can only access their own data:
@@ -371,79 +479,90 @@ All tables have RLS enabled. Users can only access their own data:
 - `chat_messages`: Users can CRUD only messages in their sessions
 - `documents`: Users can CRUD only their own documents
 
+### Migrations
+
+| Migration | Description |
+|-----------|-------------|
+| `20260222000000_initial_schema.sql` | Initial schema: profiles, sessions, messages, documents, chunks, RLS, triggers, storage |
+| `20260310000000_add_reasoning_content.sql` | Adds `reasoning_content` column to `chat_messages` |
+| `20260310100000_add_thinking_harder_mode.sql` | Adds `thinking_harder` to `mode_used` check constraint |
+
 ## Two-Machine Setup
 
 This project runs across **two machines** connected via Tailscale VPN:
 
 | Machine | Role | Tailscale IP |
 |---------|------|-------------|
-| **MacBook Pro 2019 (i7)** | Home Server: Gateway, Webapp, Docker, Supabase | `100.99.189.104` |
-| **MacBook Pro M2 Pro (16GB)** | GPU Machine: MLX inference servers (both LLMs) | `100.104.193.59` |
+| **MacBook Pro 2019 (i7)** | Home Server: Gateway, Webapp, Supabase, SearXNG, Kokoro TTS | `100.99.189.104` |
+| **MacBook Pro M2 Pro (16GB)** | GPU Machine: MLX inference servers (Thinking + Instant) | `100.104.193.59` |
 
 ```
-Browser → Webapp (:3000) → Gateway (:8000) → MLX-VLM server on M2 Pro (:8080)
-              Home Server                          GPU Machine
+Browser → Webapp (:3000) → Gateway (:8000) ──┬──→ MLX Thinking (:8080)  ← M2 Pro
+              │                                ├──→ MLX Instant  (:8081)  ← M2 Pro
+              │                                ├──→ SearXNG      (:8888)  ← Home Server
+              │                                └──→ Kokoro TTS   (:8880)  ← Home Server
+              └──→ Supabase  (:54321)                               ← Home Server
 ```
 
-## Inference Mode
+## Inference Modes
 
-The thinking tier runs Qwen 3.5 9B via `mlx_vlm.server` with chain-of-thought reasoning enabled:
+### Model Configuration
 
-| Tier | Model | Server | Port | API Path | Use Case |
-|------|-------|--------|------|----------|----------|
-| **Thinking** | `mlx-community/Qwen3.5-9B-4bit` | `mlx_vlm.server` | 8080 | `/chat/completions` | Reasoning, coding, analysis |
-| **Instant** | *(not configured)* | — | — | — | Reserved for future use |
+| Tier | Model | Server | Port | API Path | Thinking | Use Case |
+|------|-------|--------|------|----------|----------|----------|
+| **Instant** | `Qwen3.5-4B-Instruct-4bit` | `mlx_lm.server` | 8081 | `/v1/chat/completions` | No | Voice, quick answers |
+| **Thinking** | `Qwen3.5-9B-4bit` | `mlx_vlm.server` | 8080 | `/chat/completions` | Yes (2K budget) | Reasoning, coding |
+| **Think Harder** | `Qwen3.5-9B-4bit` | `mlx_vlm.server` | 8080 | `/chat/completions` | Yes (8K budget) | Complex problems |
 
-> **Why mlx_vlm?** Qwen 3.5 is a VLM (Vision-Language Model) that includes an image/video encoder.
+> **Why mlx_vlm for the 9B?** Qwen 3.5 is a VLM (Vision-Language Model) that includes an image/video encoder.
 > It requires `mlx-vlm` (which supports vision models). It works great for text chat and
 > *also* has vision capabilities for future use.
+
+> **Why mlx_lm for the 4B?** The 4B Instruct model is text-only, so it uses the lighter `mlx_lm.server`.
+
+### Cost Controls
+
+- `THINKING_DAILY_REQUEST_LIMIT` — max thinking requests per user per day (default: 100)
+- `THINKING_MAX_CONCURRENT` — max parallel thinking requests (default: 2)
+- `ROUTING_THINKING_FALLBACK_TO_INSTANT` — fall back to instant if thinking tier is down
 
 ### MLX Setup (GPU Machine — M2 Pro)
 
 #### One-Time Installation
 
 ```bash
-# Install/upgrade mlx-vlm with PyTorch (for Qwen 3.5 9B)
-pip install -U "mlx-vlm[torch]"
+pip install -U "mlx-vlm[torch]"    # Qwen 3.5 9B — needs PyTorch for vision processor
+pip install -U mlx-lm               # Qwen 3.5 4B — text-only, lighter
 ```
 
-> **Important:** Qwen 3.5 requires PyTorch + Torchvision for its video/image processor.
-> Use `pip install -U "mlx-vlm[torch]"` to get everything in one command.
->
 > **Thinking mode requires mlx-vlm >= March 5 2026** (PR #789). If you installed
 > before that date, run `pip install -U "mlx-vlm[torch]"` again to pick up
 > `--enable-thinking` and `--thinking-budget` server flags.
 
-#### Starting the LLM Server (Every Session)
-
-Open **one terminal** on the M2 Pro:
+#### Starting the LLM Servers (Every Session)
 
 ```bash
-# Thinking tier (Qwen 3.5 9B VLM) — thinking enabled by default
+# Terminal 1 — Thinking tier (Qwen 3.5 9B)
 mlx_vlm.server --host 0.0.0.0 --port 8080 \
   --model mlx-community/Qwen3.5-9B-4bit \
   --enable-thinking \
   --thinking-budget 2048 \
   --thinking-start-token "<think>" \
   --thinking-end-token "</think>"
+
+# Terminal 2 — Instant tier (Qwen 3.5 4B) [optional]
+mlx_lm.server --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
 ```
 
 | Flag | Purpose |
 |------|---------|
-| `--model` | Explicitly load Qwen 3.5 9B 4-bit instead of relying on cache |
+| `--model` | Explicitly load the model instead of relying on cache |
 | `--enable-thinking` | Passes `enable_thinking=True` into Qwen's chat template |
 | `--thinking-budget 2048` | Server-side hard cap — forcibly closes `</think>` after 2048 tokens |
 | `--thinking-start-token` / `--thinking-end-token` | Tells the server which tokens delimit the reasoning block |
 
 > The gateway also sends per-request `thinking_budget` in the API body (2048 for Think, 8192 for Think Harder).
 > The server-side `--thinking-budget` acts as a safety net default.
-
-#### Verify LLM Server Is Running
-
-```bash
-curl http://localhost:8080/health
-curl http://localhost:8080/models
-```
 
 ## Security
 
@@ -460,28 +579,57 @@ curl http://localhost:8080/models
 - **JWT Validation**: All API endpoints require valid JWT
 - **Row-Level Security**: Database enforces data isolation
 - **Private Inference**: GPU endpoints not publicly accessible
+- **Speaker Verification**: Voice mode can require voice enrollment
 - **CORS Configuration**: Restricted to allowed origins
 
-## Documentation
+## Environment Variables
 
-Detailed documentation is maintained locally in the `/docs` folder (not included in git for privacy).
+All environment variables live in a **single `.env.local` at the project root**. Both the gateway and webapp read from this file automatically.
 
-Documentation structure:
+```bash
+cp .env.example .env.local
+```
 
-| Section | Description |
-|---------|-----------|
-| `00_README/` | Project overview, glossary, getting started |
-| `01_PRODUCT/` | MVP scope, vision, success metrics |
-| `02_ARCHITECTURE/` | System design, data flow, environments |
-| `03_INFRA/` | Deployment, GPU setup, cost controls |
-| `04_DATABASE_SUPABASE/` | Schema, migrations, RLS policies |
-| `05_GATEWAY_API/` | API contracts, routing, tools |
-| `06_WEB_APP/` | UI components, auth UX, chat UX |
-| `07_SECURITY/` | Threat model, secrets, hardening |
-| `08_ROADMAP/` | Development phases |
-| `09_DECISIONS/` | Architecture Decision Records (ADRs) |
+### Gateway Variables
 
-Gateway-specific docs (GPU setup guides) are in `gateway/docs/`.
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DEBUG` | Enable debug mode | `true` |
+| `SUPABASE_URL` | Supabase API URL | `http://127.0.0.1:54321` |
+| `SUPABASE_ANON_KEY` | Supabase anonymous key | — |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | — |
+| `JWT_SECRET` | JWT signing secret | — |
+| `INFERENCE_INSTANT_URL` | Instant tier endpoint URL | — |
+| `INFERENCE_INSTANT_MODEL` | Instant tier model name | — |
+| `INFERENCE_INSTANT_MAX_TOKENS` | Max tokens for instant mode | `2048` |
+| `INFERENCE_INSTANT_TEMPERATURE` | Temperature for instant mode | `0.7` |
+| `INFERENCE_INSTANT_ENABLE_THINKING` | Enable CoT for instant | `false` |
+| `INFERENCE_THINKING_URL` | Thinking tier endpoint URL | — |
+| `INFERENCE_THINKING_MODEL` | Thinking tier model name | — |
+| `INFERENCE_THINKING_MAX_TOKENS` | Max tokens for thinking mode | `24576` |
+| `INFERENCE_THINKING_TEMPERATURE` | Temperature for thinking mode | `0.6` |
+| `INFERENCE_THINKING_ENABLE_THINKING` | Enable CoT for thinking | `true` |
+| `INFERENCE_THINKING_BUDGET` | Thinking token budget (Think) | `2048` |
+| `INFERENCE_THINKING_HARDER_MAX_TOKENS` | Max tokens for Think Harder | `28672` |
+| `INFERENCE_THINKING_HARDER_BUDGET` | Thinking token budget (Think Harder) | `8192` |
+| `KOKORO_TTS_URL` | Kokoro TTS endpoint | `http://localhost:8880` |
+| `KOKORO_TTS_DEFAULT_VOICE` | Default TTS voice | `bm_george` |
+| `SEARXNG_URL` | SearXNG search endpoint | `http://localhost:8888` |
+| `WEB_SEARCH_ENABLED` | Enable web search | `true` |
+| `WEB_SEARCH_TIMEOUT` | Search timeout (seconds) | `5.0` |
+| `WEB_SEARCH_MAX_RESULTS` | Max search results | `5` |
+| `ROUTING_DEFAULT_MODE` | Default inference mode | `thinking` |
+| `ROUTING_THINKING_FALLBACK_TO_INSTANT` | Fall back if thinking is down | `true` |
+| `THINKING_DAILY_REQUEST_LIMIT` | Max thinking requests/user/day | `100` |
+| `THINKING_MAX_CONCURRENT` | Max parallel thinking requests | `2` |
+
+### Web App Variables
+
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase API URL (Tailscale IP for cross-machine access) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key |
+| `NEXT_PUBLIC_GATEWAY_URL` | Gateway API URL (Tailscale IP for cross-machine access) |
 
 ## Complete Command Reference
 
@@ -490,8 +638,10 @@ Gateway-specific docs (GPU setup guides) are in `gateway/docs/`.
 ```bash
 # ── One-Time Setup ──────────────────────────────────
 pip install -U "mlx-vlm[torch]"          # Qwen 3.5 9B — needs PyTorch
+pip install -U mlx-lm                     # Qwen 3.5 4B — text-only
 
-# ── Start LLM Server (every session) ───────────────
+# ── Start LLM Servers (every session) ──────────────
+# Terminal 1 — Thinking LLM
 mlx_vlm.server --host 0.0.0.0 --port 8080 \
   --model mlx-community/Qwen3.5-9B-4bit \
   --enable-thinking \
@@ -499,9 +649,13 @@ mlx_vlm.server --host 0.0.0.0 --port 8080 \
   --thinking-start-token "<think>" \
   --thinking-end-token "</think>"
 
+# Terminal 2 — Instant LLM (optional)
+mlx_lm.server --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
+
 # ── Health Checks ──────────────────────────────────
 curl http://localhost:8080/health         # Thinking LLM status
 curl http://localhost:8080/models         # List loaded VLM models
+curl http://localhost:8081/v1/models      # List loaded instant models
 ```
 
 ### MacBook 2019 (Home Server)
@@ -512,28 +666,39 @@ cd ~/Documents/App-project/Local_AI_Project
 cd gateway && pip3 install -r requirements.txt       # Gateway Python deps
 cd ../webapp && npm install                           # Webapp Node deps
 brew install supabase/tap/supabase                   # Supabase CLI
+brew install ffmpeg                                   # Required for voice features
 
 # ── Start Services (every session, in order) ───────
 # 1. Make sure Docker Desktop is open first!
 cd ~/Documents/App-project/Local_AI_Project/supabase && supabase start
 
-# 2. Gateway (in a new terminal)
+# 2. Gateway (new terminal)
 cd ~/Documents/App-project/Local_AI_Project/gateway
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-# 3. Webapp (in a new terminal)
+# 3. Webapp (new terminal)
 cd ~/Documents/App-project/Local_AI_Project/webapp && npm run dev
 
+# 4. SearXNG (new terminal, optional — runs in background)
+cd ~/Documents/App-project/Local_AI_Project
+docker compose -f docker-compose.searxng.yml up -d
+
+# 5. Kokoro TTS (new terminal, optional)
+docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
+
 # ── Stop Services ──────────────────────────────────
-supabase stop                             # Stop Supabase + Docker containers
-kill $(lsof -t -i :8000)                  # Stop Gateway
-kill $(lsof -t -i :3000)                  # Stop Webapp
+supabase stop                                         # Stop Supabase + Docker containers
+kill $(lsof -t -i :8000)                              # Stop Gateway
+kill $(lsof -t -i :3000)                              # Stop Webapp
+docker compose -f docker-compose.searxng.yml down     # Stop SearXNG
 # Or just Ctrl+C in each terminal
 
 # ── Health Checks ──────────────────────────────────
 curl http://127.0.0.1:8000/health                    # Gateway
 curl http://127.0.0.1:8000/health/inference           # Gateway → LLM connection
 curl http://127.0.0.1:54321/auth/v1/health            # Supabase Auth
+curl http://localhost:8888/search?q=test&format=json   # SearXNG
+curl http://localhost:8880/docs                        # Kokoro TTS
 supabase status                                       # All Supabase info + keys
 
 # ── Database ───────────────────────────────────────
@@ -553,9 +718,12 @@ make install             # Install gateway + webapp deps
 make dev-gateway         # Start gateway
 make dev-webapp          # Start webapp
 make dev-supabase        # Start supabase
+make dev-all             # Start all via tmux
+make mlx-thinking        # Start thinking LLM on GPU machine
 make test                # Run all tests
 make lint                # Lint gateway
 make format              # Format gateway code
+make db-reset            # Reset database
 make clean               # Remove caches
 ```
 
@@ -594,7 +762,41 @@ kill $(lsof -t -i :<port>)                # Kill it
 
 # Supabase 401 errors
 supabase status                           # Check keys match .env.local
+
+# SearXNG not returning results
+docker compose -f docker-compose.searxng.yml logs   # Check logs
+docker compose -f docker-compose.searxng.yml restart # Restart
+
+# Kokoro TTS not working
+curl http://localhost:8880/docs            # Check if running
+docker logs $(docker ps -q --filter ancestor=ghcr.io/remsky/kokoro-fastapi-cpu:latest)
+
+# Voice transcription fails
+brew install ffmpeg                        # Required for audio conversion
+# Whisper tiny model auto-downloads on first use (~75 MB)
 ```
+
+## Tech Stack
+
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| **Frontend** | Next.js (App Router) | 16.1.6 |
+| **Frontend** | React | 19.2.3 |
+| **Frontend** | Tailwind CSS | v4 |
+| **Frontend** | TypeScript | 5.x |
+| **Backend** | FastAPI | 0.115.0 |
+| **Backend** | Uvicorn | 0.30.0 |
+| **Backend** | Pydantic | 2.9.0 |
+| **Auth & DB** | Supabase (Auth, Postgres, Storage) | — |
+| **Inference** | MLX / mlx-vlm / mlx-lm | Latest |
+| **Thinking LLM** | Qwen 3.5 9B (4-bit) | — |
+| **Instant LLM** | Qwen 3.5 4B Instruct (4-bit) | — |
+| **STT** | faster-whisper (tiny model) | 1.1.1 |
+| **TTS** | Kokoro FastAPI (Docker) | Latest |
+| **Web Search** | SearXNG (Docker) | Latest |
+| **Speaker ID** | MFCC embeddings (numpy) | — |
+| **Networking** | Tailscale VPN | — |
+| **Markdown** | react-markdown + remark-gfm | — |
 
 ## Roadmap
 
@@ -606,24 +808,36 @@ supabase status                           # Check keys match .env.local
 - [x] Web App (Next.js)
 - [x] Connect to GPU inference
 
-### Phase 2: Thinking Inference ✅ (Current)
+### Phase 2: Thinking Inference ✅
 - [x] Thinking Mode (Qwen 3.5 9B via mlx_vlm, enable_thinking=True)
+- [x] Think Harder mode (8K thinking budget)
 - [x] Mode toggle in UI
-- [x] Mode indicator on responses
-- [x] Instant tier reserved for future use
+- [x] Collapsible reasoning blocks in UI
+- [x] SSE streaming with reasoning_content support
+- [x] Instant tier (Qwen 3.5 4B via mlx_lm)
 
-### Phase 3: RAG (Document Memory)
+### Phase 3: Voice & Search ✅ (Current)
+- [x] Speech-to-text (faster-whisper)
+- [x] Text-to-speech (Kokoro TTS via Docker)
+- [x] Voice conversation mode ("Alfred")
+- [x] Wake word detection ("Hey Alfred")
+- [x] Silence detection (auto-stop recording)
+- [x] Speaker verification (MFCC voice enrollment)
+- [x] Web search (SearXNG, self-hosted)
+- [x] Search results cited in responses with source URLs
+
+### Phase 4: RAG (Document Memory)
 - [ ] File upload functionality
 - [ ] Document processing pipeline
 - [ ] Embedding generation
 - [ ] Context retrieval
 
-### Phase 4: Tools Framework
-- [ ] Web search integration
-- [ ] Note saving
+### Phase 5: Tools Framework
 - [ ] Custom tool support
+- [ ] Note saving
+- [ ] Calendar integration
 
-### Phase 5: Production Launch
+### Phase 6: Production Launch
 - [ ] Hosted Supabase migration
 - [ ] Public web app deployment
 - [ ] Rate limiting
@@ -638,7 +852,7 @@ cd gateway
 source venv/bin/activate
 
 # Run all tests
-pytest tests/
+pytest tests/ -v
 
 # Run with coverage
 pytest tests/ --cov=app --cov-report=html
@@ -662,53 +876,24 @@ npx tsc --noEmit
 npm run lint
 ```
 
-## Development
+## Documentation
 
-### Environment Variables
+Detailed documentation is maintained locally in the `/docs` folder (not included in git for privacy).
 
-All environment variables live in a **single `.env.local` at the project root**. Both the gateway and webapp read from this file automatically.
+| Section | Description |
+|---------|-----------|
+| `00_README/` | Project overview, glossary, getting started |
+| `01_PRODUCT/` | MVP scope, vision, success metrics |
+| `02_ARCHITECTURE/` | System design, data flow, environments |
+| `03_INFRA/` | Deployment, GPU setup, cost controls |
+| `04_DATABASE_SUPABASE/` | Schema, migrations, RLS policies |
+| `05_GATEWAY_API/` | API contracts, routing, tools |
+| `06_WEB_APP/` | UI components, auth UX, chat UX |
+| `07_SECURITY/` | Threat model, secrets, hardening |
+| `08_ROADMAP/` | Development phases |
+| `09_DECISIONS/` | Architecture Decision Records (ADRs) |
 
-```bash
-# First-time setup: copy the template and fill in your values
-cp .env.example .env.local
-```
-
-#### Gateway Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DEBUG` | Enable debug mode | `true` |
-| `SUPABASE_URL` | Supabase API URL | `http://127.0.0.1:54321` |
-| `SUPABASE_ANON_KEY` | Supabase anonymous key | - |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | - |
-| `JWT_SECRET` | JWT signing secret | - |
-| `INFERENCE_INSTANT_URL` | Instant mode endpoint | - |
-| `INFERENCE_THINKING_URL` | Thinking mode endpoint | - |
-| `INFERENCE_MODEL_NAME` | Model name for inference | `default` |
-| `INFERENCE_MAX_TOKENS` | Max tokens per response | `2048` |
-| `INFERENCE_TEMPERATURE` | Model temperature | `0.7` |
-| `INFERENCE_TIMEOUT` | Request timeout (seconds) | `120.0` |
-
-#### Web App Variables
-
-| Variable | Description |
-|----------|-------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase API URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key |
-| `NEXT_PUBLIC_GATEWAY_URL` | Gateway API URL |
-
-### Database Migrations
-
-```bash
-# Create new migration
-supabase migration new <migration_name>
-
-# Apply migrations (reset database)
-supabase db reset
-
-# View migration history
-supabase migration list
-```
+Gateway-specific docs (GPU setup guides) are in `gateway/docs/`.
 
 ## Contributing
 
@@ -726,15 +911,18 @@ This is a private project. Unauthorized copying, modification, distribution, or 
 
 ## Acknowledgments
 
-- [MLX](https://github.com/ml-explore/mlx) - Apple's ML framework for Apple Silicon
-- [mlx-lm](https://github.com/ml-explore/mlx-lm) - MLX server for text LLMs
-- [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) - MLX server for vision-language models
-- [Qwen](https://github.com/QwenLM/Qwen3) - Alibaba's open-source LLM family
-- [Supabase](https://supabase.com/) - Backend as a Service
-- [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
-- [Next.js](https://nextjs.org/) - React framework for production
-- [Tailwind CSS](https://tailwindcss.com/) - Utility-first CSS framework
-- [Tailscale](https://tailscale.com/) - Zero-config VPN for the two-machine setup
+- [MLX](https://github.com/ml-explore/mlx) — Apple's ML framework for Apple Silicon
+- [mlx-lm](https://github.com/ml-explore/mlx-lm) — MLX server for text LLMs
+- [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) — MLX server for vision-language models
+- [Qwen](https://github.com/QwenLM/Qwen3) — Alibaba's open-source LLM family
+- [Supabase](https://supabase.com/) — Backend as a Service
+- [FastAPI](https://fastapi.tiangolo.com/) — Modern Python web framework
+- [Next.js](https://nextjs.org/) — React framework for production
+- [Tailwind CSS](https://tailwindcss.com/) — Utility-first CSS framework
+- [Tailscale](https://tailscale.com/) — Zero-config VPN for the two-machine setup
+- [SearXNG](https://github.com/searxng/searxng) — Privacy-respecting metasearch engine
+- [Kokoro TTS](https://github.com/remsky/Kokoro-FastAPI) — Fast local text-to-speech
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — Fast Whisper inference with CTranslate2
 
 ---
 
