@@ -14,9 +14,9 @@ import {
 } from "@/lib/gateway";
 import {
   useSpeechRecognition,
-  useSpeechSynthesis,
-  useSpeechVoices,
+  useKokoroTTS,
   useVoiceSettings,
+  isStopCommand,
 } from "@/lib/voice";
 import Sidebar from "./sidebar";
 import MessageBubble from "./MessageBubble";
@@ -57,14 +57,22 @@ export default function ChatPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const userScrolledUpRef = useRef(false);
   const sendVoiceMessageRef = useRef<(text: string) => void>(() => {});
+  const continuousRef = useRef(false);
+
   const { settings: voiceSettings, setSettings: setVoiceSettings } = useVoiceSettings();
-  const voices = useSpeechVoices();
-  const { supportsSpeechSynthesis, speak, cancel } = useSpeechSynthesis(voiceSettings, voices);
+  const { isSpeaking, speak: kokoroSpeak, cancel: kokoroCancel } = useKokoroTTS();
 
   const onFinalTranscript = useCallback(
     (text: string) => {
       const clean = text.trim();
       if (!clean) return;
+
+      if (isStopCommand(clean)) {
+        continuousRef.current = false;
+        setConversationMode(false);
+        return;
+      }
+
       setInput(clean);
       if (!conversationMode) return;
       sendVoiceMessageRef.current(clean);
@@ -80,7 +88,11 @@ export default function ChatPage() {
     startListening,
     stopListening,
     abortListening,
-  } = useSpeechRecognition({ token, onFinalTranscript });
+  } = useSpeechRecognition({
+    token,
+    onFinalTranscript,
+    autoStopOnSilence: conversationMode,
+  });
 
   useEffect(() => {
     const supabase = createClient();
@@ -243,7 +255,7 @@ export default function ChatPage() {
 
     try {
       if (conversationMode) {
-        cancel();
+        kokoroCancel();
       }
 
       const finalContent = await sendMessageStream(
@@ -268,8 +280,12 @@ export default function ChatPage() {
       setMessages((prev) =>
         prev.map((m) => (m.streaming ? { ...m, streaming: false } : m))
       );
-      if (conversationMode && supportsSpeechSynthesis && finalContent.trim()) {
-        speak(finalContent);
+
+      if (conversationMode && finalContent.trim() && token) {
+        await kokoroSpeak(token, finalContent, voiceSettings.voiceId, voiceSettings.speed);
+        if (continuousRef.current) {
+          void startListening();
+        }
       }
 
       loadSessions();
@@ -312,7 +328,8 @@ export default function ChatPage() {
 
   function handleStop() {
     abortControllerRef.current?.abort();
-    cancel();
+    kokoroCancel();
+    continuousRef.current = false;
   }
 
   function handleNewChat() {
@@ -364,18 +381,29 @@ export default function ChatPage() {
       stopListening();
       return;
     }
-    cancel();
+    kokoroCancel();
+    continuousRef.current = conversationMode;
     void startListening();
+  }
+
+  function handleEndConversation() {
+    continuousRef.current = false;
+    setConversationMode(false);
+    kokoroCancel();
+    abortListening();
+    setVoiceSettingsOpen(false);
   }
 
   useEffect(() => {
     if (!conversationMode) {
+      continuousRef.current = false;
+      kokoroCancel();
       abortListening();
       setVoiceSettingsOpen(false);
       return;
     }
     setTimeout(() => inputRef.current?.focus(), 0);
-  }, [abortListening, conversationMode]);
+  }, [abortListening, conversationMode, kokoroCancel]);
 
   function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -401,6 +429,8 @@ export default function ChatPage() {
       </div>
     );
   }
+
+  const isConversationActive = conversationMode && (isListening || isTranscribing || isSpeaking || loading);
 
   return (
     <div className="min-h-screen flex bg-[#0a0a0a]">
@@ -491,7 +521,6 @@ export default function ChatPage() {
           <div className="max-w-3xl mx-auto">
             <VoiceSettings
               open={voiceSettingsOpen}
-              voices={voices}
               settings={voiceSettings}
               onChange={setVoiceSettings}
             />
@@ -569,7 +598,13 @@ export default function ChatPage() {
 
               {/* Conversation mode toggle */}
               <button
-                onClick={() => setConversationMode((prev) => !prev)}
+                onClick={() => {
+                  if (conversationMode) {
+                    handleEndConversation();
+                  } else {
+                    setConversationMode(true);
+                  }
+                }}
                 className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
                   conversationMode
                     ? "bg-[#33ccff]/20 text-[#66ddff] border border-[#33ccff]/40"
@@ -584,20 +619,36 @@ export default function ChatPage() {
                 <>
                   <button
                     onClick={handleMicClick}
-                    disabled={!supportsSpeechRecognition || loading || isTranscribing}
+                    disabled={!supportsSpeechRecognition || loading || isTranscribing || isSpeaking}
                     className={`p-2 rounded-xl transition-all shrink-0 ${
                       isListening
                         ? "bg-[#ff4444]/20 text-[#ff6666] animate-pulse"
                         : isTranscribing
                           ? "bg-[#ffbb33]/15 text-[#ffcc33] animate-pulse"
-                          : "text-[#66ddff] hover:bg-[#33ccff]/10"
+                          : isSpeaking
+                            ? "bg-[#33ccff]/15 text-[#66ddff] animate-pulse"
+                            : "text-[#66ddff] hover:bg-[#33ccff]/10"
                     } disabled:opacity-30 disabled:cursor-not-allowed`}
-                    title={isTranscribing ? "Transcribing..." : isListening ? "Stop recording" : "Speak"}
+                    title={
+                      isSpeaking
+                        ? "AI is speaking..."
+                        : isTranscribing
+                          ? "Transcribing..."
+                          : isListening
+                            ? "Stop recording"
+                            : "Start conversation"
+                    }
                   >
                     {isTranscribing ? (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <circle cx="12" cy="12" r="10" />
                         <path d="M12 6v6l4 2" />
+                      </svg>
+                    ) : isSpeaking ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
                       </svg>
                     ) : (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -608,6 +659,18 @@ export default function ChatPage() {
                       </svg>
                     )}
                   </button>
+
+                  {isConversationActive && (
+                    <button
+                      onClick={handleEndConversation}
+                      className="p-2 rounded-xl bg-[#ff4444]/15 text-[#ff6666] hover:bg-[#ff4444]/25 transition-all shrink-0"
+                      title="End conversation"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="6" y="6" width="12" height="12" rx="2" />
+                      </svg>
+                    </button>
+                  )}
 
                   <button
                     onClick={() => setVoiceSettingsOpen((prev) => !prev)}
@@ -665,11 +728,15 @@ export default function ChatPage() {
 
             <div className="text-[10px] text-[#777] mt-2 text-center">
               {conversationMode
-                ? isTranscribing
-                  ? "Transcribing your speech..."
-                  : isListening
-                    ? "Recording... tap mic to stop"
-                    : "Voice mode on · tap mic to speak · Enter sends typed message"
+                ? isSpeaking
+                  ? "Alfred is speaking..."
+                  : isTranscribing
+                    ? "Transcribing your speech..."
+                    : isListening
+                      ? "Listening... (auto-stops on silence)"
+                      : loading
+                        ? "Thinking..."
+                        : "Voice mode · tap mic to start · say \"stop\" to end"
                 : "Enter to send · Shift+Enter for new line"}
             </div>
             {voiceInputError && conversationMode && (

@@ -7,7 +7,7 @@ import re
 from datetime import date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.middleware.auth import JWTPayload, get_current_user
 from app.models.chat import (
@@ -19,6 +19,7 @@ from app.models.chat import (
     SessionInfo,
     SessionRenameRequest,
     SessionListResponse,
+    TTSRequest,
 )
 from app.services.database import DatabaseService, get_database_service
 from app.services.inference import InferenceService, get_inference_service
@@ -491,3 +492,38 @@ async def transcribe_audio_endpoint(
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
 
     return {"text": text}
+
+
+@router.post("/tts")
+async def text_to_speech(
+    request: TTSRequest,
+    user: JWTPayload = Depends(get_current_user),
+):
+    """Synthesize speech from text using Kokoro TTS."""
+    import httpx
+    from app.config import get_settings
+
+    settings = get_settings()
+    kokoro_url = settings.kokoro_tts_url
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{kokoro_url}/v1/audio/speech",
+                json={
+                    "model": "kokoro",
+                    "input": request.text,
+                    "voice": request.voice,
+                    "speed": request.speed,
+                    "response_format": "mp3",
+                },
+            )
+            resp.raise_for_status()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="Kokoro TTS service not reachable. Is it running?")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"Kokoro TTS error: {exc.response.status_code}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"TTS failed: {exc}")
+
+    return Response(content=resp.content, media_type="audio/mpeg")

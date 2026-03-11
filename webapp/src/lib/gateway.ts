@@ -274,6 +274,29 @@ export async function deleteSession(
   });
 }
 
+export async function fetchTTSAudio(
+  token: string,
+  text: string,
+  voice: string = "bm_george",
+  speed: number = 1.0
+): Promise<Blob> {
+  const res = await fetch(`${GATEWAY_URL}/chat/tts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ text, voice, speed }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`TTS error ${res.status}: ${errText}`);
+  }
+
+  return res.blob();
+}
+
 export async function transcribeAudio(
   token: string,
   audioBlob: Blob

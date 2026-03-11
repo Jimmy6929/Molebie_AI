@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     thinking_daily_request_limit: int = 100   # Max thinking requests per user per day
     thinking_max_concurrent: int = 2          # Max concurrent thinking requests
     
+    # ── Kokoro TTS (local text-to-speech) ─────────────────────
+    kokoro_tts_url: str = "http://localhost:8880"
+    kokoro_tts_default_voice: str = "bm_george"
+
     # Database URL (for direct connections if needed)
     database_url: str = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
     

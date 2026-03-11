@@ -134,7 +134,7 @@ make stop           # Stop all services
 
 ### Startup Checklist (Daily Use)
 
-You need to start **4 services across 2 machines**. Order matters.
+You need to start **4–5 services across 2 machines**. Order matters.
 
 #### On M2 Pro (GPU Machine) — 1–2 terminals
 
@@ -157,7 +157,7 @@ mlx_lm.server --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instru
 
 In `.env.local`: `INFERENCE_INSTANT_URL=http://localhost:8081`, `INFERENCE_INSTANT_MODEL=mlx-community/Qwen3.5-4B-Instruct-4bit`, `INFERENCE_INSTANT_API_PREFIX=/v1`.
 
-#### On MacBook 2019 (Home Server) — 3 terminals
+#### On MacBook 2019 (Home Server) — 3–4 terminals
 
 ```bash
 # Terminal 1 — Supabase (make sure Docker Desktop is running first)
@@ -172,6 +172,15 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 cd ~/Documents/App-project/Local_AI_Project/webapp
 npm run dev
 ```
+
+**Optional — Kokoro TTS (Voice for AI responses):** Required for Voice conversation mode. Runs as a Docker container alongside Supabase:
+
+```bash
+# Terminal 4 — Kokoro TTS (first pull ~1 GB, subsequent starts instant)
+docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
+```
+
+Verify at `http://localhost:8880/docs`. Default voice: `bm_george` (British male, closest to Michael Caine). Change voice in Voice Settings panel.
 
 #### Verify Everything Is Running
 

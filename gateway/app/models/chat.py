@@ -76,3 +76,10 @@ class SessionRenameRequest(BaseModel):
 class SessionListResponse(BaseModel):
     """Response for listing sessions."""
     sessions: List[SessionInfo]
+
+
+class TTSRequest(BaseModel):
+    """Request body for POST /chat/tts."""
+    text: str = Field(..., min_length=1, max_length=5000, description="Text to synthesize")
+    voice: str = Field("bm_george", description="Kokoro voice ID")
+    speed: float = Field(1.0, ge=0.5, le=2.0, description="Speech speed multiplier")
