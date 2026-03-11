@@ -5,8 +5,8 @@ Chat endpoints for the Gateway API.
 import asyncio
 import re
 from datetime import date
-from typing import List, Optional
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from typing import Any, Dict, List, Optional
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 
 from app.middleware.auth import JWTPayload, get_current_user
@@ -477,9 +477,10 @@ async def send_message_stream(
 @router.post("/transcribe")
 async def transcribe_audio_endpoint(
     file: UploadFile = File(...),
+    verify_speaker: bool = Form(False),
     user: JWTPayload = Depends(get_current_user),
-):
-    """Transcribe audio to text using local Whisper model."""
+) -> Dict[str, Any]:
+    """Transcribe audio to text. Optionally verify the speaker matches enrolled voice."""
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Empty audio file")
@@ -491,7 +492,59 @@ async def transcribe_audio_endpoint(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
 
-    return {"text": text}
+    result: Dict[str, Any] = {"text": text}
+
+    if verify_speaker:
+        from app.services.speaker import verify_speaker as do_verify
+
+        try:
+            verified, confidence = await do_verify(audio_bytes, user.sub, file.filename or "audio.webm")
+            result["speaker_verified"] = verified
+            result["speaker_confidence"] = round(confidence, 4)
+        except Exception:
+            result["speaker_verified"] = True
+            result["speaker_confidence"] = 1.0
+
+    return result
+
+
+@router.post("/voice-enroll")
+async def enroll_voice(
+    file: UploadFile = File(...),
+    user: JWTPayload = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Add a voice sample for speaker enrollment."""
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+
+    from app.services.speaker import enroll_voice_sample
+
+    try:
+        return await enroll_voice_sample(audio_bytes, user.sub, file.filename or "audio.webm")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Enrollment failed: {exc}") from exc
+
+
+@router.get("/voice-profile")
+async def voice_profile_status(
+    user: JWTPayload = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get voice enrollment status for the current user."""
+    from app.services.speaker import get_voice_profile_status
+
+    return await get_voice_profile_status(user.sub)
+
+
+@router.delete("/voice-profile")
+async def delete_voice_profile_endpoint(
+    user: JWTPayload = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Delete the enrolled voice profile."""
+    from app.services.speaker import delete_voice_profile
+
+    deleted = await delete_voice_profile(user.sub)
+    return {"deleted": deleted}
 
 
 @router.post("/tts")

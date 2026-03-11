@@ -34,6 +34,10 @@ export const KOKORO_VOICES = [
   { id: "af_nicole", label: "Nicole (American Female)" },
 ] as const;
 
+// ---------------------------------------------------------------------------
+// Stop / Wake-word detection
+// ---------------------------------------------------------------------------
+
 const STOP_PHRASES = [
   "stop",
   "stop conversation",
@@ -50,6 +54,29 @@ export function isStopCommand(text: string): boolean {
   return STOP_PHRASES.includes(normalized);
 }
 
+const WAKE_PHRASES = ["hey alfred", "hello alfred", "hi alfred"];
+
+export function extractWakeCommand(transcript: string): {
+  isWakeWord: boolean;
+  command: string;
+} {
+  const lower = transcript.toLowerCase().trim();
+  for (const phrase of WAKE_PHRASES) {
+    if (lower.startsWith(phrase)) {
+      const command = transcript
+        .slice(phrase.length)
+        .replace(/^[,.\s]+/, "")
+        .trim();
+      return { isWakeWord: true, command };
+    }
+  }
+  return { isWakeWord: false, command: "" };
+}
+
+// ---------------------------------------------------------------------------
+// Text cleanup for TTS
+// ---------------------------------------------------------------------------
+
 function cleanSpeechText(text: string): string {
   return text
     .replace(/<think>[\s\S]*?<\/think>/g, " ")
@@ -59,6 +86,13 @@ function cleanSpeechText(text: string): string {
     .replace(/[#*_>\-\[\]()]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -73,8 +107,14 @@ export function useVoiceSettings() {
       if (!raw) return DEFAULT_VOICE_PREFERENCES;
       const parsed = JSON.parse(raw) as Partial<VoicePreferences>;
       return {
-        voiceId: typeof parsed.voiceId === "string" ? parsed.voiceId : DEFAULT_VOICE_PREFERENCES.voiceId,
-        speed: typeof parsed.speed === "number" ? parsed.speed : DEFAULT_VOICE_PREFERENCES.speed,
+        voiceId:
+          typeof parsed.voiceId === "string"
+            ? parsed.voiceId
+            : DEFAULT_VOICE_PREFERENCES.voiceId,
+        speed:
+          typeof parsed.speed === "number"
+            ? parsed.speed
+            : DEFAULT_VOICE_PREFERENCES.speed,
       };
     } catch {
       return DEFAULT_VOICE_PREFERENCES;
@@ -147,6 +187,7 @@ export function useSpeechRecognition(options?: {
   token?: string | null;
   onFinalTranscript?: (text: string) => void;
   autoStopOnSilence?: boolean;
+  verifySpeaker?: boolean;
 }) {
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -165,6 +206,8 @@ export function useSpeechRecognition(options?: {
   tokenRef.current = options?.token;
   const autoStopRef = useRef(options?.autoStopOnSilence ?? false);
   autoStopRef.current = options?.autoStopOnSilence ?? false;
+  const verifySpeakerRef = useRef(options?.verifySpeaker ?? false);
+  verifySpeakerRef.current = options?.verifySpeaker ?? false;
 
   const supportsVoiceInput =
     typeof navigator !== "undefined" &&
@@ -236,13 +279,27 @@ export function useSpeechRecognition(options?: {
 
         setIsTranscribing(true);
         try {
-          const text = await transcribeAudio(token, blob);
+          const result = await transcribeAudio(
+            token,
+            blob,
+            verifySpeakerRef.current
+          );
+          if (
+            verifySpeakerRef.current &&
+            result.speaker_verified === false
+          ) {
+            // Not the enrolled speaker — silently ignore
+            return;
+          }
+          const text = result.text;
           setTranscript(text);
           if (text.trim() && onFinalTranscriptRef.current) {
             onFinalTranscriptRef.current(text.trim());
           }
         } catch (err) {
-          setError(err instanceof Error ? err.message : "Transcription failed");
+          setError(
+            err instanceof Error ? err.message : "Transcription failed"
+          );
         } finally {
           setIsTranscribing(false);
         }
@@ -259,9 +316,13 @@ export function useSpeechRecognition(options?: {
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === "NotAllowedError") {
-        setError("Microphone permission denied. Allow access in browser settings.");
+        setError(
+          "Microphone permission denied. Allow access in browser settings."
+        );
       } else {
-        setError(err instanceof Error ? err.message : "Failed to start recording");
+        setError(
+          err instanceof Error ? err.message : "Failed to start recording"
+        );
       }
     }
   }, [supportsVoiceInput, stopListening]);
@@ -302,13 +363,26 @@ export function useSpeechRecognition(options?: {
 }
 
 // ---------------------------------------------------------------------------
-// Text-to-Speech via Kokoro TTS (local, through gateway)
+// Text-to-Speech via Kokoro TTS — sentence-level parallel fetching
 // ---------------------------------------------------------------------------
+
+function playAudioBlob(blob: Blob): Promise<void> {
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      URL.revokeObjectURL(url);
+      resolve();
+    };
+    audio.onended = done;
+    audio.onerror = done;
+    audio.play().catch(done);
+  });
+}
 
 export function useKokoroTTS() {
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const urlRef = useRef<string | null>(null);
+  const cancelledRef = useRef(false);
 
   const speak = useCallback(
     async (
@@ -317,51 +391,33 @@ export function useKokoroTTS() {
       voice: string = "bm_george",
       speed: number = 1.0
     ): Promise<void> => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-      }
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current);
-        urlRef.current = null;
-      }
-
       const clean = cleanSpeechText(text);
       if (!clean) return;
 
+      cancelledRef.current = false;
       setIsSpeaking(true);
 
       try {
-        const blob = await fetchTTSAudio(token, clean, voice, speed);
-        const url = URL.createObjectURL(blob);
-        urlRef.current = url;
-        const audio = new Audio(url);
-        audioRef.current = audio;
-
-        return new Promise<void>((resolve) => {
-          audio.onended = () => {
-            cleanup();
-            resolve();
-          };
-          audio.onerror = () => {
-            cleanup();
-            resolve();
-          };
-          audio.play().catch(() => {
-            cleanup();
-            resolve();
-          });
-        });
-      } catch {
-        setIsSpeaking(false);
-      }
-
-      function cleanup() {
-        if (urlRef.current) {
-          URL.revokeObjectURL(urlRef.current);
-          urlRef.current = null;
+        const sentences = splitSentences(clean);
+        if (sentences.length === 0) {
+          setIsSpeaking(false);
+          return;
         }
-        audioRef.current = null;
+
+        // Fire all TTS requests in parallel for pipelining
+        const audioPromises = sentences.map((s) =>
+          fetchTTSAudio(token, s, voice, speed).catch(() => null)
+        );
+
+        for (const promise of audioPromises) {
+          if (cancelledRef.current) break;
+          const blob = await promise;
+          if (!blob || cancelledRef.current) break;
+          await playAudioBlob(blob);
+        }
+      } catch {
+        // TTS failed silently
+      } finally {
         setIsSpeaking(false);
       }
     },
@@ -369,23 +425,8 @@ export function useKokoroTTS() {
   );
 
   const cancel = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = "";
-      audioRef.current = null;
-    }
-    if (urlRef.current) {
-      URL.revokeObjectURL(urlRef.current);
-      urlRef.current = null;
-    }
+    cancelledRef.current = true;
     setIsSpeaking(false);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      audioRef.current?.pause();
-      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-    };
   }, []);
 
   return { isSpeaking, speak, cancel };

@@ -17,6 +17,7 @@ import {
   useKokoroTTS,
   useVoiceSettings,
   isStopCommand,
+  extractWakeCommand,
 } from "@/lib/voice";
 import Sidebar from "./sidebar";
 import MessageBubble from "./MessageBubble";
@@ -41,8 +42,12 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<"instant" | "thinking" | "thinking_harder">("thinking");
+  const [mode, setMode] = useState<"instant" | "thinking" | "thinking_harder">(
+    "thinking"
+  );
   const [conversationMode, setConversationMode] = useState(false);
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  const [speakerVerifyEnabled, setSpeakerVerifyEnabled] = useState(false);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -59,8 +64,10 @@ export default function ChatPage() {
   const sendVoiceMessageRef = useRef<(text: string) => void>(() => {});
   const continuousRef = useRef(false);
 
-  const { settings: voiceSettings, setSettings: setVoiceSettings } = useVoiceSettings();
-  const { isSpeaking, speak: kokoroSpeak, cancel: kokoroCancel } = useKokoroTTS();
+  const { settings: voiceSettings, setSettings: setVoiceSettings } =
+    useVoiceSettings();
+  const { isSpeaking, speak: kokoroSpeak, cancel: kokoroCancel } =
+    useKokoroTTS();
 
   const onFinalTranscript = useCallback(
     (text: string) => {
@@ -73,11 +80,21 @@ export default function ChatPage() {
         return;
       }
 
+      if (wakeWordEnabled) {
+        const { isWakeWord, command } = extractWakeCommand(clean);
+        if (!isWakeWord) return; // not a wake word — ignore, loop restarts
+        if (command) {
+          setInput(command);
+          sendVoiceMessageRef.current(command);
+        }
+        return;
+      }
+
       setInput(clean);
       if (!conversationMode) return;
       sendVoiceMessageRef.current(clean);
     },
-    [conversationMode]
+    [conversationMode, wakeWordEnabled]
   );
 
   const {
@@ -92,7 +109,28 @@ export default function ChatPage() {
     token,
     onFinalTranscript,
     autoStopOnSilence: conversationMode,
+    verifySpeaker: speakerVerifyEnabled,
   });
+
+  // Auto-restart listening for continuous / wake-word mode
+  useEffect(() => {
+    if (!conversationMode) return;
+    if (isListening || isTranscribing || isSpeaking || loading) return;
+    if (!continuousRef.current && !wakeWordEnabled) return;
+
+    const timer = setTimeout(() => {
+      void startListening();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [
+    conversationMode,
+    isListening,
+    isTranscribing,
+    isSpeaking,
+    loading,
+    wakeWordEnabled,
+    startListening,
+  ]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -178,7 +216,8 @@ export default function ChatPage() {
     function checkPosition() {
       requestAnimationFrame(() => {
         const el = container!;
-        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        const atBottom =
+          el.scrollHeight - el.scrollTop - el.clientHeight < 80;
         userScrolledUpRef.current = !atBottom;
         setShowScrollBtn(!atBottom);
       });
@@ -266,9 +305,7 @@ export default function ChatPage() {
         conversationMode,
         (content) => {
           setMessages((prev) =>
-            prev.map((m) =>
-              m.streaming ? { ...m, content } : m
-            )
+            prev.map((m) => (m.streaming ? { ...m, content } : m))
           );
         },
         (sid) => {
@@ -282,19 +319,20 @@ export default function ChatPage() {
       );
 
       if (conversationMode && finalContent.trim() && token) {
-        await kokoroSpeak(token, finalContent, voiceSettings.voiceId, voiceSettings.speed);
-        if (continuousRef.current) {
-          void startListening();
-        }
+        await kokoroSpeak(
+          token,
+          finalContent,
+          voiceSettings.voiceId,
+          voiceSettings.speed
+        );
+        // After TTS, auto-restart is handled by the useEffect above
       }
 
       loadSessions();
     } catch (err) {
       if (controller.signal.aborted) {
         setMessages((prev) =>
-          prev.map((m) =>
-            m.streaming ? { ...m, streaming: false } : m
-          )
+          prev.map((m) => (m.streaming ? { ...m, streaming: false } : m))
         );
       } else {
         console.error("Send error:", err);
@@ -376,7 +414,8 @@ export default function ChatPage() {
   }
 
   function handleMicClick() {
-    if (!supportsSpeechRecognition || loading || isTranscribing) return;
+    if (!supportsSpeechRecognition || loading || isTranscribing || isSpeaking)
+      return;
     if (isListening) {
       stopListening();
       return;
@@ -430,7 +469,20 @@ export default function ChatPage() {
     );
   }
 
-  const isConversationActive = conversationMode && (isListening || isTranscribing || isSpeaking || loading);
+  const isConversationActive =
+    conversationMode &&
+    (isListening || isTranscribing || isSpeaking || loading);
+
+  function statusText(): string {
+    if (!conversationMode) return "Enter to send · Shift+Enter for new line";
+    if (isSpeaking) return "Alfred is speaking...";
+    if (isTranscribing) return "Transcribing your speech...";
+    if (isListening) return "Listening... (auto-stops on silence)";
+    if (loading) return "Thinking...";
+    if (wakeWordEnabled)
+      return 'Say "Hey Alfred" to start · say "stop" to end';
+    return 'Voice mode · tap mic to start · say "stop" to end';
+  }
 
   return (
     <div className="min-h-screen flex bg-[#0a0a0a]">
@@ -457,7 +509,16 @@ export default function ChatPage() {
               onClick={() => setSidebarOpen(!sidebarOpen)}
               className="text-[#00ff41] hover:text-[#33ff66] transition-colors p-2 rounded-xl hover:bg-white/[0.06]"
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <line x1="3" y1="6" x2="21" y2="6" />
                 <line x1="3" y1="12" x2="21" y2="12" />
                 <line x1="3" y1="18" x2="21" y2="18" />
@@ -472,10 +533,15 @@ export default function ChatPage() {
         </header>
 
         {/* Messages */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+        >
           {messages.length === 0 && (
             <div className="flex items-center justify-center h-full">
-              <div className="text-[#999] text-sm">What can I help you with?</div>
+              <div className="text-[#999] text-sm">
+                What can I help you with?
+              </div>
             </div>
           )}
 
@@ -500,7 +566,16 @@ export default function ChatPage() {
               onClick={scrollToBottom}
               className="glass rounded-full p-2.5 text-[#00ff41] hover:text-[#33ff66] transition-all hover:scale-105 shadow-lg shadow-black/40"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <polyline points="6 9 12 15 18 9" />
               </svg>
             </button>
@@ -516,13 +591,18 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* Input Area - Floating glass bar */}
+        {/* Input Area */}
         <div className="p-4 pb-5 shrink-0">
           <div className="max-w-3xl mx-auto">
             <VoiceSettings
               open={voiceSettingsOpen}
+              token={token}
               settings={voiceSettings}
               onChange={setVoiceSettings}
+              wakeWordEnabled={wakeWordEnabled}
+              onWakeWordToggle={setWakeWordEnabled}
+              speakerVerifyEnabled={speakerVerifyEnabled}
+              onSpeakerVerifyToggle={setSpeakerVerifyEnabled}
             />
 
             {/* Image preview */}
@@ -541,7 +621,9 @@ export default function ChatPage() {
                     ×
                   </button>
                 </div>
-                <span className="text-[10px] text-[#999]">{imageFile?.name}</span>
+                <span className="text-[10px] text-[#999]">
+                  {imageFile?.name}
+                </span>
               </div>
             )}
 
@@ -559,7 +641,16 @@ export default function ChatPage() {
                 className="p-2 rounded-xl text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06] transition-all shrink-0"
                 title="Add image"
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <rect x="3" y="3" width="18" height="18" rx="4" />
                   <circle cx="8.5" cy="8.5" r="1.5" />
                   <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
@@ -577,14 +668,20 @@ export default function ChatPage() {
                     : "text-[#999] hover:text-[#00ff41] border border-white/[0.08] hover:border-white/[0.15]"
                 }`}
               >
-                {mode === "instant" ? "Fast" : mode === "thinking_harder" ? "Think+" : "Think"}
+                {mode === "instant"
+                  ? "Fast"
+                  : mode === "thinking_harder"
+                    ? "Think+"
+                    : "Think"}
               </button>
 
               {/* Think harder sub-toggle */}
               {mode !== "instant" && (
                 <button
                   onClick={() =>
-                    setMode(mode === "thinking_harder" ? "thinking" : "thinking_harder")
+                    setMode(
+                      mode === "thinking_harder" ? "thinking" : "thinking_harder"
+                    )
                   }
                   className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
                     mode === "thinking_harder"
@@ -603,6 +700,7 @@ export default function ChatPage() {
                     handleEndConversation();
                   } else {
                     setConversationMode(true);
+                    continuousRef.current = true;
                   }
                 }}
                 className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
@@ -619,7 +717,12 @@ export default function ChatPage() {
                 <>
                   <button
                     onClick={handleMicClick}
-                    disabled={!supportsSpeechRecognition || loading || isTranscribing || isSpeaking}
+                    disabled={
+                      !supportsSpeechRecognition ||
+                      loading ||
+                      isTranscribing ||
+                      isSpeaking
+                    }
                     className={`p-2 rounded-xl transition-all shrink-0 ${
                       isListening
                         ? "bg-[#ff4444]/20 text-[#ff6666] animate-pulse"
@@ -640,18 +743,45 @@ export default function ChatPage() {
                     }
                   >
                     {isTranscribing ? (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
                         <circle cx="12" cy="12" r="10" />
                         <path d="M12 6v6l4 2" />
                       </svg>
                     ) : isSpeaking ? (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
                         <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                         <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
                         <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
                       </svg>
                     ) : (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
                         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
                         <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
                         <line x1="12" y1="19" x2="12" y2="23" />
@@ -666,7 +796,12 @@ export default function ChatPage() {
                       className="p-2 rounded-xl bg-[#ff4444]/15 text-[#ff6666] hover:bg-[#ff4444]/25 transition-all shrink-0"
                       title="End conversation"
                     >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                      >
                         <rect x="6" y="6" width="12" height="12" rx="2" />
                       </svg>
                     </button>
@@ -677,7 +812,16 @@ export default function ChatPage() {
                     className="p-2 rounded-xl text-[#66ddff] hover:bg-[#33ccff]/10 transition-all shrink-0"
                     title="Voice settings"
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
                       <circle cx="12" cy="12" r="3" />
                       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
                     </svg>
@@ -708,7 +852,12 @@ export default function ChatPage() {
                   onClick={handleStop}
                   className="p-2 rounded-xl bg-[#ff5555]/15 text-[#ff5555] hover:bg-[#ff5555]/25 transition-all shrink-0"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                  >
                     <rect x="6" y="6" width="12" height="12" rx="2" />
                   </svg>
                 </button>
@@ -718,7 +867,16 @@ export default function ChatPage() {
                   disabled={!input.trim()}
                   className="p-2 rounded-xl text-[#00ff41] hover:bg-[#00ff41]/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <line x1="12" y1="19" x2="12" y2="5" />
                     <polyline points="5 12 12 5 19 12" />
                   </svg>
@@ -727,20 +885,12 @@ export default function ChatPage() {
             </div>
 
             <div className="text-[10px] text-[#777] mt-2 text-center">
-              {conversationMode
-                ? isSpeaking
-                  ? "Alfred is speaking..."
-                  : isTranscribing
-                    ? "Transcribing your speech..."
-                    : isListening
-                      ? "Listening... (auto-stops on silence)"
-                      : loading
-                        ? "Thinking..."
-                        : "Voice mode · tap mic to start · say \"stop\" to end"
-                : "Enter to send · Shift+Enter for new line"}
+              {statusText()}
             </div>
             {voiceInputError && conversationMode && (
-              <div className="text-[10px] text-[#ff7777] mt-1 text-center">{voiceInputError}</div>
+              <div className="text-[10px] text-[#ff7777] mt-1 text-center">
+                {voiceInputError}
+              </div>
             )}
           </div>
         </div>

@@ -297,12 +297,20 @@ export async function fetchTTSAudio(
   return res.blob();
 }
 
+export interface TranscribeResult {
+  text: string;
+  speaker_verified?: boolean;
+  speaker_confidence?: number;
+}
+
 export async function transcribeAudio(
   token: string,
-  audioBlob: Blob
-): Promise<string> {
+  audioBlob: Blob,
+  verifySpeaker: boolean = false
+): Promise<TranscribeResult> {
   const formData = new FormData();
   formData.append("file", audioBlob, "recording.webm");
+  formData.append("verify_speaker", verifySpeaker ? "true" : "false");
 
   const res = await fetch(`${GATEWAY_URL}/chat/transcribe`, {
     method: "POST",
@@ -317,8 +325,51 @@ export async function transcribeAudio(
     throw new Error(`Transcription error ${res.status}: ${text}`);
   }
 
-  const data = await res.json();
-  return data.text || "";
+  return res.json();
+}
+
+export interface VoiceProfileStatus {
+  enrolled: boolean;
+  n_samples: number;
+  complete: boolean;
+  required: number;
+}
+
+export async function getVoiceProfileStatus(
+  token: string
+): Promise<VoiceProfileStatus> {
+  return apiCall<VoiceProfileStatus>("/chat/voice-profile", token);
+}
+
+export async function enrollVoiceSample(
+  token: string,
+  audioBlob: Blob
+): Promise<VoiceProfileStatus> {
+  const formData = new FormData();
+  formData.append("file", audioBlob, "enrollment.webm");
+
+  const res = await fetch(`${GATEWAY_URL}/chat/voice-enroll`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Enrollment error ${res.status}: ${errText}`);
+  }
+
+  return res.json();
+}
+
+export async function deleteVoiceProfile(
+  token: string
+): Promise<{ deleted: boolean }> {
+  return apiCall<{ deleted: boolean }>("/chat/voice-profile", token, {
+    method: "DELETE",
+  });
 }
 
 export async function checkInferenceHealth(): Promise<Record<string, unknown>> {
