@@ -219,11 +219,12 @@ async def send_message(
             context_text = web_search.format_results_for_context(search_results)
             messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
 
-    # RAG: inject relevant document chunks into context
-    rag_chunks = await rag.retrieve_context(token, request.message)
-    if rag_chunks:
-        rag_text = rag.format_context(rag_chunks)
-        messages[0]["content"] += f"\n\nDOCUMENT CONTEXT:\n{rag_text}"
+    # RAG: inject relevant document chunks (skip in conversation mode to avoid embedding load)
+    if not request.conversation_mode:
+        rag_chunks = await rag.retrieve_context(token, request.message)
+        if rag_chunks:
+            rag_text = rag.format_context(rag_chunks)
+            messages[0]["content"] += f"\n\nDOCUMENT CONTEXT:\n{rag_text}"
 
     total_chars = sum(len(m.get("content", "")) for m in messages)
     print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
@@ -447,11 +448,12 @@ async def send_message_stream(
             context_text = web_search.format_results_for_context(search_results)
             messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
 
-    # RAG: inject relevant document chunks into context
-    rag_chunks = await rag.retrieve_context(token, request.message)
-    if rag_chunks:
-        rag_text = rag.format_context(rag_chunks)
-        messages[0]["content"] += f"\n\nDOCUMENT CONTEXT:\n{rag_text}"
+    # RAG: inject relevant document chunks (skip in conversation mode to avoid embedding load)
+    if not request.conversation_mode:
+        rag_chunks = await rag.retrieve_context(token, request.message)
+        if rag_chunks:
+            rag_text = rag.format_context(rag_chunks)
+            messages[0]["content"] += f"\n\nDOCUMENT CONTEXT:\n{rag_text}"
 
     total_chars = sum(len(m.get("content", "")) for m in messages)
     print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
