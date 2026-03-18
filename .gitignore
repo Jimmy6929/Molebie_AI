@@ -40,4 +40,5 @@ Local_AI_model_Project_doc/
 docs/
 
 # Logs
+logs/
 *.log

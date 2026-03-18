@@ -1,7 +1,7 @@
 # Local AI Assistant - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-install mlx-vlm-install
+.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs
 
 # Default target
 help:
@@ -27,6 +27,11 @@ help:
 	@echo ""
 	@echo "  make clean          Remove build artifacts and caches"
 	@echo "  make stop           Stop all running services"
+	@echo ""
+	@echo "  make autopull-install    Install auto-pull service (MacBook Pro 2016)"
+	@echo "  make autopull-uninstall  Remove auto-pull service"
+	@echo "  make autopull-status     Check auto-pull service status"
+	@echo "  make autopull-logs       Tail auto-pull log file"
 	@echo ""
 
 # ──────────────────────────────────────────────────────────────
@@ -163,3 +168,29 @@ clean:
 	find . -type f -name ".coverage" -delete 2>/dev/null || true
 	rm -rf webapp/.next 2>/dev/null || true
 	@echo "✅ Clean complete"
+
+# ──────────────────────────────────────────────────────────────
+# AUTO-PULL (MacBook Pro 2016 home server)
+# ──────────────────────────────────────────────────────────────
+
+autopull-install:
+	@echo "Installing auto-pull service..."
+	chmod +x scripts/auto-pull.sh
+	mkdir -p logs
+	cp scripts/com.jimmy.localai.autopull.plist ~/Library/LaunchAgents/
+	launchctl load ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist
+	@echo "✅ Auto-pull service installed and running (polls every 60s)"
+
+autopull-uninstall:
+	@echo "Removing auto-pull service..."
+	launchctl unload ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist 2>/dev/null || true
+	rm -f ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist
+	@echo "✅ Auto-pull service removed"
+
+autopull-status:
+	@launchctl list | grep localai.autopull || echo "Auto-pull service is not running"
+	@echo "--- Recent log entries ---"
+	@tail -20 logs/auto-pull.log 2>/dev/null || echo "No log file yet"
+
+autopull-logs:
+	@tail -f logs/auto-pull.log
