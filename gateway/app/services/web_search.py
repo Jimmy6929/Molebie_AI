@@ -8,6 +8,7 @@ information.
 
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -33,6 +34,68 @@ _TRIVIAL_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Domain patterns for source classification
+_OFFICIAL_PATTERNS = (
+    ".gov", ".edu", ".mil",
+    "docs.", "developer.", "devdocs.",
+    "wikipedia.org", "wikimedia.org",
+    "mozilla.org/en-US/docs",
+)
+_FORUM_DOMAINS = (
+    "stackoverflow.com", "stackexchange.com", "superuser.com",
+    "serverfault.com", "askubuntu.com",
+    "reddit.com", "quora.com",
+    "github.com/issues", "github.com/discussions",
+    "discourse.",
+)
+_NEWS_DOMAINS = (
+    "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk",
+    "nytimes.com", "theguardian.com", "washingtonpost.com",
+    "arstechnica.com", "techcrunch.com", "theverge.com",
+    "wired.com", "bloomberg.com",
+)
+
+
+def _extract_domain(url: str) -> str:
+    """Pull hostname from a URL, stripping www. prefix."""
+    try:
+        host = urlparse(url).hostname or ""
+        return host.removeprefix("www.")
+    except Exception:
+        return ""
+
+
+def _classify_source(url: str) -> str:
+    """Categorise a URL as official / forum / news / web."""
+    lower = url.lower()
+    domain = _extract_domain(url).lower()
+    for pat in _OFFICIAL_PATTERNS:
+        if pat in domain or pat in lower:
+            return "official"
+    for pat in _FORUM_DOMAINS:
+        if pat in lower:
+            return "forum"
+    for pat in _NEWS_DOMAINS:
+        if pat in domain:
+            return "news"
+    return "web"
+
+
+def _is_duplicate_content(new_snippet: str, existing_snippets: List[str], threshold: float = 0.6) -> bool:
+    """Check if new_snippet is too similar to any existing snippet (Jaccard on word sets)."""
+    new_words = set(new_snippet.lower().split())
+    if not new_words:
+        return False
+    for existing in existing_snippets:
+        existing_words = set(existing.lower().split())
+        if not existing_words:
+            continue
+        intersection = len(new_words & existing_words)
+        union = len(new_words | existing_words)
+        if union > 0 and intersection / union >= threshold:
+            return True
+    return False
+
 
 class WebSearchService:
     """Queries SearXNG for web results and formats them for LLM context."""
@@ -42,6 +105,7 @@ class WebSearchService:
         self.enabled = settings.web_search_enabled
         self.timeout = settings.web_search_timeout
         self.max_results = settings.web_search_max_results
+        self.snippet_max_chars = settings.web_search_snippet_max_chars
 
     def should_search(self, message: str) -> bool:
         """Return False only for trivial/greeting messages."""
@@ -55,7 +119,7 @@ class WebSearchService:
     async def search(self, query: str, num_results: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Query SearXNG and return a list of result dicts with
-        keys: title, url, content (snippet).
+        keys: title, url, content, domain, source_type, engines, published_date.
 
         Returns an empty list on any failure so chat can proceed without search.
         """
@@ -78,6 +142,7 @@ class WebSearchService:
 
         raw_results = data.get("results", [])
         seen_urls: set[str] = set()
+        existing_snippets: List[str] = []
         results: List[Dict[str, Any]] = []
 
         for item in raw_results:
@@ -88,12 +153,20 @@ class WebSearchService:
             snippet = (item.get("content") or "").strip()
             if not snippet:
                 continue
-            if len(snippet) > 300:
-                snippet = snippet[:300].rsplit(" ", 1)[0] + "..."
+            # Deduplicate near-identical snippets from different engines
+            if _is_duplicate_content(snippet, existing_snippets):
+                continue
+            if len(snippet) > self.snippet_max_chars:
+                snippet = snippet[:self.snippet_max_chars].rsplit(" ", 1)[0] + "..."
+            existing_snippets.append(snippet)
             results.append({
                 "title": (item.get("title") or "Untitled").strip(),
                 "url": url,
                 "content": snippet,
+                "domain": _extract_domain(url),
+                "source_type": _classify_source(url),
+                "engines": item.get("engines", []),
+                "published_date": item.get("publishedDate", ""),
             })
             if len(results) >= limit:
                 break
@@ -110,7 +183,10 @@ class WebSearchService:
             title = r.get("title", "Untitled")
             url = r.get("url", "")
             snippet = r.get("content", "")
-            lines.append(f"[{i}] {title}\n    URL: {url}\n    {snippet}")
+            domain = r.get("domain", "")
+            source_type = r.get("source_type", "web")
+            header = f"[{i}] {title}\n    URL: {url} | Type: {source_type} | Domain: {domain}"
+            lines.append(f"{header}\n    {snippet}")
         return "\n\n".join(lines)
 
 

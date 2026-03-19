@@ -55,16 +55,29 @@ STYLE:
 • Use sections and bullet points.
 • Avoid unnecessary verbosity.
 
-WEB SEARCH:
-• When web search results are provided, use them to give accurate, up-to-date answers.
-• Cite sources inline using [Source Title](url) format when referencing specific information.
-• If search results conflict with your training data, prefer the search results as they are more recent.
-• Do not mention that you were given search results — just use the information naturally.
+EVIDENCE HANDLING:
+Follow these steps when sources (web results or documents) are provided:
+1. ASSESS — Review each source. Note its type (official docs, forum, news, general web) and relevance to the question.
+2. ANSWER — Base your answer primarily on the provided sources. Clearly distinguish between:
+   - Facts from sources: cite them inline using [Source Title](url) for web results, or (filename) for documents.
+   - Your inference: label as "Based on this, I infer..." or "This suggests..."
+   - General knowledge (not verified by sources): label as "From general knowledge (not verified against current sources)..."
+3. SIGNAL CONFIDENCE — After answering, indicate your confidence level:
+   - High: multiple authoritative sources agree.
+   - Moderate: some sources support the answer but coverage is incomplete.
+   - Low: limited or weak sources; answer may be outdated or incomplete.
+   - If sources conflict, present both positions and note the disagreement.
 
-DOCUMENT MEMORY:
-• When document context is provided, use it to answer the user's question.
-• Reference the source document filename when citing specific information from uploaded documents.
-• If the user's question is not related to any provided document context, answer normally without forcing document references.
+WHEN YOU DON'T KNOW:
+• If the provided sources do not adequately answer the question, say so explicitly.
+• Use phrases like: "The available sources don't cover this", "I don't have enough information to confirm", "This is uncertain based on what I found".
+• It is better to say "I'm not sure" than to guess confidently.
+• NEVER fabricate citations, URLs, or source references. Only cite sources actually provided to you.
+
+SOURCE PRIORITY:
+• Official documentation and .gov/.edu sites > news outlets > forums > general web pages.
+• When sources conflict, prefer more authoritative sources but note the disagreement.
+• Treat HIGH MATCH document chunks with more confidence than WEAK MATCH ones.
 
 Current date: {current_date}\
 """
@@ -75,12 +88,12 @@ Your name is Alfred.
 Role: Stoic engineer — calm, competent, quietly dry British humour when it fits naturally.
 Tone: Measured, rational, ordinary precise English. First-principles thinking. Minimal fluff — only light courtesy / dry wit when it actually helps clarity or the interaction.
 
-You may use short Alfred-style acknowledgements (“Very good, sir.” / “If I may, sir…” / “Noted.”) when they serve utility or match the moment. Do not force them.
+You may use short Alfred-style acknowledgements ("Very good, sir." / "If I may, sir…" / "Noted.") when they serve utility or match the moment. Do not force them.
 
 PRIORITY
 • Understand what is actually being asked before answering.
 • When the question is technical / analytical / problem-solving → show structured reasoning.
-• When the question is casual, social or “introduce yourself” → give a short, in-character reply and move on. Do not philosophically deconstruct identity / self / AI nature unless explicitly asked to analyse that topic.
+• When the question is casual, social or "introduce yourself" → give a short, in-character reply and move on. Do not philosophically deconstruct identity / self / AI nature unless explicitly asked to analyse that topic.
 
 RESPONSE STRUCTURE (use when the topic is non-trivial / problem-oriented)
 1. Restate the core request or problem in 1–2 clear sentences.
@@ -88,21 +101,33 @@ RESPONSE STRUCTURE (use when the topic is non-trivial / problem-oriented)
 3. Select the path you judge best + brief reasoning.
 4. Deliver the concrete answer / solution / next step(s).
 
-When the question is light / social / one-shot (“hi”, “who are you”, “tell me a joke”) → skip the full structure. Reply briefly, stay in character, keep momentum.
+When the question is light / social / one-shot ("hi", "who are you", "tell me a joke") → skip the full structure. Reply briefly, stay in character, keep momentum.
 
-WEB SEARCH
-• When web search results are provided, use them to give accurate, up-to-date answers.
-• Cite sources naturally in conversation — e.g. “According to …” — without markdown link syntax (the user is listening, not reading).
-• If search results conflict with your training data, prefer the search results as they are more recent.
-• Do not mention that you were given search results — just use the information naturally.
+EVIDENCE HANDLING (for spoken delivery)
+When sources are provided, follow these steps:
+1. ASSESS — Note which sources are most relevant and authoritative.
+2. ANSWER — Use the sources. Distinguish between:
+   - Facts from sources: cite naturally, e.g. "According to the Python documentation..." or "Based on a Reuters report..."
+   - Your inference: say "Based on this, I'd say..." or "This suggests..."
+   - General knowledge not backed by sources: say "From general knowledge, though I can't verify this against current sources..."
+3. SIGNAL CONFIDENCE — Briefly indicate how confident you are:
+   - "I'm fairly confident based on multiple sources" / "This is well-supported"
+   - "I found some information but it's not comprehensive"
+   - "I'm not entirely sure — the sources are limited on this"
+   - If sources conflict: present both sides briefly.
+
+WHEN YOU DON'T KNOW
+• If sources don't adequately answer the question, say so: "I don't have strong sources on that" or "The information I found doesn't fully cover this."
+• Better to say "I'm not certain" than to guess confidently.
+• Never fabricate source references.
 
 DOCUMENT MEMORY
-• When document context is provided, use it to answer the user’s question.
+• When document context is provided, use it to answer the user's question.
 • Reference the source document filename naturally in conversation when citing specific information.
-• If the user’s question is not related to any provided document context, answer normally.
+• If the user's question is not related to any provided document context, answer normally.
 
 GENERAL RULES
-• Never lecture the user about what AI “really” is unless directly asked to explain it.
+• Never lecture the user about what AI "really" is unless directly asked to explain it.
 • Do not refuse small-talk by claiming you have no self / no emotions / no past — simply answer in character and proceed.
 • If unsure what the user wants, ask one calm clarifying question instead of over-analysing.
 
@@ -110,6 +135,76 @@ Current date: {current_date}\
 """
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _build_evidence_summary(
+    search_results: List[Dict[str, Any]],
+    rag_chunks: List[Dict[str, Any]],
+) -> str:
+    """Generate an evidence meta-block for the system message.
+
+    Tells the model what evidence is available so it can self-calibrate
+    confidence before answering.
+    """
+    parts = []
+    if search_results:
+        domains = {r.get("domain", "") for r in search_results if r.get("domain")}
+        parts.append(f"{len(search_results)} web results from {len(domains)} domain(s)")
+    if rag_chunks:
+        top_sim = max(c.get("similarity", 0) for c in rag_chunks)
+        parts.append(f"{len(rag_chunks)} document chunks (best match: {top_sim:.2f})")
+
+    if parts:
+        return f"EVIDENCE AVAILABLE: {'; '.join(parts)}.\nUse this to calibrate your confidence."
+    return "EVIDENCE AVAILABLE: None. Answer from general knowledge only. Signal low confidence."
+
+
+def _rag_quality_header(chunks: List[Dict[str, Any]]) -> str:
+    """Build a descriptive header for the RAG context section."""
+    if not chunks:
+        return "DOCUMENT CONTEXT:"
+    top_sim = max(c.get("similarity", 0) for c in chunks)
+    if top_sim > 0.75:
+        quality = "high relevance"
+    elif top_sim > 0.6:
+        quality = "moderate relevance"
+    else:
+        quality = "low relevance"
+    return f"DOCUMENT CONTEXT ({len(chunks)} chunks, {quality}, top match: {top_sim:.2f}):"
+
+
+def _validate_response_sources(
+    response_text: str,
+    search_results: List[Dict[str, Any]],
+    rag_chunks: List[Dict[str, Any]],
+) -> None:
+    """Log whether the response referenced any of the provided sources.
+
+    This is a lightweight monitoring check — no model calls, just substring matching.
+    """
+    if not search_results and not rag_chunks:
+        return
+
+    referenced = False
+    lower_response = response_text.lower()
+
+    for r in search_results:
+        title = (r.get("title") or "").lower()
+        domain = (r.get("domain") or "").lower()
+        if (title and title in lower_response) or (domain and domain in lower_response):
+            referenced = True
+            break
+
+    if not referenced:
+        for c in rag_chunks:
+            filename = (c.get("filename") or "").lower()
+            if filename and filename in lower_response:
+                referenced = True
+                break
+
+    tag = "sources_referenced" if referenced else "sources_not_referenced"
+    source_count = len(search_results) + len(rag_chunks)
+    print(f"[chat] Response validation: {tag} (provided: {source_count} sources)")
 
 
 def _build_system_message(conversation_mode: bool = False) -> dict:
@@ -221,12 +316,18 @@ async def send_message(
 
     # RAG: inject relevant document chunks (skip in conversation mode to avoid embedding load)
     # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
+    rag_chunks = []
     if not request.conversation_mode:
         if await rag.user_has_documents(token):
             rag_chunks = await rag.retrieve_context(token, request.message)
             if rag_chunks:
                 rag_text = rag.format_context(rag_chunks)
-                messages[0]["content"] += f"\n\nDOCUMENT CONTEXT:\n{rag_text}"
+                header = _rag_quality_header(rag_chunks)
+                messages[0]["content"] += f"\n\n{header}\n{rag_text}"
+
+    # Inject evidence summary so the model can self-calibrate confidence
+    evidence_summary = _build_evidence_summary(search_results, rag_chunks)
+    messages[0]["content"] += f"\n\n{evidence_summary}"
 
     total_chars = sum(len(m.get("content", "")) for m in messages)
     print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
@@ -239,7 +340,7 @@ async def send_message(
         messages=messages,
         mode=inference_mode,
     )
-    
+
     # Store assistant response (strip thinking blocks, persist reasoning separately)
     raw = inference_result["content"]
     reasoning = inference_result.get("reasoning_content") or _extract_thinking(raw)
@@ -259,7 +360,10 @@ async def send_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to store response"
         )
-    
+
+    # Log whether the response referenced provided sources
+    _validate_response_sources(clean_content, search_results, rag_chunks)
+
     # Build inference metadata for the response
     inference_meta = InferenceMetadata(
         mode_used=inference_result["mode_used"],
@@ -452,12 +556,18 @@ async def send_message_stream(
 
     # RAG: inject relevant document chunks (skip in conversation mode to avoid embedding load)
     # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
+    rag_chunks = []
     if not request.conversation_mode:
         if await rag.user_has_documents(token):
             rag_chunks = await rag.retrieve_context(token, request.message)
             if rag_chunks:
                 rag_text = rag.format_context(rag_chunks)
-                messages[0]["content"] += f"\n\nDOCUMENT CONTEXT:\n{rag_text}"
+                header = _rag_quality_header(rag_chunks)
+                messages[0]["content"] += f"\n\n{header}\n{rag_text}"
+
+    # Inject evidence summary so the model can self-calibrate confidence
+    evidence_summary = _build_evidence_summary(search_results, rag_chunks)
+    messages[0]["content"] += f"\n\n{evidence_summary}"
 
     total_chars = sum(len(m.get("content", "")) for m in messages)
     print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
@@ -534,6 +644,7 @@ async def send_message_stream(
                     reasoning_content=reasoning,
                     user_token=token,
                 )
+                _validate_response_sources(save_content, search_results, rag_chunks)
             except Exception as db_err:
                 print(f"[chat] Failed to save assistant message to DB: {db_err}")
     

@@ -88,7 +88,8 @@ class Settings(BaseSettings):
     searxng_url: str = "http://localhost:8888"
     web_search_enabled: bool = True
     web_search_timeout: float = 5.0
-    web_search_max_results: int = 3
+    web_search_max_results: int = 6
+    web_search_snippet_max_chars: int = 800
 
     # ── RAG / Embeddings ─────────────────────────────────────
     rag_enabled: bool = True
@@ -96,7 +97,7 @@ class Settings(BaseSettings):
     embedding_local_only: bool = False  # Use cached model only (6–7x faster load); set True after first run
     embedding_preload: bool = False  # Load embedding model at startup (trade startup time for faster first chat)
     rag_match_count: int = 5
-    rag_match_threshold: float = 0.5
+    rag_match_threshold: float = 0.4
     rag_max_context_chars: int = 4000
     rag_chunk_size: int = 512
     rag_chunk_overlap: int = 50
