@@ -704,11 +704,11 @@ export default function ChatPage() {
               }}
             />
 
-            {/* Document panel */}
+            {/* Brain panel */}
             {docPanelOpen && (
               <div className="glass rounded-2xl p-3 mb-2 animate-fade-in max-h-48 overflow-y-auto">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] text-[#aaa] font-medium tracking-wide">Documents</span>
+                  <span className="text-[11px] text-[#aaa] font-medium tracking-wide">Brain</span>
                   <button
                     onClick={() => docFileInputRef.current?.click()}
                     disabled={docUploading}
@@ -718,7 +718,7 @@ export default function ChatPage() {
                   </button>
                 </div>
                 {documents.length === 0 ? (
-                  <p className="text-[11px] text-[#777]">No documents uploaded. Upload TXT, MD, PDF, or DOCX files to give Alfred document memory.</p>
+                  <p className="text-[11px] text-[#777]">No documents uploaded. Upload TXT, MD, PDF, or DOCX files to give Alfred long-term memory.</p>
                 ) : (
                   <div className="space-y-1.5">
                     {documents.map((doc) => (
@@ -849,13 +849,11 @@ export default function ChatPage() {
                       ? "text-[#66ddff] hover:bg-[#33ccff]/10"
                       : "text-[#999] hover:text-[#66ddff] hover:bg-white/[0.06]"
                 }`}
-                title={`Documents${documents.length ? ` (${documents.length})` : ""}`}
+                title={`Brain${documents.length ? ` (${documents.length})` : ""}`}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="16" y1="13" x2="8" y2="13" />
-                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <path d="M9.5 2a3.5 3.5 0 0 0-3.2 4.8A3.5 3.5 0 0 0 4 10.5a3.5 3.5 0 0 0 1.3 2.7A3.5 3.5 0 0 0 5 15a3.5 3.5 0 0 0 3.5 3.5h1V22h5v-3.5h1A3.5 3.5 0 0 0 19 15a3.5 3.5 0 0 0-.3-1.8A3.5 3.5 0 0 0 20 10.5a3.5 3.5 0 0 0-2.3-3.2A3.5 3.5 0 0 0 14.5 2h-5z" />
+                  <path d="M12 2v20" />
                 </svg>
                 {documents.length > 0 && (
                   <span className="absolute -top-1 -right-1 bg-[#33ccff] text-black text-[8px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center">{documents.length}</span>

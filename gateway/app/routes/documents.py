@@ -5,7 +5,6 @@ Handles file upload, processing, listing, and deletion.
 Files are stored in Supabase Storage; metadata and chunks in Postgres.
 """
 
-import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -202,7 +201,7 @@ async def upload_document(
                 "document_id": doc_id,
                 "user_id": user_id,
                 "content": text,
-                "embedding": json.dumps(embedding),
+                "embedding": embedding,
                 "chunk_index": idx,
             }
             for idx, (text, embedding) in enumerate(chunk_pairs)
