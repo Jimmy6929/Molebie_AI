@@ -185,12 +185,18 @@ async def upload_document(
     })
     doc_id = doc_row["id"]
 
-    # 3. Process: extract → chunk → embed
+    # 3. Process: extract → chunk → embed (with optional contextual retrieval)
     try:
         _update_document_status(settings, doc_id, "processing")
         print(f"[documents] Processing {filename} ({len(data)} bytes, {content_type})")
-        chunk_pairs = processor.process(data, content_type)
-        print(f"[documents] Processing complete: {len(chunk_pairs)} chunk+embedding pairs")
+
+        if settings.rag_contextual_retrieval_enabled:
+            _update_document_status(settings, doc_id, "processing_context")
+            chunk_triples = await processor.process_async(data, content_type)
+        else:
+            chunk_triples = processor.process(data, content_type)
+
+        print(f"[documents] Processing complete: {len(chunk_triples)} chunk+embedding pairs")
     except Exception as exc:
         print(f"[documents] Processing FAILED: {type(exc).__name__}: {exc}")
         _update_document_status(settings, doc_id, "failed")
@@ -201,16 +207,21 @@ async def upload_document(
 
     # 4. Insert chunks with embeddings (batched to avoid oversized payloads)
     try:
-        chunk_rows = [
-            {
+        chunk_rows = []
+        for text, embedding, meta in chunk_triples:
+            row = {
                 "document_id": doc_id,
                 "user_id": user_id,
                 "content": text,
                 "embedding": embedding,
-                "chunk_index": idx,
+                "chunk_index": meta.get("chunk_index", 0),
+                "metadata": {"heading": meta.get("heading")},
             }
-            for idx, (text, embedding) in enumerate(chunk_pairs)
-        ]
+            # Store contextualized version separately if available
+            if meta.get("content_contextualized"):
+                row["content_contextualized"] = meta["content_contextualized"]
+            chunk_rows.append(row)
+
         batch_size = 20
         for i in range(0, len(chunk_rows), batch_size):
             batch = chunk_rows[i : i + batch_size]
@@ -236,8 +247,8 @@ async def upload_document(
         id=doc_id,
         filename=filename,
         status="completed",
-        chunks=len(chunk_pairs),
-        message=f"Document processed: {len(chunk_pairs)} chunks created",
+        chunks=len(chunk_triples),
+        message=f"Document processed: {len(chunk_triples)} chunks created",
     )
 
 
@@ -509,3 +520,36 @@ async def remove_session_attachment(
             "apikey": settings.supabase_anon_key,
             "Authorization": f"Bearer {token}",
         })
+
+
+# ── RAG Evaluation Endpoint ──────────────────────────────────────────────
+
+from pydantic import BaseModel, Field
+from typing import List as TypingList
+
+
+class EvalTestCase(BaseModel):
+    query: str
+    expected_doc_ids: TypingList[str] = Field(default_factory=list)
+
+
+class EvalRequest(BaseModel):
+    test_cases: TypingList[EvalTestCase]
+
+
+@router.post("/evaluate", tags=["RAG Evaluation"])
+async def evaluate_rag(
+    request: EvalRequest,
+    user: JWTPayload = Depends(get_current_user),
+):
+    """
+    Evaluate RAG pipeline quality with test cases.
+
+    Each test case provides a query and expected document IDs.
+    Returns hit rate, MRR, and per-query details including timing.
+    """
+    from app.services.rag_eval import evaluate_queries
+
+    cases = [{"query": tc.query, "expected_doc_ids": tc.expected_doc_ids} for tc in request.test_cases]
+    results = await evaluate_queries(cases, user.raw_token)
+    return results

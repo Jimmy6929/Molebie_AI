@@ -6,7 +6,7 @@ model. Mode selection, fallback info, and latency are surfaced in
 responses so the frontend can display appropriate indicators.
 """
 
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 from enum import Enum
@@ -50,6 +50,7 @@ class InferenceMetadata(BaseModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     finish_reason: Optional[str] = None
+    rag_metrics: Optional[Dict[str, Any]] = None  # RAG pipeline metrics (timing, scores)
 
 
 class ChatResponse(BaseModel):

@@ -30,12 +30,21 @@ async def lifespan(app: FastAPI):
     if settings.rag_enabled:
         print(f"     Embedding model: {settings.embedding_model}")
         print(f"     Match count: {settings.rag_match_count}, threshold: {settings.rag_match_threshold}")
+        print(f"     Hybrid search: {settings.rag_hybrid_enabled}")
+        print(f"     Contextual retrieval: {settings.rag_contextual_retrieval_enabled}")
+        print(f"     Reranker: {settings.rag_reranker_enabled} ({settings.rag_reranker_model})")
         if settings.embedding_preload:
             print(f"     Preloading embedding model in background...")
             from app.services.embedding import get_embedding_service
-            def _preload():
+            def _preload_embedding():
                 get_embedding_service()._load_model()
-            asyncio.create_task(asyncio.to_thread(_preload))
+            asyncio.create_task(asyncio.to_thread(_preload_embedding))
+        if settings.rag_reranker_preload and settings.rag_reranker_enabled:
+            print(f"     Preloading reranker model in background...")
+            from app.services.reranker import get_reranker
+            def _preload_reranker():
+                get_reranker()._load_model()
+            asyncio.create_task(asyncio.to_thread(_preload_reranker))
     yield
     print(f"Shutting down {settings.app_name}")
 

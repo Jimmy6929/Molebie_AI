@@ -1,33 +1,18 @@
 """
 RAG (Retrieval-Augmented Generation) service.
 
-Embeds the user query, searches document_chunks via pgvector similarity,
+Embeds the user query, searches document_chunks via hybrid search
+(pgvector + tsvector with RRF), optionally reranks with a cross-encoder,
 and formats matching chunks as context for injection into the LLM prompt.
 """
 
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from app.config import Settings, get_settings
 from app.services.embedding import EmbeddingService, get_embedding_service
-
-# Minimal stop words for query condensation (fallback expansion)
-_STOP_WORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "shall", "can", "need", "dare", "ought",
-    "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
-    "into", "through", "during", "before", "after", "above", "below",
-    "between", "out", "off", "over", "under", "again", "further", "then",
-    "once", "here", "there", "when", "where", "why", "how", "all", "each",
-    "every", "both", "few", "more", "most", "other", "some", "such", "no",
-    "not", "only", "own", "same", "so", "than", "too", "very", "just",
-    "because", "but", "and", "or", "if", "while", "about", "what", "which",
-    "who", "whom", "this", "that", "these", "those", "am", "it", "its",
-    "i", "me", "my", "myself", "we", "our", "ours", "you", "your", "he",
-    "him", "his", "she", "her", "they", "them", "their",
-})
 
 
 def _quality_label(similarity: float) -> str:
@@ -37,13 +22,6 @@ def _quality_label(similarity: float) -> str:
     if similarity >= 0.6:
         return "MODERATE MATCH"
     return "WEAK MATCH"
-
-
-def _condense_query(query: str) -> str:
-    """Remove stop words to produce a keyword-focused query for fallback search."""
-    words = query.split()
-    condensed = [w for w in words if w.lower().strip("?!.,;:'\"") not in _STOP_WORDS]
-    return " ".join(condensed) if condensed else query
 
 
 class RAGService:
@@ -56,6 +34,10 @@ class RAGService:
         self.match_count = settings.rag_match_count
         self.match_threshold = settings.rag_match_threshold
         self.max_context_chars = settings.rag_max_context_chars
+        self.hybrid_enabled = settings.rag_hybrid_enabled
+        self.vector_weight = settings.rag_vector_weight
+        self.text_weight = settings.rag_text_weight
+        self.rrf_k = settings.rag_rrf_k
 
     async def user_has_documents(self, user_token: str) -> bool:
         """
@@ -87,7 +69,7 @@ class RAGService:
         count: int,
         threshold: float,
     ) -> List[Dict[str, Any]]:
-        """Run a single similarity search against document_chunks."""
+        """Run a single vector similarity search against document_chunks."""
         rpc_url = f"{self.settings.supabase_url}/rest/v1/rpc/match_documents_with_metadata"
         headers = {
             "apikey": self.settings.supabase_anon_key,
@@ -111,6 +93,45 @@ class RAGService:
             print(f"[rag] Similarity search failed: {type(exc).__name__}: {exc}")
             return []
 
+    async def _hybrid_search(
+        self,
+        user_token: str,
+        query_embedding: List[float],
+        query_text: str,
+        count: int,
+        threshold: float,
+    ) -> List[Dict[str, Any]]:
+        """Run hybrid search (vector + full-text) with RRF fusion."""
+        rpc_url = f"{self.settings.supabase_url}/rest/v1/rpc/hybrid_search"
+        headers = {
+            "apikey": self.settings.supabase_anon_key,
+            "Authorization": f"Bearer {user_token}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "query_embedding": query_embedding,
+            "query_text": query_text,
+            "match_count": count,
+            "match_threshold": threshold,
+            "rrf_k": self.rrf_k,
+            "vector_weight": self.vector_weight,
+            "text_weight": self.text_weight,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(rpc_url, json=payload, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPStatusError as exc:
+            print(f"[rag] Hybrid search HTTP error {exc.response.status_code}: {exc.response.text[:500]}")
+            # Fall back to vector-only search
+            print("[rag] Falling back to vector-only search")
+            return await self._search_chunks(user_token, query_embedding, count, threshold)
+        except Exception as exc:
+            print(f"[rag] Hybrid search failed: {type(exc).__name__}: {exc}")
+            print("[rag] Falling back to vector-only search")
+            return await self._search_chunks(user_token, query_embedding, count, threshold)
+
     async def retrieve_context(
         self,
         user_token: str,
@@ -121,57 +142,79 @@ class RAGService:
         """
         Embed the query and search for matching document chunks.
 
-        Uses the Supabase RPC match_documents_with_metadata which
-        enforces RLS via the user's JWT.
-
-        When primary search yields weak results (top similarity < 0.6),
-        runs a fallback search with a condensed (stop-word-removed) query
-        and merges results.
+        Pipeline: embed → hybrid/vector search → (rerank in Phase 4) → return
+        When hybrid search is enabled, uses RRF fusion of vector + BM25.
+        Otherwise falls back to pure vector search.
 
         Returns list of dicts with keys:
-            chunk_id, document_id, filename, content, chunk_index, similarity
+            chunk_id, document_id, filename, content, chunk_index, metadata,
+            similarity, and optionally rrf_score, text_rank
+        Also returns rag_timings dict for metrics.
         """
         if not self.enabled:
             return []
 
         count = limit or self.match_count
         thresh = threshold or self.match_threshold
+        timings: Dict[str, float] = {}
 
+        # Step 1: Embed query
+        t0 = time.monotonic()
         print(f"[rag] Embedding query ({len(query)} chars)...")
         query_embedding = self.embedding.embed(query)
+        timings["t_embed_ms"] = round((time.monotonic() - t0) * 1000, 1)
 
-        results = await self._search_chunks(user_token, query_embedding, count, thresh)
+        # Step 2: Search
+        t1 = time.monotonic()
+        if self.hybrid_enabled:
+            results = await self._hybrid_search(
+                user_token, query_embedding, query, count, thresh
+            )
+        else:
+            results = await self._search_chunks(
+                user_token, query_embedding, count, thresh
+            )
+        timings["t_search_ms"] = round((time.monotonic() - t1) * 1000, 1)
 
         if not results:
-            print(f"[rag] No matching chunks (threshold={thresh}). Try lowering RAG_MATCH_THRESHOLD.")
+            print(f"[rag] No matching chunks (threshold={thresh})")
             return []
 
-        top_similarity = results[0].get("similarity", 0)
-        print(f"[rag] Found {len(results)} matching chunks (top similarity: {top_similarity:.3f})")
+        top_score = results[0].get("rrf_score") or results[0].get("similarity", 0)
+        print(f"[rag] Found {len(results)} chunks (top score: {top_score:.4f})")
 
-        # Fallback: if best match is weak, try a condensed query
-        if top_similarity < 0.6:
-            condensed = _condense_query(query)
-            if condensed != query:
-                print(f"[rag] Top match weak ({top_similarity:.3f}), trying condensed query...")
-                condensed_embedding = self.embedding.embed(condensed)
-                fallback_results = await self._search_chunks(
-                    user_token, condensed_embedding, count, thresh,
+        # Step 3: Rerank (if enabled)
+        t2 = time.monotonic()
+        if self.settings.rag_reranker_enabled:
+            try:
+                from app.services.reranker import get_reranker
+                reranker = get_reranker()
+                results = reranker.rerank(
+                    query, results, top_k=self.settings.rag_rerank_top_k
                 )
-                if fallback_results:
-                    # Merge and deduplicate by chunk_id, keep best similarity
-                    seen_chunks: dict[str, Dict[str, Any]] = {}
-                    for chunk in results + fallback_results:
-                        cid = chunk.get("chunk_id", chunk.get("id", id(chunk)))
-                        existing = seen_chunks.get(cid)
-                        if existing is None or chunk.get("similarity", 0) > existing.get("similarity", 0):
-                            seen_chunks[cid] = chunk
-                    results = sorted(
-                        seen_chunks.values(),
-                        key=lambda c: c.get("similarity", 0),
-                        reverse=True,
-                    )[:count]
-                    print(f"[rag] After merge: {len(results)} chunks (top: {results[0].get('similarity', 0):.3f})")
+                timings["t_rerank_ms"] = round((time.monotonic() - t2) * 1000, 1)
+                print(f"[rag] Reranked to top-{len(results)} (took {timings['t_rerank_ms']:.0f}ms)")
+            except Exception as exc:
+                print(f"[rag] Reranking failed (using search order): {type(exc).__name__}: {exc}")
+                timings["t_rerank_ms"] = 0
+        else:
+            timings["t_rerank_ms"] = 0
+
+        timings["t_total_ms"] = round(
+            timings["t_embed_ms"] + timings["t_search_ms"] + timings["t_rerank_ms"], 1
+        )
+
+        # Attach timings to results for metrics
+        if results:
+            results[0]["_rag_timings"] = timings
+
+        if self.settings.rag_metrics_log_console:
+            print(
+                f"[rag] Timings: embed={timings['t_embed_ms']:.0f}ms, "
+                f"search={timings['t_search_ms']:.0f}ms, "
+                f"rerank={timings['t_rerank_ms']:.0f}ms, "
+                f"total={timings['t_total_ms']:.0f}ms"
+            )
 
         return results
 
@@ -179,7 +222,8 @@ class RAGService:
         """Format retrieved chunks into a text block for the system message.
 
         Each chunk is labelled with a quality tier (HIGH / MODERATE / WEAK)
-        so the model can calibrate trust accordingly.
+        so the model can calibrate trust accordingly. Headings from metadata
+        are shown when available.
         """
         if not chunks:
             return ""
@@ -190,15 +234,50 @@ class RAGService:
             filename = c.get("filename", "unknown")
             content = c.get("content", "")
             similarity = c.get("similarity", 0)
+            rrf_score = c.get("rrf_score")
             label = _quality_label(similarity)
 
-            entry = f"[{i}] {filename} ({label}, relevance: {similarity:.2f})\n{content}"
+            # Extract heading from metadata
+            metadata = c.get("metadata") or {}
+            heading = metadata.get("heading")
+            source = f"{filename} > {heading}" if heading else filename
+
+            # Use rrf_score for display when available
+            if rrf_score is not None:
+                entry = f"[{i}] {source} ({label}, relevance: {similarity:.2f}, rrf: {rrf_score:.4f})\n{content}"
+            else:
+                entry = f"[{i}] {source} ({label}, relevance: {similarity:.2f})\n{content}"
+
             if total_chars + len(entry) > self.max_context_chars:
                 break
             lines.append(entry)
             total_chars += len(entry)
 
         return "\n\n".join(lines)
+
+    def get_metrics(self, chunks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Extract RAG metrics from retrieval results."""
+        if not chunks or not self.settings.rag_metrics_enabled:
+            return None
+
+        timings = chunks[0].get("_rag_timings", {}) if chunks else {}
+        similarities = [c.get("similarity", 0) for c in chunks]
+        rrf_scores = [c.get("rrf_score", 0) for c in chunks if c.get("rrf_score") is not None]
+        rerank_scores = [c.get("rerank_score", 0) for c in chunks if c.get("rerank_score") is not None]
+        unique_docs = len(set(c.get("document_id", "") for c in chunks))
+
+        return {
+            "num_candidates": len(chunks),
+            "unique_documents": unique_docs,
+            "top_similarity": max(similarities) if similarities else 0,
+            "avg_similarity": sum(similarities) / len(similarities) if similarities else 0,
+            "top_rrf_score": max(rrf_scores) if rrf_scores else None,
+            "top_rerank_score": max(rerank_scores) if rerank_scores else None,
+            "score_spread": max(similarities) - min(similarities) if len(similarities) > 1 else 0,
+            "hybrid_enabled": self.hybrid_enabled,
+            "reranker_enabled": self.settings.rag_reranker_enabled,
+            **timings,
+        }
 
 
 _rag_service: Optional[RAGService] = None

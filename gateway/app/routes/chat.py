@@ -452,6 +452,7 @@ async def send_message(
     _validate_response_sources(clean_content, search_results, rag_chunks)
 
     # Build inference metadata for the response
+    rag_metrics = rag.get_metrics(rag_chunks) if rag_chunks else None
     inference_meta = InferenceMetadata(
         mode_used=inference_result["mode_used"],
         model=inference_result.get("model"),
@@ -462,6 +463,7 @@ async def send_message(
         prompt_tokens=inference_result.get("prompt_tokens"),
         completion_tokens=inference_result.get("completion_tokens"),
         finish_reason=inference_result.get("finish_reason"),
+        rag_metrics=rag_metrics,
     )
     
     return ChatResponse(

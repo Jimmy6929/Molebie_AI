@@ -105,11 +105,33 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"  # default; override via EMBEDDING_MODEL in .env
     embedding_local_only: bool = False  # Use cached model only (6–7x faster load); set True after first run
     embedding_preload: bool = False  # Load embedding model at startup (trade startup time for faster first chat)
-    rag_match_count: int = 5
-    rag_match_threshold: float = 0.4
-    rag_max_context_chars: int = 4000
-    rag_chunk_size: int = 512
-    rag_chunk_overlap: int = 50
+    rag_match_count: int = 20  # over-fetch for reranking
+    rag_match_threshold: float = 0.3
+    rag_max_context_chars: int = 12000
+    rag_chunk_size: int = 1024
+    rag_chunk_overlap: int = 128
+
+    # ── Hybrid Search ─────────────────────────────────────────
+    rag_hybrid_enabled: bool = True
+    rag_vector_weight: float = 0.7
+    rag_text_weight: float = 0.3
+    rag_rrf_k: int = 60
+
+    # ── Contextual Retrieval ──────────────────────────────────
+    rag_contextual_retrieval_enabled: bool = True
+    rag_context_max_doc_chars: int = 8000  # max doc chars sent to LLM for context generation
+    rag_context_llm_mode: str = "instant"  # LLM tier for context generation
+    rag_context_max_tokens: int = 150  # max tokens per context prefix
+
+    # ── Cross-Encoder Reranking ───────────────────────────────
+    rag_reranker_enabled: bool = True
+    rag_reranker_model: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
+    rag_rerank_top_k: int = 5
+    rag_reranker_preload: bool = False
+
+    # ── RAG Metrics ───────────────────────────────────────────
+    rag_metrics_enabled: bool = True
+    rag_metrics_log_console: bool = True
 
     # ── Session Document Attachments ──────────────────────────────
     session_doc_max_chars: int = 12000  # max extracted text per attachment
