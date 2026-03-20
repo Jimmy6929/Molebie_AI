@@ -19,7 +19,11 @@ COMMENT ON TABLE public.session_documents IS 'Full-text document attachments for
 -- Enable Row Level Security
 ALTER TABLE public.session_documents ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies
+-- RLS Policies (drop first so snippet is safe to re-run)
+DROP POLICY IF EXISTS "Users can view their own session documents" ON public.session_documents;
+DROP POLICY IF EXISTS "Users can attach documents to their own sessions" ON public.session_documents;
+DROP POLICY IF EXISTS "Users can remove their own session documents" ON public.session_documents;
+
 CREATE POLICY "Users can view their own session documents"
   ON public.session_documents
   FOR SELECT
