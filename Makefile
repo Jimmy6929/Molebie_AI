@@ -1,7 +1,7 @@
 # Local AI Assistant - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs
+.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose
 
 # Default target
 help:
@@ -32,6 +32,7 @@ help:
 	@echo "  make autopull-uninstall  Remove auto-pull service"
 	@echo "  make autopull-status     Check auto-pull service status"
 	@echo "  make autopull-logs       Tail auto-pull log file"
+	@echo "  make autopull-diagnose   Diagnose auto-pull issues"
 	@echo ""
 
 # ──────────────────────────────────────────────────────────────
@@ -177,6 +178,7 @@ autopull-install:
 	@echo "Installing auto-pull service..."
 	chmod +x scripts/auto-pull.sh
 	mkdir -p logs
+	-launchctl unload ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist 2>/dev/null
 	cp scripts/com.jimmy.localai.autopull.plist ~/Library/LaunchAgents/
 	launchctl load ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist
 	@echo "✅ Auto-pull service installed and running (polls every 60s)"
@@ -189,8 +191,37 @@ autopull-uninstall:
 
 autopull-status:
 	@launchctl list | grep localai.autopull || echo "Auto-pull service is not running"
+	@echo "--- Last heartbeat ---"
+	@grep "HEARTBEAT" logs/auto-pull.log 2>/dev/null | tail -1 || echo "No heartbeat found"
 	@echo "--- Recent log entries ---"
 	@tail -20 logs/auto-pull.log 2>/dev/null || echo "No log file yet"
 
 autopull-logs:
 	@tail -f logs/auto-pull.log
+
+autopull-diagnose:
+	@echo "=== Auto-Pull Diagnostics ==="
+	@echo ""
+	@echo "1. Service loaded?"
+	@launchctl list | grep localai.autopull && echo "   OK" || echo "   FAIL: service not loaded — run: make autopull-install"
+	@echo ""
+	@echo "2. Script executable?"
+	@test -x scripts/auto-pull.sh && echo "   OK" || echo "   FAIL: run: chmod +x scripts/auto-pull.sh"
+	@echo ""
+	@echo "3. Uncommitted changes?"
+	@test -z "$$(git status --porcelain)" && echo "   OK: working tree clean" || echo "   WARN: uncommitted changes — auto-pull will skip"
+	@echo ""
+	@echo "4. Plist installed?"
+	@test -f ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist && echo "   OK" || echo "   FAIL: plist not in ~/Library/LaunchAgents/ — run: make autopull-install"
+	@echo ""
+	@echo "5. Git fetch works?"
+	@git fetch --dry-run origin main 2>&1 && echo "   OK" || echo "   FAIL: credentials may need refreshing — run: git fetch origin main"
+	@echo ""
+	@echo "6. Recent heartbeats (last 5)?"
+	@grep "HEARTBEAT" logs/auto-pull.log 2>/dev/null | tail -5 || echo "   NONE: no heartbeats found — service may not be running"
+	@echo ""
+	@echo "7. Recent errors?"
+	@grep "ERROR" logs/auto-pull.log 2>/dev/null | tail -5 || echo "   NONE: no errors found"
+	@echo ""
+	@echo "8. Stderr log?"
+	@tail -10 logs/auto-pull-stderr.log 2>/dev/null || echo "   (empty or missing — that's fine)"
