@@ -305,6 +305,24 @@ def _strip_thinking(content: str) -> str:
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
+@router.post("/sessions/create", response_model=SessionInfo)
+async def create_session(
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+) -> SessionInfo:
+    """Create an empty chat session (for attaching docs before first message)."""
+    session = db.create_session(user.user_id, "New Chat", user_token=user.raw_token)
+    if not session:
+        raise HTTPException(status_code=500, detail="Failed to create session")
+    return SessionInfo(
+        id=session["id"],
+        title=session["title"],
+        created_at=session["created_at"],
+        updated_at=session["updated_at"],
+        is_archived=session.get("is_archived", False),
+    )
+
+
 @router.post("", response_model=ChatResponse)
 async def send_message(
     request: ChatRequest,
@@ -342,7 +360,12 @@ async def send_message(
             )
     
     session_id = session["id"]
-    
+
+    # Auto-rename "New Chat" sessions on first message
+    if session.get("title") == "New Chat":
+        title = request.message[:50] + ("..." if len(request.message) > 50 else "")
+        db.update_session_title(session_id, user_id, title, user_token=token)
+
     # Store user message
     user_msg = db.create_message(
         session_id=session_id,
@@ -356,7 +379,7 @@ async def send_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to store message"
         )
-    
+
     # Get conversation history for context
     history = db.get_session_messages(session_id, user_id, limit=20, user_token=token)
     messages = [_build_system_message(request.conversation_mode)] + [
@@ -588,7 +611,12 @@ async def send_message_stream(
             )
     
     session_id = session["id"]
-    
+
+    # Auto-rename "New Chat" sessions on first message
+    if session.get("title") == "New Chat":
+        title = request.message[:50] + ("..." if len(request.message) > 50 else "")
+        db.update_session_title(session_id, user_id, title, user_token=token)
+
     # Store user message
     user_msg = db.create_message(
         session_id=session_id,
@@ -602,7 +630,7 @@ async def send_message_stream(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to store message"
         )
-    
+
     # Get conversation history
     history = db.get_session_messages(session_id, user_id, limit=20, user_token=token)
     messages = [_build_system_message(request.conversation_mode)] + [

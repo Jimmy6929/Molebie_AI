@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import {
   sendMessageStream,
+  createSession,
   listSessions,
   getSessionMessages,
   deleteSession,
@@ -260,17 +261,29 @@ export default function ChatPage() {
   }, [activeSessionId, loadAttachments]);
 
   async function handleAttach(file: File) {
-    if (!token || !activeSessionId) {
-      setDocToast("Start a conversation first, then attach a file.");
-      setTimeout(() => setDocToast(null), 4000);
-      return;
+    if (!token) return;
+
+    // Auto-create session if none exists (ChatGPT-like UX)
+    let sessionId = activeSessionId;
+    if (!sessionId) {
+      try {
+        const session = await createSession(token);
+        sessionId = session.id;
+        setActiveSessionId(session.id);
+        loadSessions();
+      } catch (err) {
+        setDocToast("Failed to create session");
+        setTimeout(() => setDocToast(null), 4000);
+        return;
+      }
     }
+
     setAttachUploading(true);
     setDocToast(`Attaching ${file.name}...`);
     try {
-      const result = await attachDocumentToSession(token, activeSessionId, file);
-      setDocToast(result.truncated ? result.message : `${result.filename} attached (${result.content_length.toLocaleString()} chars)`);
-      loadAttachments(activeSessionId);
+      const result = await attachDocumentToSession(token, sessionId, file);
+      setDocToast(result.truncated ? result.message : `${result.filename} attached`);
+      loadAttachments(sessionId);
     } catch (err) {
       setDocToast(`Attach failed: ${err instanceof Error ? err.message : "unknown error"}`);
     } finally {

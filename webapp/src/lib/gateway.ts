@@ -249,6 +249,12 @@ export async function sendMessageStream(
   return synthesize();
 }
 
+export async function createSession(token: string): Promise<SessionInfo> {
+  return apiCall<SessionInfo>("/chat/sessions/create", token, {
+    method: "POST",
+  });
+}
+
 export async function listSessions(
   token: string
 ): Promise<{ sessions: SessionInfo[] }> {
