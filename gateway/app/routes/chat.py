@@ -394,7 +394,7 @@ async def send_message(
 
     # Web search: inject real-time results into context
     search_results = []
-    if web_search.should_search(request.message):
+    if await web_search.should_search(request.message):
         search_results = await web_search.search(request.message)
         if search_results:
             search_results = await web_search.enrich_with_full_content(search_results)
@@ -645,7 +645,7 @@ async def send_message_stream(
 
     # Web search: run before streaming so results are ready
     search_results = []
-    if web_search.should_search(request.message):
+    if await web_search.should_search(request.message):
         search_results = await web_search.search(request.message)
         if search_results:
             search_results = await web_search.enrich_with_full_content(search_results)

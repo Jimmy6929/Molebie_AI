@@ -41,6 +41,54 @@ _TRIVIAL_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Messages that definitely do NOT need a web search
+_SKIP_PATTERNS = re.compile(
+    r"("
+    # Code / programming
+    r"write (a |me a )?(function|program|script|class|code|test|regex)"
+    r"|implement\b|refactor\b|debug\b|compile\b|syntax\b"
+    r"|python|javascript|typescript|java\b|rust\b|golang|html|css|sql\b"
+    r"|\bcode\b|snippet|algorithm|data structure"
+    # Math
+    r"|calculate\b|solve\b|equation|integral|derivative|factorial"
+    r"|what is \d+\s*[\+\-\*\/\^]\s*\d+"
+    # Creative writing
+    r"|write me a\b|poem\b|story\b|essay\b|haiku\b|limerick"
+    r"|email draft|cover letter|resignation letter"
+    # Explanations / definitions
+    r"|explain\b|how does .+ work|difference between\b|define\b|meaning of\b"
+    r"|what is a\b|what are\b|ELI5|in simple terms"
+    # Meta / assistant
+    r"|who are you|what can you do|your name|summarize this|translate\b"
+    # Follow-ups (short, no temporal words)
+    r"|^(continue|go on|elaborate|keep going|what about|and also)\b"
+    # Opinion / advice
+    r"|what do you think|which is better|recommend\b|pros and cons"
+    r"|should i\b|advice\b|opinion\b|suggest\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# Messages that definitely DO need a web search
+_SEARCH_PATTERNS = re.compile(
+    r"("
+    # Temporal / recency
+    r"\btoday\b|\bright now\b|\bcurrently\b|\blatest\b|\brecent(ly)?\b"
+    r"|\bthis (week|month|year)\b|\b202[4-9]\b|\b203\d\b"
+    # News / events
+    r"|\bnews\b|\bhappened\b|\bupdate on\b|\bannounce[ds]?\b|\breleased\b|\blaunched\b"
+    r"|\belection\b|\bbreaking\b"
+    # Real-time data
+    r"|\bweather\b|\bstock price\b|\bexchange rate\b|\bscore\b|\bstandings\b|\bforecast\b"
+    # Commerce / lookup
+    r"|\bprice of\b|\bcost of\b|\bwhere to buy\b"
+    r"|\bhours of\b|\baddress of\b|\bopen now\b|\bdirections to\b"
+    # Explicit search intent
+    r"|\bsearch for\b|\blook up\b|\bfind me\b|\bgoogle\b"
+    r")",
+    re.IGNORECASE,
+)
+
 # Domain patterns for source classification
 _OFFICIAL_PATTERNS = (
     ".gov", ".edu", ".mil",
@@ -132,15 +180,73 @@ class WebSearchService:
         self.full_content_count = settings.web_search_full_content_count
         self.full_content_max_chars = settings.web_search_full_content_max_chars
         self.full_content_timeout = settings.web_search_full_content_timeout
+        self.llm_classify_enabled = settings.web_search_llm_classify
+        self.classify_timeout = settings.web_search_classify_timeout
+        self.classify_max_tokens = settings.web_search_classify_max_tokens
 
-    def should_search(self, message: str) -> bool:
-        """Return False only for trivial/greeting messages."""
+    async def _classify_with_llm(self, message: str) -> bool:
+        """Ask the instant model whether this message needs a web search."""
+        try:
+            from app.services.inference import get_inference_service
+
+            inference = get_inference_service()
+            prompt = (
+                "Decide if this message needs a live web search.\n"
+                "Answer SEARCH if it asks about current events, recent news, "
+                "real-time data, or facts that change over time.\n"
+                "Answer SKIP if it asks about timeless knowledge, creative tasks, "
+                "coding, math, personal advice, or explanations.\n\n"
+                f'Message: "{message}"\n\n'
+                "One word answer:"
+            )
+            result = await asyncio.wait_for(
+                inference.generate_response(
+                    messages=[{"role": "user", "content": prompt}],
+                    mode="instant",
+                    max_tokens=self.classify_max_tokens,
+                    temperature=0.0,
+                ),
+                timeout=self.classify_timeout,
+            )
+            answer = result.get("content", "").upper()
+            needs_search = "SEARCH" in answer
+            print(f"[web_search] LLM classify: '{message[:60]}' → {answer.strip()} → search={needs_search}")
+            return needs_search
+        except Exception as exc:
+            print(f"[web_search] LLM classify failed ({exc}), defaulting to no search")
+            return False
+
+    async def should_search(self, message: str) -> bool:
+        """Classify whether a message needs web search (rules + LLM fallback)."""
         if not self.enabled:
             return False
         cleaned = message.strip().rstrip("?!., ")
         if len(cleaned) < 2:
             return False
-        return not _TRIVIAL_PATTERNS.match(cleaned)
+        lower = cleaned.lower()
+
+        # Tier 1: Trivial messages (greetings, acks) — always skip
+        if _TRIVIAL_PATTERNS.match(cleaned):
+            print(f"[web_search] SKIP (trivial): '{cleaned[:60]}'")
+            return False
+
+        # Tier 2: Definite search (temporal, news, real-time data) — checked first
+        # so explicit search intent ("search for", "latest") beats topic keywords
+        if _SEARCH_PATTERNS.search(lower):
+            print(f"[web_search] SEARCH (rule): '{cleaned[:60]}'")
+            return True
+
+        # Tier 3: Definite skip (code, math, creative, explanations, etc.)
+        if _SKIP_PATTERNS.search(lower):
+            print(f"[web_search] SKIP (rule): '{cleaned[:60]}'")
+            return False
+
+        # Tier 3: Ambiguous — ask the LLM
+        if self.llm_classify_enabled:
+            return await self._classify_with_llm(cleaned)
+
+        print(f"[web_search] No match, LLM classify off → skip: '{cleaned[:60]}'")
+        return False
 
     async def search(self, query: str, num_results: Optional[int] = None) -> List[Dict[str, Any]]:
         """

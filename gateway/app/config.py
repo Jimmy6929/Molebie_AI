@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     web_search_full_content_max_chars: int = 2000
     web_search_full_content_timeout: float = 4.0
 
+    # ── Intent Classification ────────────────────────────────
+    web_search_llm_classify: bool = True
+    web_search_classify_timeout: float = 3.0
+    web_search_classify_max_tokens: int = 3
+
     # ── RAG / Embeddings ─────────────────────────────────────
     rag_enabled: bool = True
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"  # default; override via EMBEDDING_MODEL in .env
