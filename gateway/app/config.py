@@ -136,6 +136,10 @@ class Settings(BaseSettings):
     # ── Session Document Attachments ──────────────────────────────
     session_doc_max_chars: int = 12000  # max extracted text per attachment
 
+    # ── Vision / Image ──────────────────────────────────────────
+    vision_max_image_size: int = 5 * 1024 * 1024  # 5 MB max base64 payload
+    vision_allowed_types: str = "image/jpeg,image/png,image/gif,image/webp"
+
     # Database URL (for direct connections if needed)
     database_url: str = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
     

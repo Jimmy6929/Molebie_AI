@@ -25,6 +25,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Existing session ID, or null for new session")
     mode: ChatMode = Field(ChatMode.INSTANT, description="Inference mode: instant (fast) or thinking (deeper reasoning)")
     conversation_mode: bool = Field(False, description="When true, use voice conversation system prompt")
+    image: Optional[str] = Field(None, description="Base64-encoded image as data URI (data:image/...;base64,...)")
 
 
 class ChatMessage(BaseModel):
@@ -36,6 +37,7 @@ class ChatMessage(BaseModel):
     mode_used: Optional[str] = None
     inference_model: Optional[str] = Field(None, alias="model_used")
     reasoning_content: Optional[str] = None
+    image_id: Optional[str] = None
     created_at: datetime
 
 

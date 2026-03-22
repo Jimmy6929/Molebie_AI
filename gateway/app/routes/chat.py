@@ -3,11 +3,14 @@ Chat endpoints for the Gateway API.
 """
 
 import asyncio
+import base64
 import re
+import uuid
 from datetime import date
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
+import httpx
 
 from app.middleware.auth import JWTPayload, get_current_user
 from app.models.chat import (
@@ -232,8 +235,72 @@ def _build_system_message(conversation_mode: bool = False) -> dict:
     prompt_template = SYSTEM_PROMPT_VOICE_TEMPLATE if conversation_mode else SYSTEM_PROMPT_TEMPLATE
     return {
         "role": "system",
-        "content": prompt_template.format(current_date=date.today().strftime("%B %Y")),
+        "content": prompt_template.format(current_date=date.today().strftime("%A, %B %d, %Y")),
     }
+
+
+def _validate_image(data_uri: str, settings) -> tuple:
+    """Validate a base64 image data URI. Returns (mime_type, raw_bytes) or raises HTTPException."""
+    if not data_uri.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="Image must be a data URI (data:image/...;base64,...)")
+    try:
+        header, b64_data = data_uri.split(",", 1)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Malformed data URI")
+
+    # Extract MIME type
+    mime_type = header.split(":")[1].split(";")[0]
+    allowed = [t.strip() for t in settings.vision_allowed_types.split(",")]
+    if mime_type not in allowed:
+        raise HTTPException(status_code=400, detail=f"Image type {mime_type} not allowed. Allowed: {allowed}")
+
+    try:
+        raw_bytes = base64.b64decode(b64_data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 encoding")
+
+    if len(raw_bytes) > settings.vision_max_image_size:
+        max_mb = settings.vision_max_image_size / (1024 * 1024)
+        raise HTTPException(status_code=400, detail=f"Image too large (max {max_mb:.0f} MB)")
+
+    return mime_type, raw_bytes
+
+
+def _upload_image_to_storage(settings, user_id: str, raw_bytes: bytes, mime_type: str, filename: str = "image") -> str:
+    """Upload image bytes to Supabase Storage chat-images bucket. Returns storage_path."""
+    ext = mime_type.split("/")[-1]
+    if ext == "jpeg":
+        ext = "jpg"
+    storage_path = f"{user_id}/{uuid.uuid4().hex}_{filename}.{ext}"
+    url = f"{settings.supabase_url}/storage/v1/object/chat-images/{storage_path}"
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(
+            url,
+            content=raw_bytes,
+            headers={
+                "apikey": settings.supabase_service_role_key,
+                "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                "Content-Type": mime_type,
+            },
+        )
+        if not resp.is_success:
+            print(f"[chat] Image storage upload failed: {resp.status_code} {resp.text[:300]}")
+            raise HTTPException(status_code=502, detail="Failed to store image")
+
+    return storage_path
+
+
+def _download_image_from_storage(settings, storage_path: str) -> bytes:
+    """Download image bytes from Supabase Storage."""
+    url = f"{settings.supabase_url}/storage/v1/object/chat-images/{storage_path}"
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get(url, headers={
+            "apikey": settings.supabase_service_role_key,
+            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        })
+        resp.raise_for_status()
+        return resp.content
 
 
 def _fetch_session_attachments(session_id: str, user_id: str, token: str) -> str:
@@ -366,6 +433,13 @@ async def send_message(
         title = request.message[:50] + ("..." if len(request.message) > 50 else "")
         db.update_session_title(session_id, user_id, title, user_token=token)
 
+    # Validate image if provided
+    settings = get_settings()
+    image_mime = None
+    image_bytes = None
+    if request.image:
+        image_mime, image_bytes = _validate_image(request.image, settings)
+
     # Store user message
     user_msg = db.create_message(
         session_id=session_id,
@@ -380,12 +454,47 @@ async def send_message(
             detail="Failed to store message"
         )
 
+    # Store image in Supabase Storage if provided
+    if image_bytes and image_mime:
+        storage_path = _upload_image_to_storage(settings, user_id, image_bytes, image_mime)
+        db.create_message_image(
+            message_id=user_msg["id"],
+            user_id=user_id,
+            storage_path=storage_path,
+            filename="image",
+            mime_type=image_mime,
+            file_size=len(image_bytes),
+            user_token=token,
+        )
+
     # Get conversation history for context
     history = db.get_session_messages(session_id, user_id, limit=20, user_token=token)
-    messages = [_build_system_message(request.conversation_mode)] + [
-        {"role": msg["role"], "content": msg["content"]}
-        for msg in history
-    ]
+
+    # Build messages — for past messages with images, use placeholder text
+    image_map = db.get_message_images(
+        [m["id"] for m in history if m["role"] == "user"], user_id, user_token=token
+    )
+    hist_messages = []
+    for msg in history:
+        if msg["id"] == user_msg["id"] and request.image:
+            # Current message with image — build multimodal format
+            hist_messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": request.message},
+                    {"type": "image_url", "image_url": {"url": request.image}},
+                ],
+            })
+        elif msg["id"] in image_map:
+            # Past message that had an image — placeholder
+            hist_messages.append({
+                "role": msg["role"],
+                "content": f"[Image was attached]\n{msg['content']}",
+            })
+        else:
+            hist_messages.append({"role": msg["role"], "content": msg["content"]})
+
+    messages = [_build_system_message(request.conversation_mode)] + hist_messages
 
     # Session attachments: inject full document text (highest priority context)
     attach_text = _fetch_session_attachments(session_id, user_id, token)
@@ -416,11 +525,23 @@ async def send_message(
     evidence_summary = _build_evidence_summary(search_results, rag_chunks)
     messages[0]["content"] += f"\n\n{evidence_summary}"
 
-    total_chars = sum(len(m.get("content", "")) for m in messages)
+    total_chars = sum(
+        len(m["content"]) if isinstance(m.get("content"), str) else sum(
+            len(p.get("text", "")) for p in m.get("content", []) if isinstance(p, dict)
+        )
+        for m in messages
+    )
     print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
 
+    # Force thinking tier when image is attached (instant tier is text-only)
     # Voice conversation always uses instant tier (Qwen 3.5 4B); config via INFERENCE_INSTANT_*
-    inference_mode = "instant" if request.conversation_mode else request.mode.value
+    if request.image:
+        inference_mode = "thinking"
+        print("[chat] Image attached — forcing thinking tier for vision")
+    elif request.conversation_mode:
+        inference_mode = "instant"
+    else:
+        inference_mode = request.mode.value
 
     # Generate AI response
     inference_result = await inference.generate_response(
@@ -518,6 +639,11 @@ async def get_session_messages(
         )
     
     messages = db.get_session_messages(session_id, user.user_id, user_token=token)
+
+    # Fetch image metadata for user messages
+    user_msg_ids = [m["id"] for m in messages if m["role"] == "user"]
+    image_map = db.get_message_images(user_msg_ids, user.user_id, user_token=token) if user_msg_ids else {}
+
     return [
         ChatMessage(
             id=m["id"],
@@ -526,6 +652,7 @@ async def get_session_messages(
             mode_used=m.get("mode_used"),
             inference_model=m.get("model_used"),
             reasoning_content=m.get("reasoning_content"),
+            image_id=image_map[m["id"]]["id"] if m["id"] in image_map else None,
             created_at=m["created_at"],
         )
         for m in messages
@@ -591,10 +718,17 @@ async def send_message_stream(
     - Final event includes full content for database storage
     """
     import json
-    
+
     user_id = user.user_id
     token = user.raw_token
-    
+    settings = get_settings()
+
+    # Validate image if provided
+    image_mime = None
+    image_bytes = None
+    if request.image:
+        image_mime, image_bytes = _validate_image(request.image, settings)
+
     # Get or create session
     if request.session_id:
         session = db.get_session(request.session_id, user_id, user_token=token)
@@ -611,7 +745,7 @@ async def send_message_stream(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create session"
             )
-    
+
     session_id = session["id"]
 
     # Auto-rename "New Chat" sessions on first message
@@ -633,12 +767,47 @@ async def send_message_stream(
             detail="Failed to store message"
         )
 
+    # Store image in Supabase Storage if provided
+    if image_bytes and image_mime:
+        storage_path = _upload_image_to_storage(settings, user_id, image_bytes, image_mime)
+        db.create_message_image(
+            message_id=user_msg["id"],
+            user_id=user_id,
+            storage_path=storage_path,
+            filename="image",
+            mime_type=image_mime,
+            file_size=len(image_bytes),
+            user_token=token,
+        )
+
     # Get conversation history
     history = db.get_session_messages(session_id, user_id, limit=20, user_token=token)
-    messages = [_build_system_message(request.conversation_mode)] + [
-        {"role": msg["role"], "content": msg["content"]}
-        for msg in history
-    ]
+
+    # Build messages — for past messages with images, use placeholder text
+    image_map = db.get_message_images(
+        [m["id"] for m in history if m["role"] == "user"], user_id, user_token=token
+    )
+    hist_messages = []
+    for msg in history:
+        if msg["id"] == user_msg["id"] and request.image:
+            # Current message with image — build multimodal format
+            hist_messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": request.message},
+                    {"type": "image_url", "image_url": {"url": request.image}},
+                ],
+            })
+        elif msg["id"] in image_map:
+            # Past message that had an image — placeholder
+            hist_messages.append({
+                "role": msg["role"],
+                "content": f"[Image was attached]\n{msg['content']}",
+            })
+        else:
+            hist_messages.append({"role": msg["role"], "content": msg["content"]})
+
+    messages = [_build_system_message(request.conversation_mode)] + hist_messages
 
     # Session attachments: inject full document text (highest priority context)
     attach_text = _fetch_session_attachments(session_id, user_id, token)
@@ -669,11 +838,23 @@ async def send_message_stream(
     evidence_summary = _build_evidence_summary(search_results, rag_chunks)
     messages[0]["content"] += f"\n\n{evidence_summary}"
 
-    total_chars = sum(len(m.get("content", "")) for m in messages)
+    total_chars = sum(
+        len(m["content"]) if isinstance(m.get("content"), str) else sum(
+            len(p.get("text", "")) for p in m.get("content", []) if isinstance(p, dict)
+        )
+        for m in messages
+    )
     print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
 
+    # Force thinking tier when image is attached (instant tier is text-only)
     # Voice conversation always uses instant tier (Qwen 3.5 4B); config via INFERENCE_INSTANT_*
-    inference_mode = "instant" if request.conversation_mode else request.mode.value
+    if request.image:
+        inference_mode = "thinking"
+        print("[chat] Image attached — forcing thinking tier for vision")
+    elif request.conversation_mode:
+        inference_mode = "instant"
+    else:
+        inference_mode = request.mode.value
 
     async def event_generator():
         """Generate SSE events from inference stream."""
@@ -865,3 +1046,48 @@ async def text_to_speech(
         raise HTTPException(status_code=500, detail=f"TTS failed: {exc}")
 
     return Response(content=resp.content, media_type="audio/mpeg")
+
+
+# ── Image endpoints ──────────────────────────────────────────────────
+
+@router.get("/images/{image_id}")
+async def get_image(
+    image_id: str,
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """Serve a chat image from Supabase Storage."""
+    settings = get_settings()
+    # Fetch image metadata (RLS ensures user can only see their own)
+    result = db._request(
+        "GET",
+        f"message_images?id=eq.{image_id}&user_id=eq.{user.user_id}&select=storage_path,mime_type",
+        user_token=user.raw_token,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    row = result[0]
+    image_bytes = _download_image_from_storage(settings, row["storage_path"])
+    return Response(content=image_bytes, media_type=row["mime_type"])
+
+
+@router.get("/sessions/{session_id}/images")
+async def get_session_images(
+    session_id: str,
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """Get all image metadata for messages in a session."""
+    token = user.raw_token
+    session = db.get_session(session_id, user.user_id, user_token=token)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    messages = db.get_session_messages(session_id, user.user_id, user_token=token)
+    msg_ids = [m["id"] for m in messages if m["role"] == "user"]
+    if not msg_ids:
+        return {}
+
+    images = db.get_message_images(msg_ids, user.user_id, user_token=token)
+    return images

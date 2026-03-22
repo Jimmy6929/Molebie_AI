@@ -18,6 +18,7 @@ export interface MessageBubbleProps {
   streamStartedAt?: number;
   sources?: SearchSource[];
   isSearching?: boolean;
+  imageUrl?: string | null;
 }
 
 function useElapsedSeconds(startedAt?: number, running?: boolean): number {
@@ -48,6 +49,7 @@ export default function MessageBubble({
   streamStartedAt,
   sources,
   isSearching,
+  imageUrl,
 }: MessageBubbleProps) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const parsed = useMemo(() => parseThinkingContent(content), [content]);
@@ -133,6 +135,18 @@ export default function MessageBubble({
               <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
             </svg>
             Searching the web...
+          </div>
+        )}
+
+        {/* Attached image */}
+        {isUser && imageUrl && (
+          <div className="mb-2">
+            <img
+              src={imageUrl}
+              alt="Attached"
+              className="max-w-xs max-h-64 rounded-xl border border-white/[0.06] cursor-pointer hover:opacity-90 transition-opacity"
+              onClick={() => window.open(imageUrl, "_blank")}
+            />
           </div>
         )}
 

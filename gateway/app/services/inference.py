@@ -178,7 +178,7 @@ class InferenceService:
 
     async def generate_response(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         mode: str = "instant",
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
@@ -281,7 +281,7 @@ class InferenceService:
         self,
         endpoint: str,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         mode: str,
         max_tokens: int,
         temperature: float,
@@ -361,7 +361,7 @@ class InferenceService:
 
     async def generate_response_stream(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         mode: str = "instant",
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
@@ -497,11 +497,14 @@ class InferenceService:
 
     async def _mock_response(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         mode: str,
     ) -> Dict[str, Any]:
         """Generate a mock response for testing when no endpoint is configured."""
-        last_message = messages[-1]["content"] if messages else ""
+        raw_content = messages[-1]["content"] if messages else ""
+        last_message = raw_content if isinstance(raw_content, str) else (
+            next((p["text"] for p in raw_content if isinstance(p, dict) and p.get("type") == "text"), "")
+        )
 
         mode_label = "Thinking" if mode in ("thinking", "thinking_harder") else "Instant"
 
@@ -540,7 +543,7 @@ class InferenceService:
 
     async def _mock_stream(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         mode: str,
     ) -> AsyncIterator[str]:
         """Stream a mock response word by word."""

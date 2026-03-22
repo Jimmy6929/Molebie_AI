@@ -134,6 +134,54 @@ class DatabaseService:
         )
         return result or []
     
+    # ==================== Message Images ====================
+
+    def create_message_image(
+        self,
+        message_id: str,
+        user_id: str,
+        storage_path: str,
+        filename: Optional[str] = None,
+        mime_type: str = "image/jpeg",
+        file_size: int = 0,
+        user_token: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Store image metadata for a chat message."""
+        data = {
+            "message_id": message_id,
+            "user_id": user_id,
+            "storage_path": storage_path,
+            "mime_type": mime_type,
+            "file_size": file_size,
+        }
+        if filename:
+            data["filename"] = filename
+        result = self._request("POST", "message_images", user_token=user_token, json=data)
+        return result[0] if result else None
+
+    def get_message_images(
+        self,
+        message_ids: List[str],
+        user_id: str,
+        user_token: Optional[str] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch image metadata for a list of message IDs.
+
+        Returns a dict keyed by message_id with image info (storage_path, filename, mime_type, id).
+        """
+        if not message_ids:
+            return {}
+        result = self._request(
+            "GET",
+            f"message_images?message_id=in.({','.join(message_ids)})&user_id=eq.{user_id}"
+            f"&select=id,message_id,storage_path,filename,mime_type,file_size",
+            user_token=user_token,
+        )
+        images = {}
+        for row in (result or []):
+            images[row["message_id"]] = row
+        return images
+
     # ==================== User Profile ====================
     
     def get_or_create_profile(self, user_id: str, email: Optional[str] = None, user_token: Optional[str] = None) -> Dict[str, Any]:

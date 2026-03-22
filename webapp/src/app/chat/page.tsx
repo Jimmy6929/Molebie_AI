@@ -16,6 +16,8 @@ import {
   attachDocumentToSession,
   listSessionAttachments,
   removeSessionAttachment,
+  fileToDataUri,
+  fetchImage,
   type SessionInfo,
   type ChatMessage,
   type SearchSource,
@@ -42,6 +44,8 @@ interface DisplayMessage {
   streaming?: boolean;
   streamStartedAt?: number;
   sources?: SearchSource[];
+  imageUrl?: string | null;
+  imageId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +312,7 @@ export default function ChatPage() {
     async function loadMessages() {
       try {
         const msgs = await getSessionMessages(token!, activeSessionId!);
-        setMessages(msgs.map((m: ChatMessage) => {
+        const displayMsgs: DisplayMessage[] = msgs.map((m: ChatMessage) => {
           let content = m.content;
           if (m.reasoning_content) content = `<think>${m.reasoning_content}</think>${content}`;
           return {
@@ -317,8 +321,21 @@ export default function ChatPage() {
             content,
             mode_used: m.mode_used,
             model_used: m.model_used ?? null,
+            imageId: m.image_id ?? null,
           };
-        }));
+        });
+        setMessages(displayMsgs);
+
+        // Load images for messages that have them
+        for (const msg of displayMsgs) {
+          if (msg.imageId) {
+            fetchImage(token!, msg.imageId).then((blobUrl) => {
+              setMessages((prev) =>
+                prev.map((m) => m.id === msg.id ? { ...m, imageUrl: blobUrl } : m)
+              );
+            }).catch((err) => console.error("Failed to load image:", err));
+          }
+        }
       } catch (err) { console.error("Failed to load messages:", err); }
     }
     loadMessages();
@@ -372,6 +389,16 @@ export default function ChatPage() {
     if (!rawInput.trim() || !token || loading) return;
 
     const userMessage = rawInput.trim();
+
+    // Convert attached image to base64 data URI
+    let imageDataUri: string | undefined;
+    let localImagePreview: string | null = null;
+    if (imageFile) {
+      imageDataUri = await fileToDataUri(imageFile);
+      localImagePreview = imagePreview;
+      removeImage();
+    }
+
     setInput("");
     if (inputRef.current) {
       inputRef.current.style.height = "auto";
@@ -388,7 +415,7 @@ export default function ChatPage() {
     setIsSearching(true);
     setMessages((prev) => [
       ...prev,
-      { id: `temp-${now}`, role: "user", content: userMessage },
+      { id: `temp-${now}`, role: "user", content: userMessage, imageUrl: localImagePreview },
       {
         id: `stream-${now}`,
         role: "assistant",
@@ -420,6 +447,7 @@ export default function ChatPage() {
             prev.map((m) => m.streaming ? { ...m, sources } : m)
           );
         },
+        imageDataUri,
       );
 
       setIsSearching(false);
@@ -530,14 +558,13 @@ export default function ChatPage() {
   }
 
   // ── Image handling ───────────────────────────────────────────────────────
+  const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
   function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !ALLOWED_IMAGE_TYPES.includes(file.type)) return;
     setImageFile(file);
-    const url = URL.createObjectURL(file);
-    setImagePreview(url);
-    setShowImageToast(true);
-    setTimeout(() => setShowImageToast(false), 3000);
+    setImagePreview(URL.createObjectURL(file));
   }
 
   function removeImage() {
@@ -545,6 +572,47 @@ export default function ChatPage() {
     if (imagePreview) URL.revokeObjectURL(imagePreview);
     setImagePreview(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function handlePaste(e: React.ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith("image/") && ALLOWED_IMAGE_TYPES.includes(item.type)) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) {
+          setImageFile(file);
+          setImagePreview(URL.createObjectURL(file));
+        }
+        break;
+      }
+    }
+  }
+
+  const [isDragging, setIsDragging] = useState(false);
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes("Files")) setIsDragging(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      setImageFile(file);
+      setImagePreview(URL.createObjectURL(file));
+    }
   }
 
   async function handleLogout() {
@@ -661,6 +729,7 @@ export default function ChatPage() {
               streamStartedAt={msg.streamStartedAt}
               sources={msg.sources}
               isSearching={msg.streaming && isSearching}
+              imageUrl={msg.imageUrl}
             />
           ))}
           <div ref={messagesEndRef} />
@@ -676,16 +745,8 @@ export default function ChatPage() {
           </div>
         )}
 
-        {showImageToast && (
-          <div className="absolute bottom-36 left-1/2 -translate-x-1/2 z-20 animate-fade-in-up">
-            <div className="glass rounded-xl px-4 py-2 text-xs text-[#ffcc33]">
-              Image upload not yet connected to backend
-            </div>
-          </div>
-        )}
-
         {/* Input Area */}
-        <div className="p-4 pb-5 shrink-0">
+        <div className="p-4 pb-5 shrink-0" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
           <div className="max-w-3xl mx-auto">
 
             {/* Alfred Voice Settings panel */}
@@ -790,7 +851,13 @@ export default function ChatPage() {
               </div>
             )}
 
-            <div className="glass rounded-2xl p-2 flex items-end gap-2 transition-all">
+            {isDragging && (
+              <div className="mb-2 glass rounded-2xl p-6 border-2 border-dashed border-[#00ff41]/50 flex items-center justify-center animate-fade-in">
+                <span className="text-sm text-[#00ff41]/70">Drop image here</span>
+              </div>
+            )}
+
+            <div className={`glass rounded-2xl p-2 flex items-end gap-2 transition-all ${isDragging ? "border border-[#00ff41]/30" : ""}`}>
               {/* Image upload */}
               <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageSelect} className="hidden" />
               <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06] transition-all shrink-0" title="Add image">
@@ -1014,7 +1081,8 @@ export default function ChatPage() {
                 value={input}
                 onChange={(e) => { setInput(e.target.value); resizeTextarea(); }}
                 onKeyDown={handleKeyDown}
-                placeholder={alfredMode ? "Or type a message..." : "Send a message..."}
+                onPaste={handlePaste}
+                placeholder={alfredMode ? "Or type a message..." : "Send a message... (paste or drop an image)"}
                 rows={1}
                 className="flex-1 bg-transparent text-[#f0f0f0] text-sm resize-none focus:outline-none placeholder-[#888] min-h-[36px] max-h-[200px] py-2 px-1"
                 style={{ overflowY: "hidden" }}
@@ -1030,7 +1098,7 @@ export default function ChatPage() {
                   </svg>
                 </button>
               ) : (
-                <button onClick={handleSend} disabled={!input.trim()} className="p-2 rounded-xl text-[#00ff41] hover:bg-[#00ff41]/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0">
+                <button onClick={handleSend} disabled={!input.trim() && !imageFile} className="p-2 rounded-xl text-[#00ff41] hover:bg-[#00ff41]/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <line x1="12" y1="19" x2="12" y2="5" />
                     <polyline points="5 12 12 5 19 12" />

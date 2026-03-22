@@ -27,6 +27,7 @@ export interface ChatMessage {
   mode_used: string | null;
   model_used?: string | null;
   reasoning_content?: string | null;
+  image_id?: string | null;
   created_at: string;
 }
 
@@ -57,7 +58,8 @@ export async function sendMessage(
   message: string,
   mode: "instant" | "thinking" | "thinking_harder" = "instant",
   sessionId?: string,
-  conversationMode: boolean = false
+  conversationMode: boolean = false,
+  image?: string,
 ): Promise<ChatResponse> {
   return apiCall<ChatResponse>("/chat", token, {
     method: "POST",
@@ -66,6 +68,7 @@ export async function sendMessage(
       mode,
       session_id: sessionId || null,
       conversation_mode: conversationMode,
+      ...(image ? { image } : {}),
     }),
   });
 }
@@ -85,6 +88,7 @@ export async function sendMessageStream(
   onSessionId: (id: string) => void = () => {},
   signal?: AbortSignal,
   onSearchDone?: (sources: SearchSource[]) => void,
+  image?: string,
 ): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/chat/stream`, {
     method: "POST",
@@ -97,6 +101,7 @@ export async function sendMessageStream(
       mode,
       session_id: sessionId || null,
       conversation_mode: conversationMode,
+      ...(image ? { image } : {}),
     }),
     signal,
   });
@@ -523,4 +528,28 @@ export async function removeSessionAttachment(
       headers: { Authorization: `Bearer ${token}` },
     }
   );
+}
+
+// ── Image / Vision helpers ──────────────────────────────────────────────
+
+export function fileToDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+export function getImageUrl(token: string, imageId: string): string {
+  return `${GATEWAY_URL}/chat/images/${imageId}?token=${encodeURIComponent(token)}`;
+}
+
+export async function fetchImage(token: string, imageId: string): Promise<string> {
+  const res = await fetch(`${GATEWAY_URL}/chat/images/${imageId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Image fetch failed: ${res.status}`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
 }
