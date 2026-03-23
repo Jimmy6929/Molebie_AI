@@ -107,7 +107,7 @@ mlx-vlm-install:
 
 mlx-thinking:
 	@echo "🧠 Starting MLX-VLM thinking server (Qwen3.5-9B) on :8080..."
-	mlx_vlm.server --host 0.0.0.0 --port 8080
+	python3 scripts/mlx_server.py --host 0.0.0.0 --port 8080
 
 # ──────────────────────────────────────────────────────────────
 # TESTING

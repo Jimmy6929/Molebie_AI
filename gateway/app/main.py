@@ -6,7 +6,12 @@ the web app and inference endpoints.
 """
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
+
+# Suppress asyncio "socket.send() raised exception" warnings that occur
+# when the frontend disconnects mid-stream (harmless — data already dropped)
+logging.getLogger("asyncio").setLevel(logging.WARNING)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

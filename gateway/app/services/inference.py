@@ -12,7 +12,6 @@ types work transparently through the same gateway code.
 
 from typing import Optional, List, Dict, Any, AsyncIterator
 import json
-import asyncio
 import time
 import httpx
 
@@ -366,7 +365,6 @@ class InferenceService:
         mode: str = "instant",
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-        cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncIterator[str]:
         """
         Generate a streaming response from the LLM (SSE format).
@@ -442,28 +440,9 @@ class InferenceService:
                     headers={"Content-Type": "application/json"},
                 ) as response:
                     response.raise_for_status()
-
-                    # When cancel fires, close the response to unblock aiter_lines
-                    _cancel_task = None
-                    if cancel_event is not None:
-                        async def _close_on_cancel(resp):
-                            await cancel_event.wait()
-                            await resp.aclose()
-                        _cancel_task = asyncio.create_task(_close_on_cancel(response))
-
-                    try:
-                        async for line in response.aiter_lines():
-                            if cancel_event is not None and cancel_event.is_set():
-                                return
-                            if line.strip():
-                                yield f"{line}\n\n"
-                    except Exception:
-                        if cancel_event is not None and cancel_event.is_set():
-                            return  # Expected: stream closed by cancel
-                        raise
-                    finally:
-                        if _cancel_task is not None:
-                            _cancel_task.cancel()
+                    async for line in response.aiter_lines():
+                        if line.strip():
+                            yield f"{line}\n\n"
         except Exception as e:
             error_context = f"{mode}, model={model}"
             print(f"[inference] Stream error ({error_context}): {e}")
@@ -503,27 +482,9 @@ class InferenceService:
                             headers={"Content-Type": "application/json"},
                         ) as response:
                             response.raise_for_status()
-
-                            _fb_cancel_task = None
-                            if cancel_event is not None:
-                                async def _close_fb_on_cancel(resp):
-                                    await cancel_event.wait()
-                                    await resp.aclose()
-                                _fb_cancel_task = asyncio.create_task(_close_fb_on_cancel(response))
-
-                            try:
-                                async for line in response.aiter_lines():
-                                    if cancel_event is not None and cancel_event.is_set():
-                                        return
-                                    if line.strip():
-                                        yield f"{line}\n\n"
-                            except Exception:
-                                if cancel_event is not None and cancel_event.is_set():
-                                    return
-                                raise
-                            finally:
-                                if _fb_cancel_task is not None:
-                                    _fb_cancel_task.cancel()
+                            async for line in response.aiter_lines():
+                                if line.strip():
+                                    yield f"{line}\n\n"
                     return
                 except Exception as fallback_err:
                     print(f"[inference] Fallback stream also failed: {fallback_err}")

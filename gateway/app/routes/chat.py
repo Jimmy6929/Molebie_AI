@@ -877,53 +877,30 @@ async def send_message_stream(
             except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
                 return
         
-        # Actively monitor for client disconnect and cancel the inference stream.
-        # Without this, disconnect is only detected after the next MLX chunk
-        # arrives, leaving the connection open and causing MLX to spam
-        # "socket.send() raised exception" for every remaining token.
-        cancel_event = asyncio.Event()
-
-        async def _disconnect_watcher():
+        async for chunk in inference.generate_response_stream(
+            messages=messages,
+            mode=inference_mode,
+        ):
             try:
-                while not cancel_event.is_set():
-                    if await http_request.is_disconnected():
-                        cancel_event.set()
-                        return
-                    await asyncio.sleep(0.2)
-            except asyncio.CancelledError:
+                if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
+                    data = json.loads(chunk[6:])
+                    delta = data.get("choices", [{}])[0].get("delta", {})
+                    if "content" in delta:
+                        full_content.append(delta["content"])
+                    if "reasoning_content" in delta:
+                        full_reasoning.append(delta["reasoning_content"])
+            except (json.JSONDecodeError, IndexError, KeyError):
                 pass
 
-        watcher_task = asyncio.create_task(_disconnect_watcher())
+            if await http_request.is_disconnected():
+                client_disconnected = True
+                break
 
-        try:
-            async for chunk in inference.generate_response_stream(
-                messages=messages,
-                mode=inference_mode,
-                cancel_event=cancel_event,
-            ):
-                try:
-                    if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
-                        data = json.loads(chunk[6:])
-                        delta = data.get("choices", [{}])[0].get("delta", {})
-                        if "content" in delta:
-                            full_content.append(delta["content"])
-                        if "reasoning_content" in delta:
-                            full_reasoning.append(delta["reasoning_content"])
-                except (json.JSONDecodeError, IndexError, KeyError):
-                    pass
-
-                if cancel_event.is_set() or await http_request.is_disconnected():
-                    client_disconnected = True
-                    break
-
-                try:
-                    yield chunk
-                except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
-                    client_disconnected = True
-                    break
-        finally:
-            cancel_event.set()
-            watcher_task.cancel()
+            try:
+                yield chunk
+            except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+                client_disconnected = True
+                break
 
         if client_disconnected:
             return
