@@ -42,3 +42,11 @@ docs/
 # Logs
 logs/
 *.log
+
+# Task tracking & planning (private)
+tasks/
+*.plan.md
+
+# AI tools (private)
+.claude/
+.cursor/

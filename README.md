@@ -221,183 +221,111 @@ Upload documents for persistent knowledge retrieval across all conversations.
 
 ### Prerequisites
 
-- **macOS/Linux** development machine
+- **Apple Silicon Mac** (M1/M2/M3/M4, 16GB+ RAM recommended)
 - **Docker Desktop** (for Supabase, SearXNG, Kokoro TTS)
-- **Node.js 18+** (for Web App)
-- **Python 3.10+** (for Gateway API)
-- **ffmpeg** (for voice/speaker features: `brew install ffmpeg`)
-- **Git** (for version control)
+- **Node.js 18+** (`brew install node`)
+- **Python 3.10+** (comes with macOS or `brew install python`)
 - **Supabase CLI** (`brew install supabase/tap/supabase`)
+- **ffmpeg** (for voice features: `brew install ffmpeg`)
 
-### 1. Clone the Repository
+### 1. Clone and Setup
 
 ```bash
-git clone git@github.com:Jimmy6929/local_AI.git
+git clone https://github.com/Jimmy6929/local_AI.git
 cd local_AI
+bash setup.sh
 ```
 
-### 2. Configure Environment
+`setup.sh` checks prerequisites, installs dependencies, starts Supabase, and generates `.env.local` with the correct keys. It will ask if you're running on a single machine or two machines.
+
+### 2. Start MLX Inference
 
 ```bash
-# Copy the template and fill in your Supabase keys + Tailscale IPs
-cp .env.example .env.local
+# Terminal 1 — Thinking LLM (required)
+make mlx-thinking
+
+# Terminal 2 — Instant LLM (optional, for voice/fast mode)
+make mlx-instant
 ```
 
-All services share a single `.env.local` at the project root. Gateway and webapp both read from `../.env.local` automatically — no per-folder env files needed. The `.env.local` must be **copied manually** between machines (it's gitignored).
+First run downloads the models (~5GB for 9B, ~2.5GB for 4B). Subsequent starts are instant.
 
-### 3. Install Dependencies
+> **Note:** `make mlx-thinking` / `make mlx-instant` use `scripts/mlx_server.py`, a wrapper that suppresses asyncio socket warnings when users stop generation mid-stream.
+
+### 3. Start Services
 
 ```bash
-make install          # Installs both gateway + webapp deps
-# Or individually:
-cd gateway && pip3 install -r requirements.txt
-cd webapp && npm install
+# Terminal 3 — Gateway + Webapp (requires tmux)
+make dev-all
+
+# Or start individually:
+# Terminal 3: make dev-gateway
+# Terminal 4: make dev-webapp
 ```
 
-## Running the Project — Terminal-by-Terminal
-
-You need to start **5–7 services across 2 machines**. Order matters — start from the bottom of the stack up.
-
-### Machine 1: M2 Pro (GPU Machine) — 1–2 terminals
-
-**Terminal 1 — Thinking LLM (required)**
+### 4. Start Optional Services
 
 ```bash
-cd ~/Documents/App-project/Local_AI_Project
-python3 scripts/mlx_server.py --host 0.0.0.0 --port 8080 \
-  --model mlx-community/Qwen3.5-9B-4bit \
-  --enable-thinking \
-  --thinking-budget 2048 \
-  --thinking-start-token "<think>" \
-  --thinking-end-token "</think>"
+# Web search + Text-to-speech (background Docker containers)
+docker compose up -d
 ```
 
-**Terminal 2 — Instant LLM (optional, for voice/instant mode)**
+### 5. Open the App
 
-```bash
-cd ~/Documents/App-project/Local_AI_Project
-python3 scripts/mlx_server.py --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
-```
+Visit **http://localhost:3000**, create an account, and start chatting.
 
-> **Note:** Always use `scripts/mlx_server.py` instead of `mlx_vlm.server` / `mlx_lm.server` directly.
-> The wrapper suppresses asyncio socket warnings that flood the terminal when a user stops generation mid-stream.
+## Services
 
-### Machine 2: MacBook Pro 2016 (Home Server) — 4–5 terminals
+| # | Service | Command | Port | Required? |
+|---|---------|---------|------|-----------|
+| 1 | Thinking LLM | `make mlx-thinking` | 8080 | Yes |
+| 2 | Instant LLM | `make mlx-instant` | 8081 | Optional (voice/fast mode) |
+| 3 | Supabase | `make dev-supabase` | 54321 | Yes (auto-started by setup.sh) |
+| 4 | Gateway API | `make dev-gateway` | 8000 | Yes |
+| 5 | Web App | `make dev-webapp` | 3000 | Yes |
+| 6 | SearXNG + Kokoro | `docker compose up -d` | 8888, 8880 | Optional (search + TTS) |
 
-**Terminal 1 — Supabase (start first, requires Docker Desktop)**
-
-```bash
-cd ~/Documents/App-project/Local_AI_Project/supabase
-supabase start
-```
-
-Wait for Supabase to finish starting before proceeding.
-
-**Terminal 2 — Gateway API**
-
-```bash
-cd ~/Documents/App-project/Local_AI_Project/gateway
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**Terminal 3 — Web App**
-
-```bash
-cd ~/Documents/App-project/Local_AI_Project/webapp
-npm run dev
-```
-
-**Terminal 4 — SearXNG Web Search (optional, for web search)**
-
-```bash
-cd ~/Documents/App-project/Local_AI_Project
-docker compose -f docker-compose.searxng.yml up -d
-```
-
-Verify at `http://localhost:8888`. Runs in the background (`-d`), persists across restarts.
-
-**Terminal 5 — Kokoro TTS (optional, for voice responses)**
-
-```bash
-docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
-```
-
-Verify at `http://localhost:8880/docs`. First pull downloads ~1 GB; subsequent starts are instant. Default voice: `bm_george` (British male). Change voice in the Voice Settings panel in the UI.
-
-### Startup Summary
-
-| # | Terminal | Machine | Command | Port |
-|---|----------|---------|---------|------|
-| 1 | Thinking LLM | M2 Pro | `mlx_vlm.server ...` | 8080 |
-| 2 | Instant LLM | M2 Pro | `mlx_lm.server ...` | 8081 |
-| 3 | Supabase | 2016 MacBook Pro | `supabase start` | 54321-54323 |
-| 4 | Gateway API | 2016 MacBook Pro | `python3 -m uvicorn ...` | 8000 |
-| 5 | Web App | 2016 MacBook Pro | `npm run dev` | 3000 |
-| 6 | SearXNG | 2016 MacBook Pro | `docker compose ... up -d` | 8888 |
-| 7 | Kokoro TTS | 2016 MacBook Pro | `docker run ...` | 8880 |
-
-> Terminals 2, 6, and 7 are optional. The core experience (chat with thinking mode) only needs terminals 1, 3, 4, and 5.
+> The core experience (chat with thinking mode) only needs services 1, 3, 4, and 5.
 
 ### Verify Everything Is Running
 
 ```bash
-# From M2 Pro — check LLM servers
-curl http://localhost:8080/health                    # Thinking LLM
-curl http://localhost:8081/v1/models                  # Instant LLM
+curl http://localhost:8080/health                      # Thinking LLM
+curl http://localhost:8081/v1/models                    # Instant LLM
+curl http://127.0.0.1:8000/health                      # Gateway
+curl http://127.0.0.1:8000/health/inference             # Gateway → LLM connection
+curl http://localhost:8888/search?q=test&format=json    # SearXNG
+curl http://localhost:8880/docs                         # Kokoro TTS
+open http://localhost:3000                              # Web App
+```
 
-# From Home Server — check services
-curl http://127.0.0.1:8000/health                    # Gateway
-curl http://127.0.0.1:8000/health/inference           # Gateway → LLM connection
-curl http://localhost:8888/search?q=test&format=json   # SearXNG
-curl http://localhost:8880/docs                        # Kokoro TTS
-open http://localhost:3000                             # Web App
+### Stopping Services
+
+```bash
+make stop                     # Stop Supabase + Gateway
+docker compose down           # Stop SearXNG + Kokoro TTS
+# Or just press Ctrl+C in each terminal
 ```
 
 ### Quick Commands (Makefile)
 
 ```bash
+make setup          # First-time setup (prereqs, deps, Supabase keys)
 make help           # Show all available commands
 make install        # Install all dependencies (gateway + webapp)
-make dev            # Instructions for starting all services
-make dev-all        # Start all via tmux (requires tmux)
+make dev-all        # Start gateway + webapp via tmux
 make dev-gateway    # Start Gateway API only
 make dev-webapp     # Start Web App only
 make dev-supabase   # Start Supabase only
-make mlx-thinking   # Start MLX-VLM thinking server on GPU machine
+make mlx-thinking   # Start thinking LLM server
+make mlx-instant    # Start instant LLM server
 make test           # Run all tests
-make test-gateway   # Run gateway tests with pytest
 make lint           # Lint gateway code
-make format         # Format gateway code with black
+make format         # Format gateway code
 make db-reset       # Reset database and rerun migrations
 make clean          # Remove build artifacts
 make stop           # Stop all services
 ```
-
-### Stopping & Checking Services
-
-Check if a service is running:
-
-```bash
-lsof -i :8000    # Gateway
-lsof -i :3000    # Web App
-lsof -i :54321   # Supabase
-lsof -i :8888    # SearXNG
-lsof -i :8880    # Kokoro TTS
-```
-
-Stop a service:
-
-```bash
-kill $(lsof -t -i :8000)                              # Stop Gateway
-kill $(lsof -t -i :3000)                              # Stop Web App
-supabase stop                                          # Stop Supabase
-docker compose -f docker-compose.searxng.yml down      # Stop SearXNG
-docker stop $(docker ps -q --filter ancestor=ghcr.io/remsky/kokoro-fastapi-cpu:latest)  # Stop Kokoro TTS
-# Or just press Ctrl+C in the terminal running the service
-```
-
-> **Tip:** If you get `Address already in use` when starting a service, it's already running.
-> Run `curl http://127.0.0.1:8000/health` to confirm, or kill it and restart.
 
 ## API Reference
 
@@ -576,21 +504,46 @@ All tables have RLS enabled. Users can only access their own data:
 | `20260321300000_rag_metrics.sql` | RAG evaluation metrics support |
 | `20260322000000_message_images.sql` | Image attachments table + `chat-images` storage bucket |
 
-## Two-Machine Setup
+## Advanced: Multi-Machine Setup
 
-This project runs across **two machines** connected via Tailscale VPN:
+You can split the system across **two machines** — a GPU machine for inference and a server machine for everything else. Connect them via [Tailscale](https://tailscale.com/) (recommended) or a local network.
 
-| Machine | Role | Tailscale IP |
-|---------|------|-------------|
-| **MacBook Pro 2016 (i7, 16 GB RAM)** | Home Server: Gateway, Webapp, Supabase, SearXNG, Kokoro TTS | `100.99.189.104` |
-| **MacBook Pro M2 Pro (16GB)** | GPU Machine: MLX inference servers (Thinking + Instant) | `100.104.193.59` |
+| Machine | Role |
+|---------|------|
+| **Server** (any Mac/Linux) | Gateway, Webapp, Supabase, SearXNG, Kokoro TTS |
+| **GPU** (Apple Silicon Mac) | MLX inference servers (Thinking + Instant) |
 
 ```
-Browser → Webapp (:3000) → Gateway (:8000) ──┬──→ MLX Thinking (:8080)  ← M2 Pro
-              │                                ├──→ MLX Instant  (:8081)  ← M2 Pro
-              │                                ├──→ SearXNG      (:8888)  ← Home Server
-              │                                └──→ Kokoro TTS   (:8880)  ← Home Server
-              └──→ Supabase  (:54321)                               ← Home Server
+Browser → Webapp (:3000) → Gateway (:8000) ──┬──→ MLX Thinking (:8080)  ← GPU machine
+              │                                ├──→ MLX Instant  (:8081)  ← GPU machine
+              │                                ├──→ SearXNG      (:8888)  ← Server
+              │                                └──→ Kokoro TTS   (:8880)  ← Server
+              └──→ Supabase  (:54321)                               ← Server
+```
+
+Run `bash setup.sh` and choose **"Two machines"** — it will ask for the IPs and configure everything automatically. Or manually set these in `.env.local`:
+
+```bash
+# GPU machine IP (where MLX inference runs)
+INFERENCE_THINKING_URL=http://<GPU_IP>:8080
+INFERENCE_INSTANT_URL=http://<GPU_IP>:8081
+
+# Server machine IP (where the browser connects)
+NEXT_PUBLIC_SUPABASE_URL=http://<SERVER_IP>:54321
+NEXT_PUBLIC_GATEWAY_URL=http://<SERVER_IP>:8000
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://<SERVER_IP>:3000
+```
+
+Also add your server IP to `supabase/config.toml`:
+```toml
+additional_redirect_urls = ["http://127.0.0.1:3000", "http://localhost:3000", "http://<SERVER_IP>:3000"]
+```
+
+### Syncing Between Machines
+
+```bash
+# .env.local is gitignored — copy it manually to the GPU machine
+# Everything else syncs via git
 ```
 
 ## Inference Modes
@@ -615,7 +568,7 @@ Browser → Webapp (:3000) → Gateway (:8000) ──┬──→ MLX Thinking (
 - `THINKING_MAX_CONCURRENT` — max parallel thinking requests (default: 2)
 - `ROUTING_THINKING_FALLBACK_TO_INSTANT` — fall back to instant if thinking tier is down
 
-### MLX Setup (GPU Machine — M2 Pro)
+### MLX Setup (Apple Silicon)
 
 #### One-Time Installation
 
@@ -631,8 +584,6 @@ pip install -U mlx-lm               # Qwen 3.5 4B — text-only, lighter
 #### Starting the LLM Servers (Every Session)
 
 ```bash
-cd ~/Documents/App-project/Local_AI_Project
-
 # Terminal 1 — Thinking tier (Qwen 3.5 9B)
 python3 scripts/mlx_server.py --host 0.0.0.0 --port 8080 \
   --model mlx-community/Qwen3.5-9B-4bit \
@@ -718,126 +669,65 @@ cp .env.example .env.local
 
 | Variable | Description |
 |----------|-------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase API URL (Tailscale IP for cross-machine access) |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase API URL (localhost or server IP for multi-machine) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key |
-| `NEXT_PUBLIC_GATEWAY_URL` | Gateway API URL (Tailscale IP for cross-machine access) |
+| `NEXT_PUBLIC_GATEWAY_URL` | Gateway API URL (localhost or server IP for multi-machine) |
+| `CORS_ORIGINS` | Comma-separated allowed origins for CORS |
 
 ## Complete Command Reference
 
-### M2 Pro (GPU Machine)
-
 ```bash
-# ── One-Time Setup ──────────────────────────────────
-pip install -U "mlx-vlm[torch]"          # Qwen 3.5 9B — needs PyTorch
-pip install -U mlx-lm                     # Qwen 3.5 4B — text-only
+# ── First-Time Setup ────────────────────────────────
+bash setup.sh                             # Interactive setup (prereqs, deps, Supabase keys)
 
-# ── Start LLM Servers (every session) ──────────────
-cd ~/Documents/App-project/Local_AI_Project
+# ── MLX One-Time Install ────────────────────────────
+pip install -U "mlx-vlm[torch]"           # Qwen 3.5 9B — needs PyTorch for vision
+pip install -U mlx-lm                     # Qwen 3.5 4B — text-only, lighter
 
-# Terminal 1 — Thinking LLM
-python3 scripts/mlx_server.py --host 0.0.0.0 --port 8080 \
-  --model mlx-community/Qwen3.5-9B-4bit \
-  --enable-thinking \
-  --thinking-budget 2048 \
-  --thinking-start-token "<think>" \
-  --thinking-end-token "</think>"
+# ── Start Services (every session) ──────────────────
+make mlx-thinking                         # Thinking LLM (:8080)
+make mlx-instant                          # Instant LLM (:8081, optional)
+make dev-supabase                         # Supabase (:54321)
+make dev-gateway                          # Gateway API (:8000)
+make dev-webapp                           # Web App (:3000)
+docker compose up -d                      # SearXNG + Kokoro TTS (optional)
 
-# Terminal 2 — Instant LLM (optional)
-python3 scripts/mlx_server.py --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
+# Or use tmux for gateway + webapp:
+make dev-all
 
-# ── Health Checks ──────────────────────────────────
-curl http://localhost:8080/health         # Thinking LLM status
-curl http://localhost:8080/models         # List loaded VLM models
-curl http://localhost:8081/v1/models      # List loaded instant models
-```
-
-### MacBook Pro 2016 (Home Server)
-
-```bash
-# ── One-Time Setup ──────────────────────────────────
-cd ~/Documents/App-project/Local_AI_Project
-cd gateway && pip3 install -r requirements.txt       # Gateway Python deps
-cd ../webapp && npm install                           # Webapp Node deps
-brew install supabase/tap/supabase                   # Supabase CLI
-brew install ffmpeg                                   # Required for voice features
-
-# ── Start Services (every session, in order) ───────
-# 1. Make sure Docker Desktop is open first!
-cd ~/Documents/App-project/Local_AI_Project/supabase && supabase start
-
-# 2. Gateway (new terminal)
-cd ~/Documents/App-project/Local_AI_Project/gateway
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-# 3. Webapp (new terminal)
-cd ~/Documents/App-project/Local_AI_Project/webapp && npm run dev
-
-# 4. SearXNG (new terminal, optional — runs in background)
-cd ~/Documents/App-project/Local_AI_Project
-docker compose -f docker-compose.searxng.yml up -d
-
-# 5. Kokoro TTS (new terminal, optional)
-docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
-
-# ── Stop Services ──────────────────────────────────
-supabase stop                                         # Stop Supabase + Docker containers
-kill $(lsof -t -i :8000)                              # Stop Gateway
-kill $(lsof -t -i :3000)                              # Stop Webapp
-docker compose -f docker-compose.searxng.yml down     # Stop SearXNG
+# ── Stop Services ───────────────────────────────────
+make stop                                 # Stop Supabase + Gateway
+docker compose down                       # Stop SearXNG + Kokoro TTS
 # Or just Ctrl+C in each terminal
 
-# ── Health Checks ──────────────────────────────────
-curl http://127.0.0.1:8000/health                    # Gateway
-curl http://127.0.0.1:8000/health/inference           # Gateway → LLM connection
-curl http://127.0.0.1:54321/auth/v1/health            # Supabase Auth
-curl http://localhost:8888/search?q=test&format=json   # SearXNG
-curl http://localhost:8880/docs                        # Kokoro TTS
-supabase status                                       # All Supabase info + keys
+# ── Health Checks ───────────────────────────────────
+curl http://localhost:8080/health          # Thinking LLM
+curl http://localhost:8081/v1/models       # Instant LLM
+curl http://127.0.0.1:8000/health          # Gateway
+curl http://127.0.0.1:8000/health/inference # Gateway → LLM
+curl http://localhost:8888/search?q=test&format=json  # SearXNG
+curl http://localhost:8880/docs            # Kokoro TTS
 
-# ── Database ───────────────────────────────────────
+# ── Database ────────────────────────────────────────
 supabase db reset                         # Reset DB and rerun migrations
 supabase migration new <name>             # Create new migration
-supabase migration list                   # List migrations
+supabase status                           # Show Supabase info + keys
 
-# ── Testing & Linting ─────────────────────────────
-cd gateway && python3 -m pytest tests/ -v                    # Run tests
-cd gateway && python3 -m pytest tests/ --cov=app             # Tests + coverage
-cd webapp && npx tsc --noEmit                                # TypeScript check
-cd webapp && npm run lint                                    # Lint webapp
-
-# ── Makefile Shortcuts (from project root) ─────────
-make help                # Show all commands
-make install             # Install gateway + webapp deps
-make dev-gateway         # Start gateway
-make dev-webapp          # Start webapp
-make dev-supabase        # Start supabase
-make dev-all             # Start all via tmux
-make mlx-thinking        # Start thinking LLM on GPU machine
-make mlx-instant         # Start instant LLM on GPU machine
-make test                # Run all tests
-make lint                # Lint gateway
-make format              # Format gateway code
-make db-reset            # Reset database
-make clean               # Remove caches
-```
-
-### Syncing Files Between Machines
-
-```bash
-# .env.local is gitignored — must be copied manually
-# After editing .env.local on one machine, copy to the other.
-# Everything else syncs via git:
-git add -A && git commit -m "description" && git push   # On machine A
-git pull                                                  # On machine B
+# ── Testing & Linting ──────────────────────────────
+make test                                 # Run all tests
+make lint                                 # Lint gateway code
+make format                               # Format gateway code
+cd webapp && npx tsc --noEmit             # TypeScript check
+cd webapp && npm run lint                 # Lint webapp
 ```
 
 ### Troubleshooting
 
 ```bash
-# "uvicorn: command not found" on 2016 MacBook Pro
+# "uvicorn: command not found"
 python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000   # Use python3 -m prefix
 
-# "pip: command not found" on 2016 MacBook Pro
+# "pip: command not found"
 pip3 install -r requirements.txt          # Use pip3 instead
 
 # Qwen3.5-9B fails with "Torchvision not found"
@@ -858,12 +748,12 @@ kill $(lsof -t -i :<port>)                # Kill it
 supabase status                           # Check keys match .env.local
 
 # SearXNG not returning results
-docker compose -f docker-compose.searxng.yml logs   # Check logs
-docker compose -f docker-compose.searxng.yml restart # Restart
+docker compose logs searxng                          # Check logs
+docker compose restart searxng                       # Restart
 
 # Kokoro TTS not working
 curl http://localhost:8880/docs            # Check if running
-docker logs $(docker ps -q --filter ancestor=ghcr.io/remsky/kokoro-fastapi-cpu:latest)
+docker compose logs kokoro-tts                       # Check Kokoro logs
 
 # Voice transcription fails
 brew install ffmpeg                        # Required for audio conversion
@@ -897,7 +787,7 @@ brew install ffmpeg                        # Required for audio conversion
 | **TTS** | Kokoro FastAPI (Docker) | Latest |
 | **Web Search** | SearXNG (Docker) | Latest |
 | **Speaker ID** | MFCC embeddings (numpy) | — |
-| **Networking** | Tailscale VPN | — |
+| **Networking** | Tailscale VPN (optional, for multi-machine) | — |
 | **Markdown** | react-markdown + remark-gfm | — |
 
 ## Roadmap
@@ -946,20 +836,25 @@ brew install ffmpeg                        # Required for audio conversion
 - [x] Image storage in Supabase Storage with RLS
 - [x] Image display in chat history
 
-### Phase 5: Polish & Tools
-- [ ] Copy button on code blocks
-- [ ] Regenerate message button
-- [ ] Session search/filter
-- [ ] Inline source citations ([1], [2] in text)
-- [ ] Math/LaTeX rendering
-- [ ] Conversation export (PDF/markdown)
-- [ ] Custom tool support
+### Phase 5: UX Polish ✅
+- [x] Copy button on code blocks
+- [x] Regenerate message button
+- [x] Session search/filter and pinning
+- [x] Inline source citations ([1], [2] in text)
+- [x] Math/LaTeX rendering (KaTeX)
+- [x] Conversation export (Markdown)
 
-### Phase 6: Production Launch
+### Phase 6: Distribution ✅
+- [x] Root `.env.example` with comprehensive defaults
+- [x] `setup.sh` one-command installer (single + two-machine)
+- [x] Unified `docker-compose.yml` (SearXNG + Kokoro TTS)
+- [x] Configurable CORS (no hardcoded IPs)
+- [x] Generalized README for any Apple Silicon user
+
+### Future
+- [ ] Custom tool/plugin support
+- [ ] `curl | bash` remote installer
 - [ ] OAuth sign-in (GitHub, Google)
-- [ ] Hosted Supabase migration
-- [ ] Public web app deployment
-- [ ] Rate limiting
 - [ ] Monitoring & alerting
 
 ## Testing
@@ -1024,9 +919,9 @@ Gateway-specific docs (GPU setup guides) are in `gateway/docs/`.
 
 ## License
 
-All Rights Reserved © 2026
+MIT License © 2026
 
-This is a private project. Unauthorized copying, modification, distribution, or use of this software is strictly prohibited.
+See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
@@ -1043,6 +938,15 @@ This is a private project. Unauthorized copying, modification, distribution, or 
 - [Kokoro TTS](https://github.com/remsky/Kokoro-FastAPI) — Fast local text-to-speech
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — Fast Whisper inference with CTranslate2
 
+## Other Platforms
+
+This project is optimized for **Apple Silicon** (M1/M2/M3/M4) using MLX for inference. The gateway and webapp work on any OS, but you'll need to swap the inference backend:
+
+- **NVIDIA GPU (Linux/Windows)**: Use [vLLM](https://github.com/vllm-project/vllm) or [llama.cpp](https://github.com/ggerganov/llama.cpp) instead of MLX. Point `INFERENCE_THINKING_URL` / `INFERENCE_INSTANT_URL` at your server.
+- **Ollama**: Serve Qwen models via [Ollama](https://ollama.com/) and point the inference URLs at it.
+
+The rest of the stack (Supabase, SearXNG, Kokoro TTS) runs in Docker and works on any platform.
+
 ---
 
-Built for privacy-conscious AI enthusiasts.
+Built for privacy-conscious AI enthusiasts who want to own their data and run everything locally.

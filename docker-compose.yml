@@ -1,0 +1,26 @@
+services:
+  # Web search — self-hosted, no API keys needed
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+
+  # Text-to-speech — Kokoro (CPU, ~1GB download on first run)
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.4.3
+    container_name: kokoro-tts
+    restart: unless-stopped
+    ports:
+      - "8880:8880"

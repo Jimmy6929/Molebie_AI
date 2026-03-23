@@ -1,13 +1,15 @@
 # Local AI Assistant - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose
+.PHONY: help setup dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose
 
 # Default target
 help:
 	@echo ""
 	@echo "Local AI Assistant - Development Commands"
 	@echo "=========================================="
+	@echo ""
+	@echo "  make setup          First-time setup (checks prereqs, installs deps, configures Supabase)"
 	@echo ""
 	@echo "  make install        Install all dependencies"
 	@echo "  make dev            Start all services (supabase, gateway, webapp)"
@@ -59,13 +61,19 @@ install-webapp:
 # DEVELOPMENT SERVERS
 # ──────────────────────────────────────────────────────────────
 
+setup:
+	@bash setup.sh
+
 dev:
 	@echo "🚀 Starting all services..."
+	@echo "   First-time? Run: make setup"
+	@echo ""
 	@echo "   Run each command in a separate terminal:"
 	@echo ""
-	@echo "   Terminal 1: make dev-supabase"
-	@echo "   Terminal 2: make dev-gateway"
-	@echo "   Terminal 3: make dev-webapp"
+	@echo "   Terminal 1: make mlx-thinking     (MLX inference)"
+	@echo "   Terminal 2: make dev-gateway      (API server)"
+	@echo "   Terminal 3: make dev-webapp       (frontend)"
+	@echo "   Background: docker compose up -d  (search + TTS)"
 	@echo ""
 	@echo "   Or use: make dev-all (requires tmux)"
 
@@ -95,7 +103,7 @@ stop:
 	@echo "✅ Services stopped"
 
 # ──────────────────────────────────────────────────────────────
-# MLX INFERENCE SERVERS (run on GPU machine — M2 Pro)
+# MLX INFERENCE SERVERS (Apple Silicon GPU)
 # ──────────────────────────────────────────────────────────────
 
 mlx-install:
@@ -176,7 +184,7 @@ clean:
 	@echo "✅ Clean complete"
 
 # ──────────────────────────────────────────────────────────────
-# AUTO-PULL (MacBook Pro 2016 home server)
+# AUTO-PULL (home server — polls git and auto-updates)
 # ──────────────────────────────────────────────────────────────
 
 autopull-install:

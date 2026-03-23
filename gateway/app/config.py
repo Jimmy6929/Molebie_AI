@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "AI Assistant Gateway"
     debug: bool = True
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     
     # Supabase Configuration
     supabase_url: str = "http://127.0.0.1:54321"

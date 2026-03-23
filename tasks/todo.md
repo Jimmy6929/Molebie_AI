@@ -43,42 +43,14 @@
 - [x] Pin/favorite sessions
 - [x] Conversation export (Markdown)
 
-### Auth & Distribution
-- [ ] OAuth sign-in (GitHub, Google)
-- [ ] Plan auth flow for additional users (invite system)
-- [ ] One-command installer architecture
+### Distribution / Publish-Ready ✅
+- [x] Root `.env.example` with comprehensive defaults (single-machine localhost)
+- [x] `setup.sh` interactive installer (single + two-machine mode)
+- [x] Unified `docker-compose.yml` (SearXNG + Kokoro TTS)
+- [x] Configurable CORS via `CORS_ORIGINS` env var (no hardcoded Tailscale IPs)
+- [x] Generalized README for any Apple Silicon user
+- [x] `make setup` target
+- [x] MIT License
+- [x] `.gitignore` cleanup (tasks/, .claude/, .cursor/, *.plan.md)
 
 ---
-
-## Model Performance Improvement
-
-### Tier 1: Immediate (no training needed)
-- [ ] Better few-shot prompting in system prompt
-- [ ] Inference-time self-consistency (generate multiple, pick best)
-- [ ] Inference-time verification (model checks its own work)
-
-### Tier 2: LoRA Fine-Tuning (1-2 days, on M4 Pro 48GB)
-- [ ] Set up mlx-tune or mlx-lm LoRA on friend's M4 Pro
-- [ ] Curate 500+ domain-specific training examples
-- [ ] QLoRA fine-tune Qwen3.5-9B (~7GB VRAM, fits easily)
-- [ ] Merge adapters and deploy back to M2 Pro
-
-### Tier 3: GRPO Reasoning Training (1-2 weeks, on M4 Pro 48GB)
-- [ ] Set up MLX-GRPO or mlx-tune GRPO pipeline
-- [ ] Create verifiable reward functions (math, code execution)
-- [ ] Bootstrap training data from GSM8K / code datasets
-- [ ] GRPO train Qwen3.5-9B with QLoRA (~13-15GB VRAM)
-- [ ] Evaluate reasoning improvement on benchmarks
-- [ ] Export and deploy improved model
-
-### Tier 4: Bonus
-- [ ] Model merging (combine reasoning + domain adapters via mergekit)
-- [ ] Explore Absolute Zero approach if cloud GPUs become available
-
----
-
-## TTS Speed (Lower Priority)
-- [ ] Profile Kokoro generation latency
-- [ ] Investigate streaming TTS options
-- [ ] Explore chunked generation approach
-- [ ] Research smaller/faster voice models compatible with MLX
