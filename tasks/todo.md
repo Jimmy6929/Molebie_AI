@@ -33,15 +33,15 @@
 ## Next Up: UX Polish (High Impact)
 
 ### Code & Message Quality
-- [ ] Copy button on code blocks (highest-friction gap vs ChatGPT/Claude)
-- [ ] Regenerate message button
-- [ ] Math/LaTeX rendering (KaTeX or MathJax)
-- [ ] Inline source citations ([1], [2] in text, like Perplexity)
+- [x] Copy button on code blocks (highest-friction gap vs ChatGPT/Claude)
+- [x] Regenerate message button
+- [x] Math/LaTeX rendering (KaTeX)
+- [x] Inline source citations ([1], [2] in text, like Perplexity)
 
 ### Session Management
-- [ ] Search/filter sessions in sidebar
-- [ ] Pin/favorite sessions
-- [ ] Conversation export (PDF/markdown)
+- [x] Search/filter sessions in sidebar
+- [x] Pin/favorite sessions
+- [x] Conversation export (Markdown)
 
 ### Auth & Distribution
 - [ ] OAuth sign-in (GitHub, Google)

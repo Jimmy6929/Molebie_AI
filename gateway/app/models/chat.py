@@ -70,11 +70,17 @@ class SessionInfo(BaseModel):
     created_at: datetime
     updated_at: datetime
     is_archived: bool = False
+    is_pinned: bool = False
 
 
 class SessionRenameRequest(BaseModel):
     """Request body for PATCH /chat/sessions/{id}."""
     title: str = Field(..., min_length=1, max_length=200, description="New session title")
+
+
+class SessionPinRequest(BaseModel):
+    """Request body for PATCH /chat/sessions/{id}/pin."""
+    is_pinned: bool = Field(..., description="Whether to pin or unpin the session")
 
 
 class SessionListResponse(BaseModel):

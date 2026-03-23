@@ -18,6 +18,7 @@ export interface SessionInfo {
   created_at: string;
   updated_at: string;
   is_archived: boolean;
+  is_pinned: boolean;
 }
 
 export interface ChatMessage {
@@ -281,6 +282,17 @@ export async function renameSession(
   return apiCall<SessionInfo>(`/chat/sessions/${sessionId}`, token, {
     method: "PATCH",
     body: JSON.stringify({ title }),
+  });
+}
+
+export async function pinSession(
+  token: string,
+  sessionId: string,
+  isPinned: boolean
+): Promise<SessionInfo> {
+  return apiCall<SessionInfo>(`/chat/sessions/${sessionId}/pin`, token, {
+    method: "PATCH",
+    body: JSON.stringify({ is_pinned: isPinned }),
   });
 }
 

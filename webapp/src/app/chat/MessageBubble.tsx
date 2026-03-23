@@ -1,8 +1,11 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { parseThinkingContent } from "@/lib/thinkParser";
@@ -19,7 +22,67 @@ export interface MessageBubbleProps {
   sources?: SearchSource[];
   isSearching?: boolean;
   imageUrl?: string | null;
+  onRegenerate?: () => void;
 }
+
+// ── CodeBlock with copy button ───────────────────────────────────────────
+
+function CodeBlock({ language, code }: { language: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [code]);
+
+  return (
+    <div className="relative group my-2">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#0a0a0a] border border-white/[0.06] border-b-0 rounded-t-xl text-[10px]">
+        <span className="text-[#888] font-medium">{language}</span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 text-[#888] hover:text-[#ccc] transition-colors"
+        >
+          {copied ? (
+            <>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>Copied</span>
+            </>
+          ) : (
+            <>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <SyntaxHighlighter
+        style={oneDark}
+        language={language}
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          background: "#050505",
+          border: "1px solid rgba(255,255,255,0.06)",
+          borderTop: "none",
+          borderRadius: "0 0 12px 12px",
+          fontSize: "0.85em",
+        }}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
 
 function useElapsedSeconds(startedAt?: number, running?: boolean): number {
   const [elapsed, setElapsed] = useState(0);
@@ -41,6 +104,19 @@ function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+/** Inject inline citation superscripts: [1] → clickable badge linking to source */
+function injectCitations(text: string, sources?: SearchSource[]): string {
+  if (!sources || sources.length === 0) return text;
+  return text.replace(/\[(\d+)\]/g, (match, numStr) => {
+    const idx = parseInt(numStr, 10) - 1;
+    if (idx < 0 || idx >= sources.length) return match;
+    const src = sources[idx];
+    return `[<sup>${numStr}</sup>](${src.url} "${(src.title || src.url).replace(/"/g, "'")}")`;
+  });
+}
+
+// ── Main component ──────────────────────────────────────────────────────
+
 export default function MessageBubble({
   role,
   content,
@@ -50,11 +126,19 @@ export default function MessageBubble({
   sources,
   isSearching,
   imageUrl,
+  onRegenerate,
 }: MessageBubbleProps) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [msgCopied, setMsgCopied] = useState(false);
   const parsed = useMemo(() => parseThinkingContent(content), [content]);
   const [thinkOpen, setThinkOpen] = useState(false);
   const elapsed = useElapsedSeconds(streamStartedAt, streaming);
+
+  // Inject citation links into response text
+  const renderedResponse = useMemo(
+    () => (parsed.response ? injectCitations(parsed.response, sources) : null),
+    [parsed.response, sources],
+  );
 
   useEffect(() => {
     if (parsed.isThinking) {
@@ -63,6 +147,13 @@ export default function MessageBubble({
       setThinkOpen(false);
     }
   }, [parsed.isThinking, streaming, parsed.thinking]);
+
+  const handleCopyMessage = useCallback(() => {
+    navigator.clipboard.writeText(parsed.response || content).then(() => {
+      setMsgCopied(true);
+      setTimeout(() => setMsgCopied(false), 2000);
+    });
+  }, [parsed.response, content]);
 
   const isUser = role === "user";
 
@@ -160,30 +251,16 @@ export default function MessageBubble({
           </div>
         ) : (
           <div className="markdown-body break-words">
-            {parsed.response ? (
+            {renderedResponse ? (
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
                 components={{
                   code({ className, children, ...props }) {
                     const match = /language-(\w+)/.exec(className || "");
                     const codeStr = String(children).replace(/\n$/, "");
                     if (match) {
-                      return (
-                        <SyntaxHighlighter
-                          style={oneDark}
-                          language={match[1]}
-                          PreTag="div"
-                          customStyle={{
-                            margin: 0,
-                            background: "#050505",
-                            border: "1px solid rgba(255,255,255,0.06)",
-                            borderRadius: "12px",
-                            fontSize: "0.85em",
-                          }}
-                        >
-                          {codeStr}
-                        </SyntaxHighlighter>
-                      );
+                      return <CodeBlock language={match[1]} code={codeStr} />;
                     }
                     return (
                       <code className="bg-white/[0.08] px-1.5 py-0.5 rounded-md text-[#f0f0f0] text-[0.85em]" {...props}>
@@ -193,7 +270,7 @@ export default function MessageBubble({
                   },
                 }}
               >
-                {parsed.response}
+                {renderedResponse}
               </ReactMarkdown>
             ) : null}
             {streaming && (
@@ -245,6 +322,47 @@ export default function MessageBubble({
         {!isUser && streamStartedAt && elapsed > 0 && (
           <div className="text-[10px] text-[#999] mt-2 tabular-nums">
             {streaming ? `Generating · ${formatElapsed(elapsed)}` : `${formatElapsed(elapsed)}`}
+          </div>
+        )}
+
+        {/* Action bar: Copy + Regenerate */}
+        {!isUser && !streaming && (parsed.response || content) && (
+          <div className="flex items-center gap-3 mt-2 pt-1.5 border-t border-white/[0.04]">
+            <button
+              onClick={handleCopyMessage}
+              className="flex items-center gap-1 text-[10px] text-[#888] hover:text-[#ccc] transition-colors"
+              title="Copy message"
+            >
+              {msgCopied ? (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  Copied
+                </>
+              ) : (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                  Copy
+                </>
+              )}
+            </button>
+            {onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                className="flex items-center gap-1 text-[10px] text-[#888] hover:text-[#ccc] transition-colors"
+                title="Regenerate response"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="1 4 1 10 7 10" />
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                </svg>
+                Regenerate
+              </button>
+            )}
           </div>
         )}
       </div>

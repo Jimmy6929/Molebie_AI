@@ -62,14 +62,24 @@ class DatabaseService:
         return result[0] if result else None
     
     def list_sessions(self, user_id: str, limit: int = 50, user_token: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List user's chat sessions, newest first."""
+        """List user's chat sessions, pinned first then newest."""
         result = self._request(
             "GET",
-            f"chat_sessions?user_id=eq.{user_id}&is_archived=eq.false&order=updated_at.desc&limit={limit}",
+            f"chat_sessions?user_id=eq.{user_id}&is_archived=eq.false&order=is_pinned.desc,updated_at.desc&limit={limit}",
             user_token=user_token,
         )
         return result or []
-    
+
+    def pin_session(self, session_id: str, user_id: str, is_pinned: bool, user_token: Optional[str] = None) -> bool:
+        """Pin or unpin a session."""
+        result = self._request(
+            "PATCH",
+            f"chat_sessions?id=eq.{session_id}&user_id=eq.{user_id}",
+            user_token=user_token,
+            json={"is_pinned": is_pinned},
+        )
+        return bool(result)
+
     def update_session_title(self, session_id: str, user_id: str, title: str, user_token: Optional[str] = None) -> bool:
         """Update session title."""
         result = self._request(

@@ -21,6 +21,7 @@ from app.models.chat import (
     InferenceMetadata,
     SessionInfo,
     SessionRenameRequest,
+    SessionPinRequest,
     SessionListResponse,
     TTSRequest,
 )
@@ -617,6 +618,7 @@ async def list_sessions(
                 created_at=s["created_at"],
                 updated_at=s["updated_at"],
                 is_archived=s.get("is_archived", False),
+                is_pinned=s.get("is_pinned", False),
             )
             for s in sessions
         ]
@@ -682,6 +684,34 @@ async def rename_session(
         created_at=updated["created_at"],
         updated_at=updated["updated_at"],
         is_archived=updated.get("is_archived", False),
+        is_pinned=updated.get("is_pinned", False),
+    )
+
+
+@router.patch("/sessions/{session_id}/pin", response_model=SessionInfo)
+async def pin_session(
+    session_id: str,
+    request: SessionPinRequest,
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+) -> SessionInfo:
+    """Pin or unpin a chat session."""
+    token = user.raw_token
+    session = db.get_session(session_id, user.user_id, user_token=token)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+    db.pin_session(session_id, user.user_id, request.is_pinned, user_token=token)
+    updated = db.get_session(session_id, user.user_id, user_token=token)
+    return SessionInfo(
+        id=updated["id"],
+        title=updated["title"],
+        created_at=updated["created_at"],
+        updated_at=updated["updated_at"],
+        is_archived=updated.get("is_archived", False),
+        is_pinned=updated.get("is_pinned", False),
     )
 
 

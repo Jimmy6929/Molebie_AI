@@ -31,6 +31,15 @@
   scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
 }
 
+/* Disable browser scroll anchoring on the chat messages container.
+   Without this, streaming content growth pushes the viewport down. */
+.scroll-anchor-none {
+  overflow-anchor: none;
+}
+.scroll-anchor-none > * {
+  overflow-anchor: none;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
@@ -201,12 +210,12 @@ input, textarea {
 /* ── Code blocks ────────────────────────────────────── */
 
 .markdown-body pre {
-  background: #050505 !important;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
-  padding: 12px;
-  overflow-x: auto;
-  margin: 0.5em 0;
+  background: transparent !important;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  overflow: visible;
+  margin: 0;
 }
 
 pre {
@@ -220,4 +229,28 @@ pre {
 code {
   font-family: var(--font-mono), 'Courier New', monospace;
   font-size: 0.9em;
+}
+
+/* ── KaTeX dark-theme overrides ────────────────────── */
+
+.katex { color: #e0e0e0; }
+.katex .mord, .katex .mbin, .katex .mrel,
+.katex .mopen, .katex .mclose, .katex .mpunct { color: inherit; }
+
+/* ── Citation superscripts ─────────────────────────── */
+
+.markdown-body sup a {
+  color: #66bbff;
+  text-decoration: none;
+  font-size: 0.75em;
+  font-weight: 600;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: rgba(102, 187, 255, 0.1);
+  transition: background 0.15s;
+}
+
+.markdown-body sup a:hover {
+  background: rgba(102, 187, 255, 0.25);
+  text-decoration: none;
 }

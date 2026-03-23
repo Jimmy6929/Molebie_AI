@@ -10,6 +10,7 @@ import {
   getSessionMessages,
   deleteSession,
   renameSession,
+  pinSession,
   uploadDocument,
   listDocuments,
   deleteDocument,
@@ -341,12 +342,9 @@ export default function ChatPage() {
     loadMessages();
   }, [token, activeSessionId]);
 
-  useEffect(() => {
-    if (userScrolledUpRef.current) return;
-    const el = messagesContainerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
-
+  // ── Scroll detection ─────────────────────────────────────────────────────
+  // Listen to wheel/touch (user-initiated only). Use requestAnimationFrame
+  // so we read scroll position AFTER the browser has applied the scroll.
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
@@ -365,6 +363,15 @@ export default function ChatPage() {
       container.removeEventListener("touchmove", checkPosition);
     };
   }, []);
+
+  // ── Auto-scroll on new content ──────────────────────────────────────────
+  // overflow-anchor:none (via CSS) prevents browser from pushing viewport
+  // when content grows. We only scroll-to-bottom when user is at bottom.
+  useEffect(() => {
+    if (userScrolledUpRef.current) return;
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
 
   function scrollToBottom() {
     userScrolledUpRef.current = false;
@@ -496,6 +503,101 @@ export default function ChatPage() {
     abortControllerRef.current?.abort();
     kokoroCancel();
     alfredLoopRef.current = false;
+  }
+
+  // ── Regenerate last response ───────────────────────────────────────────
+  async function handleRegenerate() {
+    if (loading || !token || !activeSessionId) return;
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUserMsg) return;
+
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === "assistant");
+    const regenerateMode = (lastAssistantMsg?.mode_used as "instant" | "thinking" | "thinking_harder") || mode;
+
+    // Remove last assistant message from display
+    setMessages((prev) => {
+      const idx = prev.findLastIndex((m) => m.role === "assistant");
+      return idx === -1 ? prev : prev.slice(0, idx);
+    });
+
+    setLoading(true);
+    userScrolledUpRef.current = false;
+    setShowScrollBtn(false);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const now = Date.now();
+
+    setIsSearching(true);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `regen-${now}`,
+        role: "assistant",
+        content: "",
+        streaming: true,
+        mode_used: regenerateMode,
+        streamStartedAt: now,
+      },
+    ]);
+    isStreamingRef.current = true;
+
+    try {
+      await sendMessageStream(
+        token,
+        lastUserMsg.content,
+        regenerateMode,
+        activeSessionId,
+        false,
+        (content) => {
+          setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, content } : m)));
+        },
+        () => {},
+        controller.signal,
+        (sources) => {
+          setIsSearching(false);
+          setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, sources } : m)));
+        },
+      );
+      setIsSearching(false);
+      setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
+      loadSessions();
+    } catch (err) {
+      setIsSearching(false);
+      if (controller.signal.aborted) {
+        setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
+      } else {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.streaming
+              ? { ...m, content: `error: ${err instanceof Error ? err.message : "connection failed"}`, streaming: false }
+              : m,
+          ),
+        );
+      }
+    } finally {
+      abortControllerRef.current = null;
+      isStreamingRef.current = false;
+      setLoading(false);
+    }
+  }
+
+  // ── Export conversation as Markdown ─────────────────────────────────────
+  function handleExportMarkdown() {
+    if (messages.length === 0) return;
+    const sessionTitle = sessions.find((s) => s.id === activeSessionId)?.title || "conversation";
+    const lines = [`# ${sessionTitle}\n`];
+    for (const msg of messages) {
+      const label = msg.role === "user" ? "**You**" : "**AI**";
+      lines.push(`${label}:\n${msg.content}\n\n---\n`);
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${sessionTitle.replace(/[^a-zA-Z0-9]/g, "_")}-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   // ── Mode toggles ─────────────────────────────────────────────────────────
@@ -649,6 +751,12 @@ export default function ChatPage() {
     catch (err) { console.error("Rename error:", err); }
   }
 
+  async function handlePinSession(id: string, pinned: boolean) {
+    if (!token) return;
+    try { await pinSession(token, id, pinned); loadSessions(); }
+    catch (err) { console.error("Pin error:", err); }
+  }
+
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   }
@@ -693,6 +801,7 @@ export default function ChatPage() {
           onNewChat={handleNewChat}
           onDeleteSession={handleDeleteSession}
           onRenameSession={handleRenameSession}
+          onPinSession={handlePinSession}
           onLogout={handleLogout}
           userEmail={userEmail}
         />
@@ -716,29 +825,49 @@ export default function ChatPage() {
               {activeSessionId ? `${activeSessionId.slice(0, 8)}...` : "New session"}
             </span>
           </div>
+          {messages.length > 0 && (
+            <button
+              onClick={handleExportMarkdown}
+              className="text-[#888] hover:text-[#ccc] transition-colors p-2 rounded-xl hover:bg-white/[0.06]"
+              title="Export as Markdown"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </button>
+          )}
         </header>
 
         {/* Messages */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 scroll-anchor-none">
           {messages.length === 0 && (
             <div className="flex items-center justify-center h-full">
               <div className="text-[#999] text-sm">What can I help you with?</div>
             </div>
           )}
-          {messages.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              role={msg.role}
-              content={msg.content}
-              streaming={msg.streaming}
-              mode={msg.mode_used}
-              model={msg.model_used}
-              streamStartedAt={msg.streamStartedAt}
-              sources={msg.sources}
-              isSearching={msg.streaming && isSearching}
-              imageUrl={msg.imageUrl}
-            />
-          ))}
+          {messages.map((msg, idx) => {
+            const isLastAssistant =
+              msg.role === "assistant" &&
+              !msg.streaming &&
+              idx === messages.findLastIndex((m) => m.role === "assistant");
+            return (
+              <MessageBubble
+                key={msg.id}
+                role={msg.role}
+                content={msg.content}
+                streaming={msg.streaming}
+                mode={msg.mode_used}
+                model={msg.model_used}
+                streamStartedAt={msg.streamStartedAt}
+                sources={msg.sources}
+                isSearching={msg.streaming && isSearching}
+                imageUrl={msg.imageUrl}
+                onRegenerate={isLastAssistant && !loading ? handleRegenerate : undefined}
+              />
+            );
+          })}
           <div ref={messagesEndRef} />
         </div>
 
