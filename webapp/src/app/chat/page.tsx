@@ -108,7 +108,7 @@ export default function ChatPage() {
   const alfredLoopRef = useRef(false);
 
   const { settings: voiceSettings, setSettings: setVoiceSettings } = useVoiceSettings();
-  const { isSpeaking, speak: kokoroSpeak, cancel: kokoroCancel } = useKokoroTTS();
+  const { isSpeaking, createStreamingSpeaker, cancel: kokoroCancel } = useKokoroTTS();
 
   // ── Transcript handler ───────────────────────────────────────────────────
   const onFinalTranscript = useCallback(
@@ -430,7 +430,12 @@ export default function ChatPage() {
     try {
       if (alfredMode) kokoroCancel();
 
-      const finalContent = await sendMessageStream(
+      // Start streaming TTS — sentences play as soon as they arrive from the LLM
+      const speaker = alfredMode && token
+        ? createStreamingSpeaker(token, voiceSettings.voiceId, voiceSettings.speed)
+        : null;
+
+      await sendMessageStream(
         token,
         userMessage,
         alfredMode ? "instant" : mode,
@@ -438,6 +443,7 @@ export default function ChatPage() {
         alfredMode,
         (content) => {
           setMessages((prev) => prev.map((m) => m.streaming ? { ...m, content } : m));
+          speaker?.feed(content);
         },
         (sid) => { setActiveSessionId(sid); },
         controller.signal,
@@ -453,9 +459,10 @@ export default function ChatPage() {
       setIsSearching(false);
       setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m));
 
-      // Alfred mode: speak the response then the auto-restart effect re-opens the mic
-      if (alfredMode && finalContent.trim() && token) {
-        await kokoroSpeak(token, finalContent, voiceSettings.voiceId, voiceSettings.speed);
+      // Flush final partial sentence and wait for all playback to finish
+      if (speaker) {
+        speaker.finish();
+        await speaker.done;
       }
 
       loadSessions();

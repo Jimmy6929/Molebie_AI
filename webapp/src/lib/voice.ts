@@ -367,7 +367,7 @@ export function useSpeechRecognition(options?: {
 }
 
 // ---------------------------------------------------------------------------
-// Text-to-Speech via Kokoro TTS — sentence-level parallel fetching
+// Text-to-Speech via Kokoro TTS
 // ---------------------------------------------------------------------------
 
 function playAudioBlob(blob: Blob): Promise<void> {
@@ -384,10 +384,139 @@ function playAudioBlob(blob: Blob): Promise<void> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// StreamingSpeaker — starts TTS during LLM streaming, not after
+// ---------------------------------------------------------------------------
+
+export interface StreamingSpeaker {
+  /** Call on every SSE chunk with the accumulated content so far. */
+  feed(accumulatedContent: string): void;
+  /** Call when the SSE stream ends — flushes the last partial sentence. */
+  finish(): void;
+  /** Abort all pending TTS and stop playback. */
+  cancel(): void;
+  /** Resolves when all playback is complete (or cancelled). */
+  done: Promise<void>;
+}
+
+function createStreamingSpeakerImpl(
+  token: string,
+  voice: string,
+  speed: number,
+  setIsSpeaking: (v: boolean) => void,
+): StreamingSpeaker {
+  // ── Sentence queue with resolve-based signaling ──────────────────────
+  const queue: string[] = [];
+  let notifyResolve: (() => void) | null = null;
+  let cancelled = false;
+  let finished = false;
+
+  function enqueue(sentence: string) {
+    queue.push(sentence);
+    if (notifyResolve) { notifyResolve(); notifyResolve = null; }
+  }
+
+  function waitForItem(): Promise<void> {
+    if (queue.length > 0 || finished || cancelled) return Promise.resolve();
+    return new Promise<void>((r) => { notifyResolve = r; });
+  }
+
+  // ── Sentence detection state ─────────────────────────────────────────
+  let processedLength = 0;
+  let uncommitted = "";
+
+  function feed(accumulatedContent: string) {
+    if (cancelled || finished) return;
+
+    const cleaned = cleanSpeechText(accumulatedContent);
+    if (cleaned.length <= processedLength) return;
+
+    const newText = cleaned.slice(processedLength);
+    processedLength = cleaned.length;
+    uncommitted += newText;
+
+    // Split on sentence-ending punctuation followed by whitespace
+    const segments = uncommitted.split(/(?<=[.!?])\s+/);
+    if (segments.length > 1) {
+      // All but last segment are complete sentences
+      for (let i = 0; i < segments.length - 1; i++) {
+        const s = segments[i].trim();
+        if (s.length > 2) enqueue(s);
+      }
+      uncommitted = segments[segments.length - 1];
+    }
+  }
+
+  function finish() {
+    if (cancelled || finished) return;
+    finished = true;
+    // Flush remaining text as final sentence
+    const remaining = uncommitted.trim();
+    if (remaining.length > 2) enqueue(remaining);
+    uncommitted = "";
+    // Wake consumer if waiting
+    if (notifyResolve) { notifyResolve(); notifyResolve = null; }
+  }
+
+  function cancel() {
+    cancelled = true;
+    finished = true;
+    if (notifyResolve) { notifyResolve(); notifyResolve = null; }
+  }
+
+  // ── Playback loop with one-ahead prefetch ────────────────────────────
+  const done = (async () => {
+    let prefetch: Promise<Blob | null> | null = null;
+    let started = false;
+
+    while (true) {
+      if (cancelled) break;
+
+      let blob: Blob | null;
+
+      if (prefetch) {
+        // Use the audio we already started fetching
+        blob = await prefetch;
+        prefetch = null;
+      } else {
+        // Wait for a sentence to arrive
+        await waitForItem();
+        if (cancelled) break;
+        if (queue.length === 0 && finished) break;
+        if (queue.length === 0) continue;
+
+        const sentence = queue.shift()!;
+        blob = await fetchTTSAudio(token, sentence, voice, speed).catch(() => null);
+      }
+
+      if (!blob || cancelled) break;
+
+      // Prefetch next sentence while current one plays
+      if (queue.length > 0) {
+        const next = queue.shift()!;
+        prefetch = fetchTTSAudio(token, next, voice, speed).catch(() => null);
+      }
+
+      if (!started) { setIsSpeaking(true); started = true; }
+      await playAudioBlob(blob);
+    }
+
+    setIsSpeaking(false);
+  })();
+
+  return { feed, finish, cancel, done };
+}
+
+// ---------------------------------------------------------------------------
+// Hook: useKokoroTTS
+// ---------------------------------------------------------------------------
+
 export function useKokoroTTS() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const cancelledRef = useRef(false);
+  const activeStreamCancelRef = useRef<(() => void) | null>(null);
 
+  // Legacy: speak a complete text (non-streaming, sentence-parallel)
   const speak = useCallback(
     async (
       token: string,
@@ -405,8 +534,6 @@ export function useKokoroTTS() {
         const sentences = splitSentences(clean);
         if (sentences.length === 0) return;
 
-        // Fire all TTS requests in parallel — start playing first sentence
-        // while the rest are still generating
         const audioPromises = sentences.map((s) =>
           fetchTTSAudio(token, s, voice, speed).catch(() => null)
         );
@@ -426,10 +553,35 @@ export function useKokoroTTS() {
     []
   );
 
+  // Streaming: start TTS during LLM generation
+  const createStreamingSpeaker = useCallback(
+    (token: string, voice: string = "bm_george", speed: number = 1.0): StreamingSpeaker => {
+      // Cancel any previous streaming speaker
+      activeStreamCancelRef.current?.();
+
+      const speaker = createStreamingSpeakerImpl(token, voice, speed, setIsSpeaking);
+      activeStreamCancelRef.current = speaker.cancel;
+
+      // Clear ref when playback finishes naturally
+      speaker.done.then(() => {
+        if (activeStreamCancelRef.current === speaker.cancel) {
+          activeStreamCancelRef.current = null;
+        }
+      });
+
+      return speaker;
+    },
+    []
+  );
+
   const cancel = useCallback(() => {
+    // Cancel legacy speak
     cancelledRef.current = true;
+    // Cancel streaming speaker
+    activeStreamCancelRef.current?.();
+    activeStreamCancelRef.current = null;
     setIsSpeaking(false);
   }, []);
 
-  return { isSpeaking, speak, cancel };
+  return { isSpeaking, speak, createStreamingSpeaker, cancel };
 }
