@@ -1,7 +1,7 @@
 # Local AI Assistant - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose
+.PHONY: help dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose
 
 # Default target
 help:
@@ -24,6 +24,7 @@ help:
 	@echo "  make mlx-install      Install mlx-lm on GPU machine"
 	@echo "  make mlx-vlm-install  Install mlx-vlm on GPU machine"
 	@echo "  make mlx-thinking     Start MLX-VLM thinking server (Qwen3.5-9B, :8080)"
+	@echo "  make mlx-instant      Start MLX-VLM instant server (:8081)"
 	@echo ""
 	@echo "  make clean          Remove build artifacts and caches"
 	@echo "  make stop           Stop all running services"
@@ -108,6 +109,10 @@ mlx-vlm-install:
 mlx-thinking:
 	@echo "🧠 Starting MLX-VLM thinking server (Qwen3.5-9B) on :8080..."
 	python3 scripts/mlx_server.py --host 0.0.0.0 --port 8080
+
+mlx-instant:
+	@echo "⚡ Starting MLX-VLM instant server on :8081..."
+	python3 scripts/mlx_server.py --host 0.0.0.0 --port 8081
 
 # ──────────────────────────────────────────────────────────────
 # TESTING

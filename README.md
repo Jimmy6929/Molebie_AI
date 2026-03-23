@@ -263,7 +263,8 @@ You need to start **5–7 services across 2 machines**. Order matters — start 
 **Terminal 1 — Thinking LLM (required)**
 
 ```bash
-mlx_vlm.server --host 0.0.0.0 --port 8080 \
+cd ~/Documents/App-project/Local_AI_Project
+python3 scripts/mlx_server.py --host 0.0.0.0 --port 8080 \
   --model mlx-community/Qwen3.5-9B-4bit \
   --enable-thinking \
   --thinking-budget 2048 \
@@ -274,8 +275,12 @@ mlx_vlm.server --host 0.0.0.0 --port 8080 \
 **Terminal 2 — Instant LLM (optional, for voice/instant mode)**
 
 ```bash
-mlx_lm.server --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
+cd ~/Documents/App-project/Local_AI_Project
+python3 scripts/mlx_server.py --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
 ```
+
+> **Note:** Always use `scripts/mlx_server.py` instead of `mlx_vlm.server` / `mlx_lm.server` directly.
+> The wrapper suppresses asyncio socket warnings that flood the terminal when a user stops generation mid-stream.
 
 ### Machine 2: MacBook Pro 2016 (Home Server) — 4–5 terminals
 
@@ -626,8 +631,10 @@ pip install -U mlx-lm               # Qwen 3.5 4B — text-only, lighter
 #### Starting the LLM Servers (Every Session)
 
 ```bash
+cd ~/Documents/App-project/Local_AI_Project
+
 # Terminal 1 — Thinking tier (Qwen 3.5 9B)
-mlx_vlm.server --host 0.0.0.0 --port 8080 \
+python3 scripts/mlx_server.py --host 0.0.0.0 --port 8080 \
   --model mlx-community/Qwen3.5-9B-4bit \
   --enable-thinking \
   --thinking-budget 2048 \
@@ -635,7 +642,7 @@ mlx_vlm.server --host 0.0.0.0 --port 8080 \
   --thinking-end-token "</think>"
 
 # Terminal 2 — Instant tier (Qwen 3.5 4B) [optional]
-mlx_lm.server --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
+python3 scripts/mlx_server.py --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
 ```
 
 | Flag | Purpose |
@@ -725,8 +732,10 @@ pip install -U "mlx-vlm[torch]"          # Qwen 3.5 9B — needs PyTorch
 pip install -U mlx-lm                     # Qwen 3.5 4B — text-only
 
 # ── Start LLM Servers (every session) ──────────────
+cd ~/Documents/App-project/Local_AI_Project
+
 # Terminal 1 — Thinking LLM
-mlx_vlm.server --host 0.0.0.0 --port 8080 \
+python3 scripts/mlx_server.py --host 0.0.0.0 --port 8080 \
   --model mlx-community/Qwen3.5-9B-4bit \
   --enable-thinking \
   --thinking-budget 2048 \
@@ -734,7 +743,7 @@ mlx_vlm.server --host 0.0.0.0 --port 8080 \
   --thinking-end-token "</think>"
 
 # Terminal 2 — Instant LLM (optional)
-mlx_lm.server --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
+python3 scripts/mlx_server.py --host 0.0.0.0 --port 8081 --model mlx-community/Qwen3.5-4B-Instruct-4bit
 
 # ── Health Checks ──────────────────────────────────
 curl http://localhost:8080/health         # Thinking LLM status
@@ -804,6 +813,7 @@ make dev-webapp          # Start webapp
 make dev-supabase        # Start supabase
 make dev-all             # Start all via tmux
 make mlx-thinking        # Start thinking LLM on GPU machine
+make mlx-instant         # Start instant LLM on GPU machine
 make test                # Run all tests
 make lint                # Lint gateway
 make format              # Format gateway code
