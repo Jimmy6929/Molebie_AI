@@ -19,6 +19,12 @@ class InferenceBackend(str, Enum):
     OPENAI_COMPATIBLE = "openai-compatible"
 
 
+class ModelProfile(str, Enum):
+    LIGHT = "light"
+    BALANCED = "balanced"
+    CUSTOM = "custom"
+
+
 VALID_FEATURES = ("voice", "search", "rag")
 
 FEATURE_DESCRIPTIONS = {
@@ -31,7 +37,7 @@ FEATURE_DESCRIPTIONS = {
 class MolebieConfig(BaseModel):
     """Persistent configuration saved by the install wizard."""
 
-    version: int = Field(default=1, description="Schema version for future migrations")
+    version: int = Field(default=2, description="Schema version for future migrations")
 
     # Setup type
     setup_type: SetupType = SetupType.SINGLE
@@ -52,6 +58,9 @@ class MolebieConfig(BaseModel):
     instant_model: Optional[str] = Field(
         default=None, description="Override instant tier model name"
     )
+
+    # Model profile
+    model_profile: ModelProfile = ModelProfile.BALANCED
 
     # Features
     voice_enabled: bool = False

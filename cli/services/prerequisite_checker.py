@@ -105,6 +105,55 @@ def check_ffmpeg() -> CheckResult:
     return CheckResult("ffmpeg", True, "Installed")
 
 
+def check_memory(total_gb: float, min_gb: float = 8.0) -> CheckResult:
+    if total_gb <= 0:
+        return CheckResult("Memory", True, "Could not detect", is_warning=True)
+    if total_gb < min_gb:
+        return CheckResult(
+            "Memory", False, f"{total_gb} GB (need {min_gb}+ GB)",
+            fix_hint="Close other applications or consider a lighter model profile",
+            is_warning=True,
+        )
+    return CheckResult("Memory", True, f"{total_gb} GB")
+
+
+def check_disk_space(available_gb: float, min_gb: float = 10.0) -> CheckResult:
+    if available_gb <= 0:
+        return CheckResult("Disk space", True, "Could not detect", is_warning=True)
+    if available_gb < min_gb:
+        return CheckResult(
+            "Disk space", False, f"{available_gb} GB free (need {min_gb}+ GB)",
+            fix_hint="Free up disk space before installing models",
+            is_warning=True,
+        )
+    return CheckResult("Disk space", True, f"{available_gb} GB free")
+
+
+def check_system_early() -> tuple[list[CheckResult], "SystemInfo"]:
+    """Run lightweight system checks BEFORE the wizard. Returns (results, system_info)."""
+    from cli.services.system_info import SystemInfo, get_system_info
+
+    sys_info = get_system_info()
+    results: list[CheckResult] = []
+
+    # OS
+    os_display = {"darwin": "macOS", "linux": "Linux", "windows": "Windows"}.get(
+        sys_info.os, sys_info.os
+    )
+    results.append(CheckResult("OS", True, f"{os_display} ({sys_info.os})"))
+
+    # Chip / architecture
+    results.append(CheckResult("Chip", True, f"{sys_info.chip_name} ({sys_info.arch})"))
+
+    # Memory
+    results.append(check_memory(sys_info.total_memory_gb))
+
+    # Disk space
+    results.append(check_disk_space(sys_info.available_disk_gb))
+
+    return results, sys_info
+
+
 def check_all(voice_enabled: bool = False) -> list[CheckResult]:
     """Run all prerequisite checks."""
     results = [

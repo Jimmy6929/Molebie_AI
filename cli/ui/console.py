@@ -47,6 +47,13 @@ def print_info(msg: str) -> None:
     console.print(f"  [info]→[/info] {msg}")
 
 
+def print_step_header(step: int, total: int, title: str) -> None:
+    """Print a visually distinct install phase header."""
+    console.print()
+    console.rule(f"[heading]Step {step}/{total}: {title}[/heading]", style="blue")
+    console.print()
+
+
 def make_status_table() -> Table:
     """Create a reusable service-status table."""
     table = Table(show_header=True, header_style="bold", expand=False)
