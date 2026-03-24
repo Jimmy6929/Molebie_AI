@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     app_name: str = "AI Assistant Gateway"
     debug: bool = True
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    # ── Assistant Identity ──────────────────────────────────────
+    assistant_name: str = "Assistant"
+    prompt_dir: str = "prompts"  # relative to gateway/ directory
+
+    # ── Inference API Key (for commercial backends like OpenAI) ──
+    inference_api_key: str = ""
     
     # Supabase Configuration
     supabase_url: str = "http://127.0.0.1:54321"

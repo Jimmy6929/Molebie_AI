@@ -47,6 +47,18 @@ class InferenceService:
         self.fallback_to_instant = settings.routing_thinking_fallback_to_instant
         self.cold_start_timeout = settings.routing_cold_start_timeout
 
+        # API key for commercial backends (OpenAI, etc.)
+        self.api_key = settings.inference_api_key or ""
+
+    # ==================== Shared Helpers ====================
+
+    def _get_headers(self) -> dict:
+        """Build HTTP headers, including Authorization if an API key is set."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
     # ==================== Mode Config Helpers ====================
 
     def _get_endpoint(self, mode: str) -> Optional[str]:
@@ -315,7 +327,7 @@ class InferenceService:
                 response = await client.post(
                     f"{endpoint}{api_prefix}/chat/completions",
                     json=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=self._get_headers(),
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -437,7 +449,7 @@ class InferenceService:
                     "POST",
                     f"{endpoint}{prefix}/chat/completions",
                     json=stream_payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=self._get_headers(),
                 ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
@@ -479,7 +491,7 @@ class InferenceService:
                                 "stream": True,
                                 "enable_thinking": self._get_enable_thinking("instant"),
                             },
-                            headers={"Content-Type": "application/json"},
+                            headers=self._get_headers(),
                         ) as response:
                             response.raise_for_status()
                             async for line in response.aiter_lines():
