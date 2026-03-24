@@ -48,6 +48,9 @@ logs/
 tasks/
 *.plan.md
 
+# CLI local state
+.molebie/
+
 # AI tools (private)
 .claude/
 .cursor/
