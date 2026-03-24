@@ -30,6 +30,7 @@ build/
 .vscode/
 *.swp
 *.swo
+*.code-workspace
 
 # Supabase local
 supabase/.branches/
