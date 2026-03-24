@@ -25,42 +25,77 @@ A self-hosted AI assistant with voice conversation, vision, RAG document memory,
 | Supabase CLI | `brew install supabase/tap/supabase` |
 | ffmpeg (optional) | `brew install ffmpeg` (for voice features) |
 
-### Setup
+### Setup with the CLI (Recommended)
+
+The `molebie-ai` CLI guides you through installation, configures your backend, downloads models, and starts services — all from one command.
 
 ```bash
 git clone <your-repo-url>
 cd molebie-ai
-bash setup.sh
+pip install -e .
+molebie-ai install
 ```
 
-`setup.sh` checks prerequisites, installs dependencies, starts Supabase, and generates `.env.local` with the correct keys.
+The installer will:
+1. **Check your system** — OS, chip, RAM, disk space
+2. **Detect the best backend** — recommends MLX on Apple Silicon, Ollama elsewhere
+3. **Let you choose a model profile** — Light (8+ GB RAM) or Balanced (16+ GB RAM)
+4. **Install the backend** — installs `mlx-vlm` and downloads models, or pulls Ollama models
+5. **Configure features** — web search (SearXNG), RAG document memory, voice
+6. **Set up services** — starts Docker containers, Supabase, and generates all config files
+7. **Offer to start** — launches everything with one confirmation
 
-### Start an Inference Backend
-
-Pick one:
-
-| Backend | Command | Notes |
-|---------|---------|-------|
-| **MLX** (Apple Silicon) | `make mlx-thinking` | Best for Mac. First run downloads ~5GB model |
-| **Ollama** | `ollama serve` | Easiest cross-platform. Set `INFERENCE_THINKING_URL=http://localhost:11434/v1` |
-| **vLLM** | `vllm serve <model>` | Production GPU servers |
-| **llama.cpp** | `llama-server -m <model>` | Lightweight, any hardware |
-| **OpenAI API** | Set `INFERENCE_API_KEY` in `.env.local` | Cloud fallback |
-
-### Start Services
+After install, start the system any time with:
 
 ```bash
-# Terminal 1 — Gateway API
-make dev-gateway
-
-# Terminal 2 — Web App
-make dev-webapp
-
-# Optional — Web search + TTS
-docker compose up -d
+molebie-ai run
 ```
 
 Open **http://localhost:3000**, create an account, and start chatting.
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `molebie-ai install` | Interactive setup wizard — installs backend, downloads models, configures everything |
+| `molebie-ai run` | Start all configured services (Supabase, Gateway, Webapp, inference) |
+| `molebie-ai doctor` | Diagnose environment problems — checks dependencies, config, and service health |
+| `molebie-ai status` | Show current configuration and which services are running |
+| `molebie-ai config show` | Display saved configuration (JSON) |
+| `molebie-ai feature list` | Show optional features and their status |
+| `molebie-ai feature add voice` | Enable a feature (also: `search`, `rag`) |
+| `molebie-ai feature remove voice` | Disable a feature |
+
+### Alternative: Manual Setup
+
+If you prefer to set up manually or need finer control:
+
+```bash
+bash setup.sh
+```
+
+`setup.sh` checks prerequisites, installs dependencies, starts Supabase, and generates `.env.local`. You then start services individually:
+
+```bash
+# Start an inference backend (pick one)
+make mlx-thinking          # MLX on Apple Silicon (downloads ~5GB model)
+# ollama serve             # Ollama (cross-platform)
+
+# Start services in separate terminals
+make dev-gateway           # Gateway API (:8000)
+make dev-webapp            # Web App (:3000)
+docker compose up -d       # Optional: web search + TTS
+```
+
+### Supported Inference Backends
+
+| Backend | Command | Notes |
+|---------|---------|-------|
+| **MLX** (Apple Silicon) | `make mlx-thinking` | Best for Mac. Auto-installed by CLI |
+| **Ollama** | `ollama serve` | Easiest cross-platform. Auto-configured by CLI |
+| **vLLM** | `vllm serve <model>` | Production GPU servers |
+| **llama.cpp** | `llama-server -m <model>` | Lightweight, any hardware |
+| **OpenAI API** | Set `INFERENCE_API_KEY` in `.env.local` | Cloud fallback |
 
 ## System Requirements
 
@@ -121,10 +156,18 @@ Open **http://localhost:3000**, create an account, and start chatting.
 
 ```
 molebie-ai/
+├── pyproject.toml                   # CLI package (pip install -e .)
 ├── .env.example                     # Environment config template
 ├── Makefile                         # Development commands
-├── setup.sh                         # First-time setup script
+├── setup.sh                         # Alternative manual setup script
 ├── docker-compose.yml               # SearXNG + Kokoro TTS
+│
+├── cli/                             # CLI (Python + Typer)
+│   ├── main.py                      # Typer app entry point
+│   ├── commands/                    # install, run, doctor, status, config, feature
+│   ├── services/                    # Backend setup, feature setup, system detection
+│   ├── models/                      # Config schema (Pydantic)
+│   └── ui/                          # Console output + interactive prompts (Rich)
 │
 ├── gateway/                         # FastAPI Backend (Python)
 │   ├── app/
@@ -193,13 +236,20 @@ See `.env.example` for the complete list with descriptions.
 
 ### Optional Features
 
-| Feature | Enable/Disable | Setup |
-|---------|---------------|-------|
-| Web Search | `WEB_SEARCH_ENABLED=true/false` | `docker compose up -d` (starts SearXNG) |
-| Text-to-Speech | Runs if Kokoro is available | `docker compose up -d` (starts Kokoro TTS) |
-| RAG Documents | `RAG_ENABLED=true/false` | Embedding model auto-downloads on first use |
-| Voice Conversation | Always available | Optional: `brew install ffmpeg` for STT |
-| Image Vision | Always available | Requires a vision-capable model |
+Toggle features via the CLI or environment variables:
+
+```bash
+molebie-ai feature list          # See what's enabled
+molebie-ai feature add voice     # Enable voice
+molebie-ai feature remove search # Disable search
+```
+
+| Feature | CLI Toggle | Env Variable | Setup |
+|---------|-----------|-------------|-------|
+| Web Search | `molebie-ai feature add search` | `WEB_SEARCH_ENABLED` | SearXNG Docker container |
+| Text-to-Speech | `molebie-ai feature add voice` | — | Kokoro TTS Docker container + ffmpeg |
+| RAG Documents | `molebie-ai feature add rag` | `RAG_ENABLED` | Embedding model auto-downloads on first use |
+| Image Vision | Always available | — | Requires a vision-capable model |
 
 ### Custom Wake Words
 
@@ -237,7 +287,26 @@ Browser → Webapp (:3000) → Gateway (:8000) ──┬──→ Thinking LLM (
               └──→ Supabase (:54321)                               ← Server
 ```
 
-Run `bash setup.sh` and choose "Two machines" — it configures everything automatically. Or set IPs manually in `.env.local`.
+Run `molebie-ai install` and choose "Two machines" when prompted. The installer will:
+- Ask for your GPU machine IP and server IP
+- Configure all endpoints in `.env.local` automatically
+- Update Supabase auth redirects for cross-machine access
+- Print exact commands to run on the GPU machine
+
+On the **server machine** (runs gateway, webapp, database):
+```bash
+molebie-ai install    # Choose "Two machines", enter IPs
+molebie-ai run        # Starts Supabase, Gateway, Webapp, Docker services
+```
+
+On the **GPU machine** (runs inference only):
+```bash
+python -m pip install -U mlx-vlm
+make mlx-thinking     # Port 8080
+make mlx-instant      # Port 8081 (optional)
+```
+
+The CLI verifies the remote GPU is reachable before starting local services.
 
 ## API Reference
 
@@ -311,16 +380,23 @@ All tables have Row-Level Security enabled — users can only access their own d
 ### Commands
 
 ```bash
-make setup          # First-time setup
-make dev-gateway    # Start Gateway API (:8000)
-make dev-webapp     # Start Web App (:3000)
-make dev-all        # Start all via tmux
-make test           # Run tests
-make lint           # Lint gateway code
-make format         # Format gateway code
-make db-reset       # Reset database
-make clean          # Remove build artifacts
-make stop           # Stop all services
+# CLI (recommended)
+molebie-ai install       # Guided setup wizard
+molebie-ai run           # Start all services
+molebie-ai doctor        # Diagnose issues
+molebie-ai status        # Check what's running
+
+# Make targets (for individual service control)
+make dev-gateway         # Start Gateway API (:8000)
+make dev-webapp          # Start Web App (:3000)
+make dev-all             # Start all via tmux
+make test                # Run tests
+make lint                # Lint gateway code
+make format              # Format gateway code
+make db-reset            # Reset database
+make clean               # Remove build artifacts
+make stop                # Stop all services
+make cli                 # Install the CLI (pip install -e .)
 ```
 
 ### Testing
@@ -334,13 +410,17 @@ cd webapp && npx tsc --noEmit  # TypeScript check
 
 ### Troubleshooting
 
+Run `molebie-ai doctor` for a full diagnostic — it checks dependencies, config files, and service health with suggested fixes.
+
 | Problem | Solution |
 |---------|----------|
+| Something seems wrong | `molebie-ai doctor` — checks everything and suggests fixes |
 | `uvicorn: command not found` | Use `python3 -m uvicorn` (Makefile does this) |
 | Address already in use | `lsof -i :<port>` then `kill` the process |
 | Supabase 401 errors | Run `supabase status` and check keys match `.env.local` |
 | Voice transcription fails | `brew install ffmpeg` |
 | OMP error on macOS | `make dev-gateway` sets `KMP_DUPLICATE_LIB_OK=TRUE` automatically |
+| Config looks wrong | `molebie-ai config show` to inspect, `molebie-ai install` to reconfigure |
 
 ## Tech Stack
 
