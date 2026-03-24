@@ -150,7 +150,7 @@ export default function VoiceSettings({
 
   return (
     <div className="absolute bottom-24 right-6 z-30 w-80 glass rounded-2xl p-4 border border-white/[0.08] space-y-4">
-      <div className="text-xs font-medium text-[#ddd]">Alfred Voice Settings</div>
+      <div className="text-xs font-medium text-[#ddd]">Chat Voice Settings</div>
 
       {/* Voice select */}
       <div>
@@ -190,7 +190,7 @@ export default function VoiceSettings({
           className="accent-[#33ccff]"
         />
         <div>
-          <div className="text-[11px] text-[#ccc]">&quot;Hey Alfred&quot; wake word</div>
+          <div className="text-[11px] text-[#ccc]">&quot;Hey Chat&quot; wake word</div>
           <div className="text-[10px] text-[#666]">Always listen, only respond to trigger phrase</div>
         </div>
       </label>

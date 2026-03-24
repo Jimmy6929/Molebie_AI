@@ -1,4 +1,4 @@
-# Local AI Assistant - Makefile
+# Molebie AI - Makefile
 # Run `make help` to see available commands
 
 .PHONY: help setup dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose
@@ -6,7 +6,7 @@
 # Default target
 help:
 	@echo ""
-	@echo "Local AI Assistant - Development Commands"
+	@echo "Molebie AI - Development Commands"
 	@echo "=========================================="
 	@echo ""
 	@echo "  make setup          First-time setup (checks prereqs, installs deps, configures Supabase)"
@@ -31,7 +31,7 @@ help:
 	@echo "  make clean          Remove build artifacts and caches"
 	@echo "  make stop           Stop all running services"
 	@echo ""
-	@echo "  make autopull-install    Install auto-pull service (MacBook Pro 2016)"
+	@echo "  make autopull-install    Install auto-pull service (home server auto-update)"
 	@echo "  make autopull-uninstall  Remove auto-pull service"
 	@echo "  make autopull-status     Check auto-pull service status"
 	@echo "  make autopull-logs       Tail auto-pull log file"
@@ -191,20 +191,20 @@ autopull-install:
 	@echo "Installing auto-pull service..."
 	chmod +x scripts/auto-pull.sh
 	mkdir -p logs
-	-launchctl unload ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist 2>/dev/null
+	-launchctl unload ~/Library/LaunchAgents/com.molebieai.autopull.plist 2>/dev/null
 	sed -e 's|__REPO_DIR__|$(CURDIR)|g' -e 's|__HOME_DIR__|$(HOME)|g' \
-		scripts/com.jimmy.localai.autopull.plist > ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist
-	launchctl load ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist
+		scripts/com.molebieai.autopull.plist > ~/Library/LaunchAgents/com.molebieai.autopull.plist
+	launchctl load ~/Library/LaunchAgents/com.molebieai.autopull.plist
 	@echo "✅ Auto-pull service installed and running (polls every 60s)"
 
 autopull-uninstall:
 	@echo "Removing auto-pull service..."
-	launchctl unload ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist 2>/dev/null || true
-	rm -f ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist
+	launchctl unload ~/Library/LaunchAgents/com.molebieai.autopull.plist 2>/dev/null || true
+	rm -f ~/Library/LaunchAgents/com.molebieai.autopull.plist
 	@echo "✅ Auto-pull service removed"
 
 autopull-status:
-	@launchctl list | grep localai.autopull || echo "Auto-pull service is not running"
+	@launchctl list | grep molebieai.autopull || echo "Auto-pull service is not running"
 	@echo "--- Last heartbeat ---"
 	@grep "HEARTBEAT" logs/auto-pull.log 2>/dev/null | tail -1 || echo "No heartbeat found"
 	@echo "--- Recent log entries ---"
@@ -217,7 +217,7 @@ autopull-diagnose:
 	@echo "=== Auto-Pull Diagnostics ==="
 	@echo ""
 	@echo "1. Service loaded?"
-	@launchctl list | grep localai.autopull && echo "   OK" || echo "   FAIL: service not loaded — run: make autopull-install"
+	@launchctl list | grep molebieai.autopull && echo "   OK" || echo "   FAIL: service not loaded — run: make autopull-install"
 	@echo ""
 	@echo "2. Script executable?"
 	@test -x scripts/auto-pull.sh && echo "   OK" || echo "   FAIL: run: chmod +x scripts/auto-pull.sh"
@@ -226,7 +226,7 @@ autopull-diagnose:
 	@test -z "$$(git status --porcelain)" && echo "   OK: working tree clean" || echo "   WARN: uncommitted changes — auto-pull will skip"
 	@echo ""
 	@echo "4. Plist installed?"
-	@test -f ~/Library/LaunchAgents/com.jimmy.localai.autopull.plist && echo "   OK" || echo "   FAIL: plist not in ~/Library/LaunchAgents/ — run: make autopull-install"
+	@test -f ~/Library/LaunchAgents/com.molebieai.autopull.plist && echo "   OK" || echo "   FAIL: plist not in ~/Library/LaunchAgents/ — run: make autopull-install"
 	@echo ""
 	@echo "5. Git fetch works?"
 	@git fetch --dry-run origin main 2>&1 && echo "   OK" || echo "   FAIL: credentials may need refreshing — run: git fetch origin main"

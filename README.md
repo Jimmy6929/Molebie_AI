@@ -10,7 +10,7 @@ Local AI Assistant is a production-ready chat application that provides a ChatGP
 - **SSE Streaming**: Real-time token-by-token response streaming with thinking block support
 - **Image Understanding (Vision)**: Attach images via file picker, paste, or drag-and-drop — the AI analyzes them using Qwen 3.5's built-in vision encoder
 - **RAG Document Memory ("Brain")**: Upload documents (PDF, DOCX, TXT, MD) for persistent knowledge — hybrid vector + BM25 search, cross-encoder reranking, contextual retrieval
-- **Voice Conversation ("Alfred")**: Wake-word activation, speech-to-text (Whisper), text-to-speech (Kokoro), and speaker verification
+- **Voice Conversation ("Chat")**: Wake-word activation, speech-to-text (Whisper), text-to-speech (Kokoro), and speaker verification
 - **Web Search**: Self-hosted SearXNG integration with LLM-powered intent classification — the AI decides when to search, fetches full-page content, and cites sources
 - **Full Data Ownership**: All conversations, documents, and images stored in your Supabase instance
 - **Multi-User Ready**: Row-level security (RLS) enabled from day one
@@ -24,7 +24,7 @@ Local AI Assistant is a production-ready chat application that provides a ChatGP
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │              Web App (Next.js 16)                       │   │
 │  │  - Chat UI (Streaming)    - Deep Think Toggle           │   │
-│  │  - Session History        - Voice / Alfred Mode         │   │
+│  │  - Session History        - Voice / Chat Mode         │   │
 │  │  - Image Upload/Paste     - Document Brain (RAG)        │   │
 │  │  - Auth via Supabase      - Web Search Sources          │   │
 │  └─────────────────────────────────────────────────────────┘   │
@@ -111,7 +111,7 @@ Local_AI_Project/
 │   │   │   │   ├── page.tsx          # Main chat interface (streaming, modes, voice)
 │   │   │   │   ├── sidebar.tsx       # Session sidebar (list, rename, delete)
 │   │   │   │   ├── MessageBubble.tsx # Message rendering (markdown, think blocks, sources)
-│   │   │   │   └── VoiceSettings.tsx # Alfred voice panel (voice, speed, enrollment)
+│   │   │   │   └── VoiceSettings.tsx # Chat voice panel (voice, speed, enrollment)
 │   │   │   └── login/
 │   │   │       └── page.tsx          # Login / signup page
 │   │   └── lib/
@@ -157,15 +157,15 @@ Local_AI_Project/
 - Thinking blocks are collapsible in the UI with a "Show reasoning" toggle
 - Fallback: if the thinking tier is down, requests can fall back to instant
 
-### Voice Conversation ("Alfred" Mode)
+### Voice Conversation ("Chat" Mode)
 
 A full voice loop with wake-word activation:
 
 1. **Speech-to-Text**: Browser records audio → `POST /chat/transcribe` → faster-whisper (tiny model, ~75 MB)
 2. **AI Response**: Transcribed text sent to chat → streamed response
 3. **Text-to-Speech**: Response spoken aloud via Kokoro TTS (`POST /chat/tts`)
-4. **Speaker Verification**: Optional MFCC-based voice enrollment (3 samples) — only recognized voices can use Alfred mode
-5. **Wake Word**: Say "Hey Alfred" to start listening
+4. **Speaker Verification**: Optional MFCC-based voice enrollment (3 samples) — only recognized voices can use Chat mode
+5. **Wake Word**: Say "Hey Chat" to start listening
 6. **Silence Detection**: Auto-stops recording after silence
 
 Voice profiles are stored locally at `~/.local-ai/voice-profiles/`.
@@ -811,8 +811,8 @@ brew install ffmpeg                        # Required for audio conversion
 ### Phase 3: Voice & Search ✅
 - [x] Speech-to-text (faster-whisper)
 - [x] Text-to-speech (Kokoro TTS via Docker)
-- [x] Voice conversation mode ("Alfred")
-- [x] Wake word detection ("Hey Alfred")
+- [x] Voice conversation mode ("Chat")
+- [x] Wake word detection ("Hey Chat")
 - [x] Silence detection (auto-stop recording)
 - [x] Speaker verification (MFCC voice enrollment)
 - [x] Web search (SearXNG, self-hosted)

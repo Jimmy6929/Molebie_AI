@@ -314,7 +314,7 @@ class WebSearchService:
             async with httpx.AsyncClient(timeout=self.full_content_timeout) as client:
                 resp = await client.get(
                     url,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; AlfredBot/1.0)"},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; ChatBot/1.0)"},
                     follow_redirects=True,
                 )
                 resp.raise_for_status()

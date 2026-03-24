@@ -56,7 +56,7 @@ export function isStopCommand(text: string): boolean {
   return STOP_PHRASES.includes(normalized);
 }
 
-const WAKE_PHRASES = ["hey alfred", "hello alfred", "hi alfred", "alfred"];
+const WAKE_PHRASES = ["hey chat", "hello chat", "hi chat", "chat"];
 
 export function extractWakeCommand(transcript: string): {
   isWakeWord: boolean;

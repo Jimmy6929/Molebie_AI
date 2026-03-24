@@ -8,8 +8,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Assistant",
-  description: "Local AI Assistant — Private, Fast, Yours",
+  title: "Molebie AI",
+  description: "Molebie AI — Self-Hosted AI Assistant",
 };
 
 export default function RootLayout({

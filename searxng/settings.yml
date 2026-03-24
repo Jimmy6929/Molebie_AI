@@ -1,7 +1,7 @@
 use_default_settings: true
 
 general:
-  instance_name: "Alfred Search"
+  instance_name: "Chat Search"
 
 search:
   safe_search: 0

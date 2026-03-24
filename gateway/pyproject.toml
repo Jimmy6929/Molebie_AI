@@ -1,7 +1,7 @@
 [project]
-name = "local-ai-gateway"
+name = "molebie-ai-gateway"
 version = "0.1.0"
-description = "Gateway API for Local AI Assistant"
+description = "Gateway API for Molebie AI"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "All Rights Reserved"}

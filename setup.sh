@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ══════════════════════════════════════════════════════════════
-# Local AI Assistant — Setup Script
+# Molebie AI — Setup Script
 # ══════════════════════════════════════════════════════════════
 # Checks prerequisites, installs dependencies, starts Supabase,
 # and generates .env.local with the correct keys.
@@ -28,7 +28,7 @@ fail()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
 echo ""
 echo -e "${BOLD}══════════════════════════════════════════════════${NC}"
-echo -e "${BOLD}  Local AI Assistant — Setup${NC}"
+echo -e "${BOLD}  Molebie AI — Setup${NC}"
 echo -e "${BOLD}══════════════════════════════════════════════════${NC}"
 echo ""
 

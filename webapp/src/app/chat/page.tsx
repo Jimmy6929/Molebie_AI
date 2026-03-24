@@ -53,8 +53,8 @@ interface DisplayMessage {
 // Modes
 // ---------------------------------------------------------------------------
 // sttMode       — "Voice" button: mic → transcribe → fill input. No auto-send, no TTS.
-// alfredMode    — "Alfred" button: mic → transcribe → auto-send → TTS → repeat.
-//                 Supports wake word ("Hey Alfred") and speaker verification.
+// chatMode      — "Chat" button: mic → transcribe → auto-send → TTS → repeat.
+//                 Supports wake word ("Hey Chat") and speaker verification.
 // They are mutually exclusive.
 
 export default function ChatPage() {
@@ -71,9 +71,9 @@ export default function ChatPage() {
 
   // ── Mode flags ────────────────────────────────────────────────────────────
   const [sttMode, setSttMode] = useState(false);       // Voice button
-  const [alfredMode, setAlfredMode] = useState(false); // Alfred button
+  const [chatMode, setChatMode] = useState(false); // Chat button
 
-  // ── Alfred sub-settings ──────────────────────────────────────────────────
+  // ── Chat sub-settings ───────────────────────────────────────────────────
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const [speakerVerifyEnabled, setSpeakerVerifyEnabled] = useState(false);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
@@ -105,8 +105,8 @@ export default function ChatPage() {
   const userScrolledUpRef = useRef(false);
   const sendVoiceMessageRef = useRef<(text: string) => void>(() => {});
 
-  // alfredLoopActive: should the Alfred loop keep restarting the mic?
-  const alfredLoopRef = useRef(false);
+  // chatLoopActive: should the Chat loop keep restarting the mic?
+  const chatLoopRef = useRef(false);
 
   const { settings: voiceSettings, setSettings: setVoiceSettings } = useVoiceSettings();
   const { isSpeaking, createStreamingSpeaker, cancel: kokoroCancel } = useKokoroTTS();
@@ -117,15 +117,15 @@ export default function ChatPage() {
       const clean = text.trim();
       if (!clean) return;
 
-      if (alfredMode) {
-        // Stop command — end Alfred mode
+      if (chatMode) {
+        // Stop command — end Chat mode
         if (isStopCommand(clean)) {
-          alfredLoopRef.current = false;
-          setAlfredMode(false);
+          chatLoopRef.current = false;
+          setChatMode(false);
           return;
         }
 
-        // Wake word check (only in Alfred mode)
+        // Wake word check (only in Chat mode)
         if (wakeWordEnabled) {
           const { isWakeWord, command } = extractWakeCommand(clean);
           if (!isWakeWord) return; // silently ignore, loop auto-restarts
@@ -133,11 +133,11 @@ export default function ChatPage() {
             setInput(command);
             sendVoiceMessageRef.current(command);
           }
-          // Just "Hey Alfred" with no command — loop restarts, waits for next utterance
+          // Just "Hey Chat" with no command — loop restarts, waits for next utterance
           return;
         }
 
-        // Normal Alfred mode (no wake word) — auto-send
+        // Normal Chat mode (no wake word) — auto-send
         setInput(clean);
         sendVoiceMessageRef.current(clean);
         return;
@@ -148,7 +148,7 @@ export default function ChatPage() {
         setInput(clean);
       }
     },
-    [alfredMode, sttMode, wakeWordEnabled]
+    [chatMode, sttMode, wakeWordEnabled]
   );
 
   const {
@@ -162,25 +162,25 @@ export default function ChatPage() {
   } = useSpeechRecognition({
     token,
     onFinalTranscript,
-    autoStopOnSilence: alfredMode || sttMode,
-    verifySpeaker: alfredMode && speakerVerifyEnabled,
+    autoStopOnSilence: chatMode || sttMode,
+    verifySpeaker: chatMode && speakerVerifyEnabled,
   });
 
-  // ── Alfred auto-restart loop ─────────────────────────────────────────────
+  // ── Chat auto-restart loop ──────────────────────────────────────────────
   // After each cycle (TTS finishes, transcription done, no active state)
   // auto-restart the mic so the conversation keeps going.
   useEffect(() => {
-    if (!alfredMode) return;
-    if (!alfredLoopRef.current) return;
+    if (!chatMode) return;
+    if (!chatLoopRef.current) return;
     if (isListening || isTranscribing || isSpeaking || loading) return;
 
     const timer = setTimeout(() => {
-      if (alfredLoopRef.current && alfredMode) {
+      if (chatLoopRef.current && chatMode) {
         void startListening();
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [alfredMode, isListening, isTranscribing, isSpeaking, loading, startListening]);
+  }, [chatMode, isListening, isTranscribing, isSpeaking, loading, startListening]);
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -428,26 +428,26 @@ export default function ChatPage() {
         role: "assistant",
         content: "",
         streaming: true,
-        mode_used: alfredMode ? "instant" : mode,
+        mode_used: chatMode ? "instant" : mode,
         streamStartedAt: now,
       },
     ]);
     isStreamingRef.current = true;
 
     try {
-      if (alfredMode) kokoroCancel();
+      if (chatMode) kokoroCancel();
 
       // Start streaming TTS — sentences play as soon as they arrive from the LLM
-      const speaker = alfredMode && token
+      const speaker = chatMode && token
         ? createStreamingSpeaker(token, voiceSettings.voiceId, voiceSettings.speed)
         : null;
 
       await sendMessageStream(
         token,
         userMessage,
-        alfredMode ? "instant" : mode,
+        chatMode ? "instant" : mode,
         activeSessionId || undefined,
-        alfredMode,
+        chatMode,
         (content) => {
           setMessages((prev) => prev.map((m) => m.streaming ? { ...m, content } : m));
           speaker?.feed(content);
@@ -502,7 +502,7 @@ export default function ChatPage() {
   function handleStop() {
     abortControllerRef.current?.abort();
     kokoroCancel();
-    alfredLoopRef.current = false;
+    chatLoopRef.current = false;
   }
 
   // ── Regenerate last response ───────────────────────────────────────────
@@ -603,12 +603,12 @@ export default function ChatPage() {
   // ── Mode toggles ─────────────────────────────────────────────────────────
 
   function enableSttMode() {
-    // Disable Alfred if active
-    if (alfredMode) {
-      alfredLoopRef.current = false;
+    // Disable Chat mode if active
+    if (chatMode) {
+      chatLoopRef.current = false;
       kokoroCancel();
       abortListening();
-      setAlfredMode(false);
+      setChatMode(false);
       setVoiceSettingsOpen(false);
     }
     setSttMode(true);
@@ -619,20 +619,20 @@ export default function ChatPage() {
     setSttMode(false);
   }
 
-  function enableAlfredMode() {
+  function enableChatMode() {
     // Disable STT if active
     if (sttMode) {
       abortListening();
       setSttMode(false);
     }
-    alfredLoopRef.current = true;
-    setAlfredMode(true);
+    chatLoopRef.current = true;
+    setChatMode(true);
     // The auto-restart useEffect will start the mic in 300ms
   }
 
-  function disableAlfredMode() {
-    alfredLoopRef.current = false;
-    setAlfredMode(false);
+  function disableChatMode() {
+    chatLoopRef.current = false;
+    setChatMode(false);
     kokoroCancel();
     abortListening();
     setVoiceSettingsOpen(false);
@@ -640,16 +640,16 @@ export default function ChatPage() {
 
   // Cleanup when modes are turned off
   useEffect(() => {
-    if (!alfredMode) {
-      alfredLoopRef.current = false;
+    if (!chatMode) {
+      chatLoopRef.current = false;
     }
-  }, [alfredMode]);
+  }, [chatMode]);
 
   useEffect(() => {
-    if (!sttMode && !alfredMode) {
+    if (!sttMode && !chatMode) {
       abortListening();
     }
-  }, [sttMode, alfredMode, abortListening]);
+  }, [sttMode, chatMode, abortListening]);
 
   // ── STT mic button ────────────────────────────────────────────────────────
   function handleSttMicClick() {
@@ -658,8 +658,8 @@ export default function ChatPage() {
     void startListening();
   }
 
-  // ── Alfred mic button (manual override) ──────────────────────────────────
-  function handleAlfredMicClick() {
+  // ── Chat mic button (manual override) ───────────────────────────────────
+  function handleChatMicClick() {
     if (!supportsSpeechRecognition || loading || isTranscribing || isSpeaking) return;
     if (isListening) { stopListening(); return; }
     kokoroCancel();
@@ -763,14 +763,14 @@ export default function ChatPage() {
 
   // ── Status hint text ─────────────────────────────────────────────────────
   function statusText(): string {
-    if (alfredMode) {
-      if (isSpeaking) return "Alfred is speaking...";
+    if (chatMode) {
+      if (isSpeaking) return "Chat is speaking...";
       if (isTranscribing) return "Transcribing...";
-      if (isListening) return wakeWordEnabled ? 'Listening for "Hey Alfred"...' : "Listening...";
+      if (isListening) return wakeWordEnabled ? 'Listening for "Hey Chat"...' : "Listening...";
       if (isSearching) return "Searching the web...";
       if (loading) return "Thinking...";
       return wakeWordEnabled
-        ? 'Say "Hey Alfred" to start · "stop" or "goodbye" to end'
+        ? 'Say "Hey Chat" to start · "stop" or "goodbye" to end'
         : 'Listening loop active · say "stop" or "goodbye" to end';
     }
     if (sttMode) {
@@ -789,7 +789,7 @@ export default function ChatPage() {
     );
   }
 
-  const alfredActive = alfredMode && (isListening || isTranscribing || isSpeaking || loading);
+  const chatActive = chatMode && (isListening || isTranscribing || isSpeaking || loading);
 
   return (
     <div className="min-h-screen flex bg-[#0a0a0a]">
@@ -885,7 +885,7 @@ export default function ChatPage() {
         <div className="p-4 pb-5 shrink-0" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
           <div className="max-w-3xl mx-auto">
 
-            {/* Alfred Voice Settings panel */}
+            {/* Chat Voice Settings panel */}
             <VoiceSettings
               open={voiceSettingsOpen}
               token={token}
@@ -897,7 +897,7 @@ export default function ChatPage() {
               onSpeakerVerifyToggle={setSpeakerVerifyEnabled}
               onEnrollStart={() => abortListening()}
               onEnrollEnd={() => {
-                if (alfredMode && alfredLoopRef.current) void startListening();
+                if (chatMode && chatLoopRef.current) void startListening();
               }}
             />
 
@@ -915,7 +915,7 @@ export default function ChatPage() {
                   </button>
                 </div>
                 {documents.length === 0 ? (
-                  <p className="text-[11px] text-[#777]">No documents uploaded. Upload TXT, MD, PDF, or DOCX files to give Alfred long-term memory.</p>
+                  <p className="text-[11px] text-[#777]">No documents uploaded. Upload TXT, MD, PDF, or DOCX files to give Chat long-term memory.</p>
                 ) : (
                   <div className="space-y-1.5">
                     {documents.map((doc) => (
@@ -1129,25 +1129,25 @@ export default function ChatPage() {
                 </button>
               )}
 
-              {/* ── ALFRED BUTTON (full conversation) ──────────────────── */}
+              {/* ── CHAT BUTTON (full conversation) ────────────────────── */}
               <button
-                onClick={() => alfredMode ? disableAlfredMode() : enableAlfredMode()}
+                onClick={() => chatMode ? disableChatMode() : enableChatMode()}
                 className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                  alfredMode
+                  chatMode
                     ? "bg-[#33ccff]/20 text-[#66ddff] border border-[#33ccff]/40"
                     : "text-[#999] border border-white/[0.08] hover:text-[#66ddff] hover:border-white/[0.15]"
                 }`}
-                title="Alfred conversation mode — voice chat with TTS"
+                title="Chat conversation mode — voice chat with TTS"
               >
-                Alfred
+                Chat
               </button>
 
-              {/* Alfred controls — only visible in Alfred mode */}
-              {alfredMode && (
+              {/* Chat controls — only visible in Chat mode */}
+              {chatMode && (
                 <>
                   {/* Manual mic button */}
                   <button
-                    onClick={handleAlfredMicClick}
+                    onClick={handleChatMicClick}
                     disabled={!supportsSpeechRecognition || loading || isTranscribing || isSpeaking}
                     className={`p-2 rounded-xl transition-all shrink-0 ${
                       isListening
@@ -1158,7 +1158,7 @@ export default function ChatPage() {
                             ? "bg-[#33ccff]/15 text-[#66ddff] animate-pulse"
                             : "text-[#66ddff] hover:bg-[#33ccff]/10"
                     } disabled:opacity-30 disabled:cursor-not-allowed`}
-                    title={isSpeaking ? "Alfred is speaking" : isTranscribing ? "Transcribing..." : isListening ? "Stop" : "Speak"}
+                    title={isSpeaking ? "Chat is speaking" : isTranscribing ? "Transcribing..." : isListening ? "Stop" : "Speak"}
                   >
                     {isSpeaking ? (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1181,9 +1181,9 @@ export default function ChatPage() {
                   </button>
 
                   {/* Stop conversation button — only when something is happening */}
-                  {alfredActive && (
+                  {chatActive && (
                     <button
-                      onClick={disableAlfredMode}
+                      onClick={disableChatMode}
                       className="p-2 rounded-xl bg-[#ff4444]/15 text-[#ff6666] hover:bg-[#ff4444]/25 transition-all shrink-0"
                       title="End conversation"
                     >
@@ -1201,7 +1201,7 @@ export default function ChatPage() {
                         ? "bg-[#33ccff]/20 text-[#66ddff]"
                         : "text-[#66ddff] hover:bg-[#33ccff]/10"
                     }`}
-                    title="Alfred settings"
+                    title="Chat settings"
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="3" />
@@ -1218,7 +1218,7 @@ export default function ChatPage() {
                 onChange={(e) => { setInput(e.target.value); resizeTextarea(); }}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder={alfredMode ? "Or type a message..." : "Send a message... (paste or drop an image)"}
+                placeholder={chatMode ? "Or type a message..." : "Send a message... (paste or drop an image)"}
                 rows={1}
                 className="flex-1 bg-transparent text-[#f0f0f0] text-sm resize-none focus:outline-none placeholder-[#888] min-h-[36px] max-h-[200px] py-2 px-1"
                 style={{ overflowY: "hidden" }}
@@ -1244,7 +1244,7 @@ export default function ChatPage() {
             </div>
 
             <div className="text-[10px] text-[#777] mt-2 text-center">{statusText()}</div>
-            {voiceInputError && (sttMode || alfredMode) && (
+            {voiceInputError && (sttMode || chatMode) && (
               <div className="text-[10px] text-[#ff7777] mt-1 text-center">{voiceInputError}</div>
             )}
           </div>
