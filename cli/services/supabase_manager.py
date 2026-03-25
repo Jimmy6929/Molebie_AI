@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from cli.services.config_manager import get_project_root
 from cli.services.env_generator import update_env_key
-from cli.ui.console import print_fail, print_ok, print_warn
+from cli.ui.console import print_fail, print_info, print_ok, print_warn
 
 
 @dataclass
@@ -19,13 +20,42 @@ class SupabaseKeys:
     jwt_secret: str
 
 
+def _stop_supabase_quiet(supabase_dir: Path) -> None:
+    """Stop Supabase silently, ignoring errors."""
+    try:
+        subprocess.run(
+            ["supabase", "stop"],
+            cwd=str(supabase_dir),
+            capture_output=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+
 def start_supabase() -> bool:
-    """Start Supabase local. Returns True on success."""
+    """Start Supabase local. Retries once after stop if first attempt fails."""
     root = get_project_root()
     supabase_dir = root / "supabase"
     if not supabase_dir.exists():
         print_fail("supabase/ directory not found")
         return False
+
+    result = subprocess.run(
+        ["supabase", "start"],
+        cwd=str(supabase_dir),
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if result.returncode == 0:
+        return True
+
+    # First attempt failed — often due to stale containers after Docker restart.
+    # Stop cleanly and retry.
+    print_info("Supabase containers in bad state — resetting and retrying...")
+    _stop_supabase_quiet(supabase_dir)
+    time.sleep(3)
 
     result = subprocess.run(
         ["supabase", "start"],

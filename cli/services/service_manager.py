@@ -17,6 +17,7 @@ from pathlib import Path
 from cli.models.config import InferenceBackend, MolebieConfig, SetupType
 from cli.services.config_manager import get_project_root
 from cli.services.prerequisite_checker import check_docker, start_docker_daemon
+from cli.services.supabase_manager import extract_keys, inject_keys
 from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
 
 
@@ -325,6 +326,8 @@ class ServiceRunner:
             # Skip if already running
             if _check_health(svc.health_url, timeout=2.0):
                 print_ok(f"{svc.name} already running on :{svc.port}")
+                if svc.name == "Supabase":
+                    self._ensure_supabase_keys()
                 continue
 
             print_info(f"Starting {svc.name}...")
@@ -336,6 +339,9 @@ class ServiceRunner:
                         print_ok(f"{svc.name} started on :{svc.port}")
                     else:
                         print_warn(f"{svc.name} started but not yet healthy — may need more time")
+                    # After Supabase starts, ensure keys are in .env.local
+                    if svc.name == "Supabase":
+                        self._ensure_supabase_keys()
                 else:
                     if svc.is_optional:
                         print_warn(f"{svc.name} failed to start (optional, continuing)")
@@ -381,6 +387,20 @@ class ServiceRunner:
                 pass
             finally:
                 self.stop_all()
+
+    @staticmethod
+    def _ensure_supabase_keys() -> None:
+        """Extract and inject Supabase keys if .env.local has placeholders."""
+        env_path = get_project_root() / ".env.local"
+        if not env_path.exists():
+            return
+        content = env_path.read_text()
+        # Check if keys are still placeholders
+        if "YOUR_ANON_KEY_HERE" in content or "YOUR_SERVICE_ROLE_KEY_HERE" in content or "YOUR_JWT_SECRET_HERE" in content:
+            keys = extract_keys()
+            if keys:
+                inject_keys(keys)
+                print_ok("Supabase keys injected into .env.local")
 
     def stop_all(self) -> None:
         """Stop all managed background processes."""
