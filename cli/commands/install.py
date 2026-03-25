@@ -44,86 +44,6 @@ from cli.ui.prompts import (
 
 
 # ──────────────────────────────────────────────────────────────
-# Auto-install missing prerequisites
-# ──────────────────────────────────────────────────────────────
-
-def _auto_install_prerequisites(quick: bool = False) -> None:
-    """Detect and offer to install missing system prerequisites."""
-    missing = prerequisite_checker.find_missing_prereqs()
-    if not missing:
-        return
-
-    pkg_mgr = prerequisite_checker.detect_package_manager()
-    if not pkg_mgr:
-        print_warn("No supported package manager found (brew, apt, dnf, pacman).")
-        print_info("Please install the following manually:")
-        for prereq in missing:
-            label = "(optional)" if not prereq.is_required else "(required)"
-            print_info(f"  {prereq.name} {label}")
-        if any(p.is_required for p in missing):
-            raise typer.Exit(1)
-        return
-
-    # Show what's missing
-    console.print()
-    console.print("[heading]Missing tools detected:[/heading]")
-    for prereq in missing:
-        label = "[dim](optional)[/dim]" if not prereq.is_required else "[warn](required)[/warn]"
-        cmd_display = prerequisite_checker.get_install_command_display(prereq, pkg_mgr)
-        console.print(f"  {prereq.name} {label}")
-        console.print(f"    [dim]{cmd_display}[/dim]")
-    console.print()
-
-    # Ask for confirmation (or auto-confirm in quick mode)
-    if not quick:
-        if not ask_confirm(f"Install missing tools using {pkg_mgr}?", default=True):
-            required_missing = [p for p in missing if p.is_required]
-            if required_missing:
-                print_fail("Required tools are missing. Install them and run again.")
-                raise typer.Exit(1)
-            print_info("Skipping optional tool installation.")
-            return
-
-    # Install each missing prerequisite
-    for prereq in missing:
-        print_info(f"Installing {prereq.name}...")
-        result = prerequisite_checker.install_prereq(prereq, pkg_mgr)
-        if result.success:
-            print_ok(f"{prereq.name}: {result.message}")
-            # Docker Desktop on macOS needs manual launch
-            if prereq.name == "Docker" and prerequisite_checker.detect_os() == "darwin":
-                console.print()
-                print_info(prereq.post_install_msg)
-                if not quick:
-                    input("  Press Enter when Docker Desktop is running...")
-                print_info("Waiting for Docker daemon...")
-                if prerequisite_checker.wait_for_docker_daemon(timeout_seconds=120):
-                    print_ok("Docker daemon is running")
-                else:
-                    print_warn("Docker daemon not responding — some features may not work")
-        else:
-            if prereq.is_required:
-                print_fail(f"{prereq.name}: {result.message}")
-                raise typer.Exit(1)
-            else:
-                print_warn(f"{prereq.name}: {result.message} (optional, skipping)")
-
-    # Verify Docker daemon is running (if Docker was already installed but daemon is down)
-    if not any(p.name == "Docker" for p in missing):
-        docker_check = prerequisite_checker.check_docker()
-        if not docker_check.passed and "daemon" in docker_check.name.lower():
-            print_warn("Docker is installed but the daemon is not running.")
-            if prerequisite_checker.detect_os() == "darwin":
-                print_info("Please open Docker Desktop.")
-                if not quick:
-                    input("  Press Enter when Docker Desktop is running...")
-                if prerequisite_checker.wait_for_docker_daemon(timeout_seconds=60):
-                    print_ok("Docker daemon is running")
-                else:
-                    print_warn("Docker daemon not responding — continuing anyway")
-
-
-# ──────────────────────────────────────────────────────────────
 # Auto-configure defaults for --quick mode
 # ──────────────────────────────────────────────────────────────
 
@@ -202,9 +122,6 @@ def _check_system(quick: bool = False) -> SystemInfo:
         console.print()
         print_fail("Less than 5 GB free disk space — not enough for models and dependencies.")
         raise typer.Exit(1)
-
-    # Auto-install missing prerequisites (Docker, Node, Supabase CLI, ffmpeg)
-    _auto_install_prerequisites(quick=quick)
 
     return sys_info
 
@@ -479,6 +396,137 @@ def _setup_features(config: MolebieConfig, root) -> None:
             print_warn(w)
 
 
+def _resolve_prerequisites(config: MolebieConfig, quick: bool = False) -> None:
+    """Check prerequisites. If any are missing, offer to install or let user do it."""
+    console.print("[heading]Checking prerequisites...[/heading]")
+    results = prerequisite_checker.check_all(
+        voice_enabled=config.voice_enabled,
+        search_enabled=config.search_enabled,
+    )
+    _display_check_results(results)
+
+    failures = [r for r in results if not r.passed and not r.is_warning]
+    if not failures:
+        return
+
+    console.print()
+    pkg_mgr = prerequisite_checker.detect_package_manager()
+
+    if quick:
+        user_choice = "Install missing tools for me"
+    else:
+        user_choice = ask_choice(
+            "Missing prerequisites detected. What would you like to do?",
+            [
+                "Install missing tools for me",
+                "I'll install them myself",
+            ],
+            default="Install missing tools for me",
+        )
+
+    if "myself" in user_choice:
+        # Show the commands the user needs to run
+        console.print()
+        console.print("[heading]Run these commands to fix the issues:[/heading]")
+        for r in failures:
+            name_lower = r.name.lower()
+            if "docker" in name_lower and "daemon" in name_lower:
+                if prerequisite_checker.detect_os() == "darwin":
+                    console.print("  Docker daemon: [bold]open -a Docker[/bold]")
+                else:
+                    console.print("  Docker daemon: [bold]sudo systemctl start docker[/bold]")
+            elif "docker" in name_lower:
+                if pkg_mgr:
+                    cmd = prerequisite_checker.get_install_command_display(
+                        prerequisite_checker.DOCKER_PREREQ, pkg_mgr,
+                    )
+                    console.print(f"  Docker: [bold]{cmd}[/bold]")
+                else:
+                    console.print("  Docker: Install from https://docker.com")
+            elif "node" in name_lower:
+                if pkg_mgr:
+                    cmd = prerequisite_checker.get_install_command_display(
+                        prerequisite_checker.NODE_PREREQ, pkg_mgr,
+                    )
+                    console.print(f"  {r.name}: [bold]{cmd}[/bold]")
+                else:
+                    console.print(f"  {r.name}: {r.fix_hint}")
+            elif "supabase" in name_lower:
+                if pkg_mgr:
+                    cmd = prerequisite_checker.get_install_command_display(
+                        prerequisite_checker.SUPABASE_PREREQ, pkg_mgr,
+                    )
+                    console.print(f"  {r.name}: [bold]{cmd}[/bold]")
+                else:
+                    console.print(f"  {r.name}: {r.fix_hint}")
+            elif "ffmpeg" in name_lower:
+                if pkg_mgr:
+                    cmd = prerequisite_checker.get_install_command_display(
+                        prerequisite_checker.FFMPEG_PREREQ, pkg_mgr,
+                    )
+                    console.print(f"  {r.name}: [bold]{cmd}[/bold]")
+                else:
+                    console.print(f"  {r.name}: {r.fix_hint}")
+            elif "python" in name_lower:
+                console.print(f"  {r.name}: {r.fix_hint}")
+        console.print()
+        print_info("After installing, run [bold]molebie-ai install[/bold] again.")
+        raise typer.Exit(1)
+
+    # User chose "Install for me"
+    if not pkg_mgr:
+        print_fail("No package manager found (brew, apt, dnf, pacman). Please install tools manually.")
+        raise typer.Exit(1)
+
+    console.print()
+    for r in failures:
+        name_lower = r.name.lower()
+        if "docker" in name_lower and ("daemon" in name_lower or "running" in r.message.lower()):
+            print_info("Starting Docker...")
+            if prerequisite_checker.start_docker_daemon():
+                print_ok("Docker daemon started")
+            else:
+                print_warn("Could not start Docker daemon")
+        elif "docker" in name_lower:
+            print_info("Installing Docker...")
+            res = prerequisite_checker.install_prereq(prerequisite_checker.DOCKER_PREREQ, pkg_mgr)
+            if res.success:
+                print_ok("Docker installed")
+                print_info("Starting Docker...")
+                if prerequisite_checker.start_docker_daemon():
+                    print_ok("Docker daemon started")
+                else:
+                    print_warn("Could not start Docker daemon")
+            else:
+                print_warn(f"Docker: {res.message}")
+        elif "node" in name_lower:
+            print_info("Installing Node.js...")
+            res = prerequisite_checker.install_prereq(prerequisite_checker.NODE_PREREQ, pkg_mgr)
+            print_ok("Node.js installed") if res.success else print_warn(f"Node.js: {res.message}")
+        elif "supabase" in name_lower:
+            print_info("Installing Supabase CLI...")
+            res = prerequisite_checker.install_prereq(prerequisite_checker.SUPABASE_PREREQ, pkg_mgr)
+            print_ok("Supabase CLI installed") if res.success else print_warn(f"Supabase CLI: {res.message}")
+        elif "ffmpeg" in name_lower:
+            print_info("Installing ffmpeg...")
+            res = prerequisite_checker.install_prereq(prerequisite_checker.FFMPEG_PREREQ, pkg_mgr)
+            print_ok("ffmpeg installed") if res.success else print_warn(f"ffmpeg: {res.message}")
+        elif "python" in name_lower:
+            print_warn(f"Python: {r.message} — please fix manually")
+
+    # Re-check after auto-fix
+    console.print()
+    print_info("Re-checking prerequisites...")
+    results = prerequisite_checker.check_all(
+        voice_enabled=config.voice_enabled,
+        search_enabled=config.search_enabled,
+    )
+    if _display_check_results(results):
+        console.print()
+        print_fail("Some prerequisites still missing. Fix them and run [bold]molebie-ai install[/bold] again.")
+        raise typer.Exit(1)
+
+
 def _execute_install(
     config: MolebieConfig, sys_info: SystemInfo, quick: bool = False,
 ) -> None:
@@ -486,13 +534,8 @@ def _execute_install(
     root = config_manager.get_project_root()
     print_step_header(7, 8, "Installing")
 
-    # 7a. Full prerequisite check
-    console.print("[heading]Checking prerequisites...[/heading]")
-    results = prerequisite_checker.check_all(voice_enabled=config.voice_enabled)
-    if _display_check_results(results):
-        console.print()
-        print_fail("Missing prerequisites. Install them and run [bold]molebie-ai install[/bold] again.")
-        raise typer.Exit(1)
+    # 7a. Check prerequisites — offer to install if missing
+    _resolve_prerequisites(config, quick=quick)
     console.print()
 
     # 7b. Generate .env.local

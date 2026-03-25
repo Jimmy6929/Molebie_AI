@@ -252,10 +252,17 @@ def check_system_early() -> tuple[list[CheckResult], "SystemInfo"]:
     return results, sys_info
 
 
-def check_all(voice_enabled: bool = False) -> list[CheckResult]:
+def check_all(
+    voice_enabled: bool = False,
+    search_enabled: bool = False,
+) -> list[CheckResult]:
     """Run all prerequisite checks."""
+    docker_required = voice_enabled or search_enabled
+    docker_result = check_docker()
+    if not docker_required and not docker_result.passed:
+        docker_result.is_warning = True
     results = [
-        check_docker(),
+        docker_result,
         check_node(),
         check_python(),
         check_supabase_cli(),
@@ -356,3 +363,29 @@ def wait_for_docker_daemon(timeout_seconds: int = 120) -> bool:
             return True
         time.sleep(3)
     return False
+
+
+def start_docker_daemon(timeout_seconds: int = 120) -> bool:
+    """Attempt to start Docker daemon automatically. Returns True if daemon becomes responsive."""
+    # Check if already running
+    rc, _ = _run_quiet(["docker", "info"], timeout=5)
+    if rc == 0:
+        return True
+
+    os_name = detect_os()
+    if os_name == "darwin":
+        # Launch Docker Desktop on macOS
+        subprocess.Popen(
+            ["open", "-a", "Docker"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    elif os_name == "linux":
+        # Try systemctl to start the docker service
+        subprocess.run(
+            ["sudo", "systemctl", "start", "docker"],
+            capture_output=True,
+            timeout=30,
+        )
+
+    return wait_for_docker_daemon(timeout_seconds=timeout_seconds)
