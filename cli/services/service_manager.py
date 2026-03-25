@@ -12,8 +12,11 @@ from typing import Optional
 
 import httpx
 
+from pathlib import Path
+
 from cli.models.config import InferenceBackend, MolebieConfig, SetupType
 from cli.services.config_manager import get_project_root
+from cli.services.prerequisite_checker import check_docker, start_docker_daemon
 from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
 
 
@@ -139,6 +142,101 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
     return services
 
 
+def _read_env_keys(env_path: Path) -> dict[str, str]:
+    """Read Supabase keys and JWT secret from .env.local."""
+    keys: dict[str, str] = {}
+    if not env_path.exists():
+        return keys
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k in ("SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "JWT_SECRET"):
+            keys[k] = v
+    return keys
+
+
+def _print_startup_summary(
+    config: MolebieConfig,
+    definitions: list[ServiceDef],
+) -> None:
+    """Print a detailed summary panel after all services start."""
+    root = get_project_root()
+    ip = config.server_ip if config.setup_type == SetupType.TWO_MACHINE else "localhost"
+
+    console.print()
+    console.rule("[bold]Molebie AI Running[/bold]", style="green")
+    console.print()
+
+    # ── Services ──
+    console.print("  [bold cyan]Services:[/bold cyan]")
+    webapp_svc = next((s for s in definitions if s.name == "Webapp"), None)
+    gateway_svc = next((s for s in definitions if s.name == "Gateway"), None)
+    supabase_svc = next((s for s in definitions if s.name == "Supabase"), None)
+    if webapp_svc:
+        console.print(f"    App:        http://{ip}:{webapp_svc.port}")
+    if gateway_svc:
+        console.print(f"    API:        http://{ip}:{gateway_svc.port}")
+    if supabase_svc:
+        status = "running" if _check_health(supabase_svc.health_url, timeout=2.0) else "not running"
+        console.print(f"    Supabase:   http://{ip}:{supabase_svc.port}  [dim]({status})[/dim]")
+        console.print(f"    DB:         postgresql://postgres:postgres@{ip}:54322/postgres")
+    for svc in definitions:
+        if svc.name in ("Webapp", "Gateway", "Supabase") or svc.name.startswith("MLX"):
+            continue
+        if _check_health(svc.health_url, timeout=2.0):
+            console.print(f"    {svc.name + ':':12s}http://{ip}:{svc.port}")
+    console.print()
+
+    # ── Inference ──
+    console.print("  [bold cyan]Inference:[/bold cyan]")
+    console.print(f"    Backend:    {config.inference_backend.value}")
+    if config.thinking_model:
+        thinking_port = next(
+            (s.port for s in definitions if "Thinking" in s.name), None,
+        )
+        port_label = f" (:{thinking_port})" if thinking_port else ""
+        console.print(f"    Thinking:   {config.thinking_model}{port_label}")
+    if config.instant_model:
+        instant_port = next(
+            (s.port for s in definitions if "Instant" in s.name), None,
+        )
+        port_label = f" (:{instant_port})" if instant_port else ""
+        console.print(f"    Instant:    {config.instant_model}{port_label}")
+    console.print()
+
+    # ── Features ──
+    console.print("  [bold cyan]Features:[/bold cyan]")
+    console.print(f"    Search:     {'enabled' if config.search_enabled else 'disabled'}")
+    console.print(f"    RAG:        {'enabled' if config.rag_enabled else 'disabled'}")
+    console.print(f"    Voice:      {'enabled' if config.voice_enabled else 'disabled'}")
+    console.print()
+
+    # ── Keys ──
+    env_path = root / ".env.local"
+    keys = _read_env_keys(env_path)
+    console.print("  [bold cyan]Keys:[/bold cyan]")
+    if keys.get("SUPABASE_ANON_KEY"):
+        console.print(f"    Anon:       {keys['SUPABASE_ANON_KEY']}")
+    if keys.get("SUPABASE_SERVICE_ROLE_KEY"):
+        console.print(f"    Service:    {keys['SUPABASE_SERVICE_ROLE_KEY']}")
+    if keys.get("JWT_SECRET"):
+        console.print(f"    JWT:        {keys['JWT_SECRET']}")
+    if not keys:
+        console.print("    [dim](no keys found — Supabase may not have started)[/dim]")
+    console.print(f"    Config:     .molebie/config.json")
+    console.print(f"    Env:        .env.local")
+    console.print()
+
+    console.rule(style="green")
+    console.print()
+    print_ok("Press Ctrl+C to stop all services.")
+    console.print()
+
+
 class ServiceRunner:
     """Manages starting services and clean shutdown."""
 
@@ -194,6 +292,20 @@ class ServiceRunner:
 
         if skip_inference:
             definitions = [s for s in definitions if "MLX" not in s.name and "Ollama" not in s.name]
+
+        # Check if Docker is needed and ensure it's running
+        needs_docker = any(
+            s.name == "Supabase" or s.is_docker for s in definitions
+        )
+        if needs_docker:
+            docker_result = check_docker()
+            if not docker_result.passed:
+                print_info("Docker is required but not running — starting automatically...")
+                if start_docker_daemon(timeout_seconds=120):
+                    print_ok("Docker daemon started")
+                else:
+                    print_warn("Could not start Docker — Supabase and Docker services may fail")
+                console.print()
 
         # Set up signal handler
         def _signal_handler(sig: int, frame: object) -> None:
@@ -256,9 +368,7 @@ class ServiceRunner:
                     print_warn(f"{svc.name} running but not healthy yet — may need more time")
 
         if not self._shutdown and self._processes:
-            console.print()
-            print_ok("All services started. Press Ctrl+C to stop.")
-            console.print()
+            _print_startup_summary(config, definitions)
             # Block until signal
             try:
                 while not self._shutdown:
