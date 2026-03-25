@@ -19,12 +19,12 @@ from cli.services.system_info import SystemInfo
 
 MLX_MODELS: dict[str, tuple[str, str]] = {
     "light": (
-        "mlx-community/Qwen3.5-4B-Instruct-4bit",
-        "mlx-community/Qwen3.5-4B-Instruct-4bit",
+        "mlx-community/Qwen3.5-4B-4bit",
+        "mlx-community/Qwen3.5-4B-4bit",
     ),
     "balanced": (
-        "mlx-community/Qwen3.5-9B-4bit",
-        "mlx-community/Qwen3.5-4B-Instruct-4bit",
+        "mlx-community/Qwen3.5-9B-MLX-4bit",
+        "mlx-community/Qwen3.5-4B-4bit",
     ),
 }
 
@@ -116,11 +116,14 @@ def get_models_for_profile(
 
 def _is_mlx_vlm_installed() -> bool:
     """Check if mlx-vlm is importable."""
-    result = subprocess.run(
-        [sys.executable, "-c", "import mlx_vlm"],
-        capture_output=True, timeout=15,
-    )
-    return result.returncode == 0
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "import mlx_vlm"],
+            capture_output=True, timeout=60,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def _install_mlx_vlm() -> bool:

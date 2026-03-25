@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     
     # Thinking tier — deeper reasoning (mlx_vlm.server for Qwen 3.5)
     inference_thinking_url: str = ""
-    inference_thinking_model: str = ""         # e.g. mlx-community/Qwen3.5-9B-4bit
+    inference_thinking_model: str = ""         # e.g. mlx-community/Qwen3.5-9B-MLX-4bit
     inference_thinking_api_prefix: str = ""    # "" for mlx_vlm, "/v1" for mlx_lm
     inference_thinking_max_tokens: int = 4096
     inference_thinking_temperature: float = 0.6  # Qwen 3.5 recommended for thinking

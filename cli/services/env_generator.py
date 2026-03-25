@@ -12,8 +12,8 @@ from cli.services.config_manager import get_project_root
 # Default model names per backend
 OLLAMA_THINKING_MODEL = "qwen3:8b"
 OLLAMA_INSTANT_MODEL = "qwen3:4b"
-MLX_THINKING_MODEL = "mlx-community/Qwen3.5-9B-4bit"
-MLX_INSTANT_MODEL = "mlx-community/Qwen3.5-4B-Instruct-4bit"
+MLX_THINKING_MODEL = "mlx-community/Qwen3.5-9B-MLX-4bit"
+MLX_INSTANT_MODEL = "mlx-community/Qwen3.5-4B-4bit"
 
 
 def _build_overrides(config: MolebieConfig) -> dict[str, str]:

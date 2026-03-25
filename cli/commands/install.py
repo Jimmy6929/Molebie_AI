@@ -572,7 +572,17 @@ def _execute_install(
     _install_webapp_deps(root)
     console.print()
 
-    # 7e. Start Supabase + inject keys
+    # 7e. Ensure Docker is running before Supabase
+    docker_check = prerequisite_checker.check_docker()
+    if not docker_check.passed:
+        console.print("[heading]Starting Docker...[/heading]")
+        if prerequisite_checker.start_docker_daemon(timeout_seconds=120):
+            print_ok("Docker daemon started")
+        else:
+            print_warn("Could not start Docker — Supabase may fail")
+        console.print()
+
+    # 7f. Start Supabase + inject keys
     console.print("[heading]Starting Supabase...[/heading]")
     supabase_manager.setup_supabase()
     console.print()

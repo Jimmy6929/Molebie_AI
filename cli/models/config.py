@@ -37,6 +37,8 @@ FEATURE_DESCRIPTIONS = {
 class MolebieConfig(BaseModel):
     """Persistent configuration saved by the install wizard."""
 
+    model_config = {"protected_namespaces": ()}
+
     version: int = Field(default=2, description="Schema version for future migrations")
 
     # Setup type
