@@ -130,4 +130,4 @@ echo ""
 info "Launching setup wizard..."
 echo ""
 
-exec .venv/bin/molebie-ai install "${CLI_ARGS[@]}"
+exec .venv/bin/molebie-ai install "${CLI_ARGS[@]+"${CLI_ARGS[@]}"}"
