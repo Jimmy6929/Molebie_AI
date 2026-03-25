@@ -1,10 +1,12 @@
-"""Check system prerequisites for Molebie AI."""
+"""Check and install system prerequisites for Molebie AI."""
 
 from __future__ import annotations
 
+import platform
 import shutil
 import subprocess
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -14,6 +16,22 @@ class CheckResult:
     message: str
     fix_hint: str = ""
     is_warning: bool = False
+
+
+@dataclass
+class InstallablePrereq:
+    """A prerequisite that can be auto-installed."""
+    name: str
+    install_cmds: dict[str, list[str]]  # package_manager -> command parts
+    post_install_msg: str = ""
+    is_required: bool = True
+
+
+@dataclass
+class InstallResult:
+    name: str
+    success: bool
+    message: str
 
 
 def _run_quiet(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
@@ -26,6 +44,82 @@ def _run_quiet(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return 1, ""
 
+
+# ──────────────────────────────────────────────────────────────
+# OS / package manager detection
+# ──────────────────────────────────────────────────────────────
+
+def detect_os() -> str:
+    """Return 'darwin' or 'linux'."""
+    return platform.system().lower()
+
+
+def detect_package_manager() -> str | None:
+    """Detect the available package manager. Returns name or None."""
+    if shutil.which("brew"):
+        return "brew"
+    if shutil.which("apt-get"):
+        return "apt"
+    if shutil.which("dnf"):
+        return "dnf"
+    if shutil.which("pacman"):
+        return "pacman"
+    return None
+
+
+# ──────────────────────────────────────────────────────────────
+# Install command registry
+# ──────────────────────────────────────────────────────────────
+
+DOCKER_PREREQ = InstallablePrereq(
+    name="Docker",
+    install_cmds={
+        "brew": ["brew", "install", "--cask", "docker"],
+        "apt": ["sudo", "sh", "-c",
+                "curl -fsSL https://get.docker.com | sh"],
+        "dnf": ["sudo", "dnf", "install", "-y", "docker-ce"],
+        "pacman": ["sudo", "pacman", "-S", "--noconfirm", "docker"],
+    },
+    post_install_msg="Please open Docker Desktop to finish setup, then press Enter.",
+)
+
+NODE_PREREQ = InstallablePrereq(
+    name="Node.js",
+    install_cmds={
+        "brew": ["brew", "install", "node"],
+        "apt": ["sudo", "sh", "-c",
+                "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - "
+                "&& apt-get install -y nodejs"],
+        "dnf": ["sudo", "dnf", "install", "-y", "nodejs"],
+        "pacman": ["sudo", "pacman", "-S", "--noconfirm", "nodejs", "npm"],
+    },
+)
+
+SUPABASE_PREREQ = InstallablePrereq(
+    name="Supabase CLI",
+    install_cmds={
+        "brew": ["brew", "install", "supabase/tap/supabase"],
+        "apt": ["npm", "i", "-g", "supabase"],
+        "dnf": ["npm", "i", "-g", "supabase"],
+        "pacman": ["npm", "i", "-g", "supabase"],
+    },
+)
+
+FFMPEG_PREREQ = InstallablePrereq(
+    name="ffmpeg",
+    install_cmds={
+        "brew": ["brew", "install", "ffmpeg"],
+        "apt": ["sudo", "apt-get", "install", "-y", "ffmpeg"],
+        "dnf": ["sudo", "dnf", "install", "-y", "ffmpeg"],
+        "pacman": ["sudo", "pacman", "-S", "--noconfirm", "ffmpeg"],
+    },
+    is_required=False,
+)
+
+
+# ──────────────────────────────────────────────────────────────
+# Individual check functions
+# ──────────────────────────────────────────────────────────────
 
 def check_docker() -> CheckResult:
     if not shutil.which("docker"):
@@ -129,6 +223,10 @@ def check_disk_space(available_gb: float, min_gb: float = 10.0) -> CheckResult:
     return CheckResult("Disk space", True, f"{available_gb} GB free")
 
 
+# ──────────────────────────────────────────────────────────────
+# Composite checks
+# ──────────────────────────────────────────────────────────────
+
 def check_system_early() -> tuple[list[CheckResult], "SystemInfo"]:
     """Run lightweight system checks BEFORE the wizard. Returns (results, system_info)."""
     from cli.services.system_info import SystemInfo, get_system_info
@@ -169,3 +267,92 @@ def check_all(voice_enabled: bool = False) -> list[CheckResult]:
         ffmpeg_result.is_warning = True
         results.append(ffmpeg_result)
     return results
+
+
+# ──────────────────────────────────────────────────────────────
+# Auto-installation of missing prerequisites
+# ──────────────────────────────────────────────────────────────
+
+def find_missing_prereqs() -> list[InstallablePrereq]:
+    """Return the list of installable prerequisites that are missing."""
+    missing: list[InstallablePrereq] = []
+
+    # Docker (binary or daemon)
+    if not shutil.which("docker"):
+        missing.append(DOCKER_PREREQ)
+    else:
+        rc, _ = _run_quiet(["docker", "info"])
+        if rc != 0:
+            # Docker installed but daemon not running — handle separately
+            pass
+
+    # Node.js 18+
+    node_ok = False
+    if shutil.which("node"):
+        rc, out = _run_quiet(["node", "-v"])
+        if rc == 0:
+            try:
+                major = int(out.lstrip("v").split(".")[0])
+                node_ok = major >= 18
+            except (ValueError, IndexError):
+                pass
+    if not node_ok:
+        missing.append(NODE_PREREQ)
+
+    # Supabase CLI
+    if not shutil.which("supabase"):
+        missing.append(SUPABASE_PREREQ)
+
+    # ffmpeg (optional)
+    if not shutil.which("ffmpeg"):
+        missing.append(FFMPEG_PREREQ)
+
+    return missing
+
+
+def get_install_command_display(prereq: InstallablePrereq, pkg_mgr: str) -> str:
+    """Return a human-readable install command string for display."""
+    cmds = prereq.install_cmds.get(pkg_mgr)
+    if not cmds:
+        return "(no auto-install available)"
+    return " ".join(cmds)
+
+
+def install_prereq(prereq: InstallablePrereq, pkg_mgr: str) -> InstallResult:
+    """Install a single prerequisite. Returns result."""
+    cmds = prereq.install_cmds.get(pkg_mgr)
+    if not cmds:
+        return InstallResult(
+            prereq.name, False,
+            f"No install command for package manager '{pkg_mgr}'",
+        )
+
+    try:
+        result = subprocess.run(
+            cmds,
+            timeout=600,
+            capture_output=False,
+        )
+        if result.returncode == 0:
+            return InstallResult(prereq.name, True, "Installed successfully")
+        return InstallResult(
+            prereq.name, False,
+            f"Install command exited with code {result.returncode}",
+        )
+    except subprocess.TimeoutExpired:
+        return InstallResult(prereq.name, False, "Installation timed out")
+    except FileNotFoundError:
+        return InstallResult(
+            prereq.name, False,
+            f"Command not found: {cmds[0]}",
+        )
+
+
+def wait_for_docker_daemon(timeout_seconds: int = 120) -> bool:
+    """Wait for Docker daemon to become responsive. Returns True if it responds."""
+    for _ in range(timeout_seconds // 3):
+        rc, _ = _run_quiet(["docker", "info"], timeout=5)
+        if rc == 0:
+            return True
+        time.sleep(3)
+    return False

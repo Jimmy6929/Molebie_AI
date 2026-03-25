@@ -44,6 +44,114 @@ from cli.ui.prompts import (
 
 
 # ──────────────────────────────────────────────────────────────
+# Auto-install missing prerequisites
+# ──────────────────────────────────────────────────────────────
+
+def _auto_install_prerequisites(quick: bool = False) -> None:
+    """Detect and offer to install missing system prerequisites."""
+    missing = prerequisite_checker.find_missing_prereqs()
+    if not missing:
+        return
+
+    pkg_mgr = prerequisite_checker.detect_package_manager()
+    if not pkg_mgr:
+        print_warn("No supported package manager found (brew, apt, dnf, pacman).")
+        print_info("Please install the following manually:")
+        for prereq in missing:
+            label = "(optional)" if not prereq.is_required else "(required)"
+            print_info(f"  {prereq.name} {label}")
+        if any(p.is_required for p in missing):
+            raise typer.Exit(1)
+        return
+
+    # Show what's missing
+    console.print()
+    console.print("[heading]Missing tools detected:[/heading]")
+    for prereq in missing:
+        label = "[dim](optional)[/dim]" if not prereq.is_required else "[warn](required)[/warn]"
+        cmd_display = prerequisite_checker.get_install_command_display(prereq, pkg_mgr)
+        console.print(f"  {prereq.name} {label}")
+        console.print(f"    [dim]{cmd_display}[/dim]")
+    console.print()
+
+    # Ask for confirmation (or auto-confirm in quick mode)
+    if not quick:
+        if not ask_confirm(f"Install missing tools using {pkg_mgr}?", default=True):
+            required_missing = [p for p in missing if p.is_required]
+            if required_missing:
+                print_fail("Required tools are missing. Install them and run again.")
+                raise typer.Exit(1)
+            print_info("Skipping optional tool installation.")
+            return
+
+    # Install each missing prerequisite
+    for prereq in missing:
+        print_info(f"Installing {prereq.name}...")
+        result = prerequisite_checker.install_prereq(prereq, pkg_mgr)
+        if result.success:
+            print_ok(f"{prereq.name}: {result.message}")
+            # Docker Desktop on macOS needs manual launch
+            if prereq.name == "Docker" and prerequisite_checker.detect_os() == "darwin":
+                console.print()
+                print_info(prereq.post_install_msg)
+                if not quick:
+                    input("  Press Enter when Docker Desktop is running...")
+                print_info("Waiting for Docker daemon...")
+                if prerequisite_checker.wait_for_docker_daemon(timeout_seconds=120):
+                    print_ok("Docker daemon is running")
+                else:
+                    print_warn("Docker daemon not responding — some features may not work")
+        else:
+            if prereq.is_required:
+                print_fail(f"{prereq.name}: {result.message}")
+                raise typer.Exit(1)
+            else:
+                print_warn(f"{prereq.name}: {result.message} (optional, skipping)")
+
+    # Verify Docker daemon is running (if Docker was already installed but daemon is down)
+    if not any(p.name == "Docker" for p in missing):
+        docker_check = prerequisite_checker.check_docker()
+        if not docker_check.passed and "daemon" in docker_check.name.lower():
+            print_warn("Docker is installed but the daemon is not running.")
+            if prerequisite_checker.detect_os() == "darwin":
+                print_info("Please open Docker Desktop.")
+                if not quick:
+                    input("  Press Enter when Docker Desktop is running...")
+                if prerequisite_checker.wait_for_docker_daemon(timeout_seconds=60):
+                    print_ok("Docker daemon is running")
+                else:
+                    print_warn("Docker daemon not responding — continuing anyway")
+
+
+# ──────────────────────────────────────────────────────────────
+# Auto-configure defaults for --quick mode
+# ──────────────────────────────────────────────────────────────
+
+def _auto_configure(config: MolebieConfig, sys_info: SystemInfo) -> None:
+    """Set sensible defaults without prompting."""
+    config.setup_type = SetupType.SINGLE
+
+    rec = backend_setup.detect_recommended_backend(sys_info, config.setup_type)
+    config.inference_backend = rec.backend
+    print_ok(f"Backend: {rec.backend.value} — {rec.reason}")
+
+    if config.inference_backend != InferenceBackend.OPENAI_COMPATIBLE:
+        profile = backend_setup.recommend_model_profile(sys_info)
+        config.model_profile = ModelProfile(profile)
+        thinking, instant = backend_setup.get_models_for_profile(
+            profile, config.inference_backend,
+        )
+        config.thinking_model = thinking
+        config.instant_model = instant
+        print_ok(f"Model profile: {profile}")
+
+    config.search_enabled = True
+    config.rag_enabled = True
+    config.voice_enabled = False
+    print_ok("Features: search + RAG enabled, voice disabled")
+
+
+# ──────────────────────────────────────────────────────────────
 # Phase 0: Welcome
 # ──────────────────────────────────────────────────────────────
 
@@ -51,7 +159,7 @@ def _show_welcome() -> None:
     print_banner()
     console.print(Panel(
         "[bold]This installer will:[/bold]\n\n"
-        "  1. Check your system requirements\n"
+        "  1. Check your system and install missing tools\n"
         "  2. Configure your setup mode\n"
         "  3. Set up your inference backend\n"
         "  4. Choose AI models\n"
@@ -66,10 +174,10 @@ def _show_welcome() -> None:
 
 
 # ──────────────────────────────────────────────────────────────
-# Phase 1: System check
+# Phase 1: System check + auto-install
 # ──────────────────────────────────────────────────────────────
 
-def _check_system() -> SystemInfo:
+def _check_system(quick: bool = False) -> SystemInfo:
     print_step_header(1, 8, "System Check")
     results, sys_info = prerequisite_checker.check_system_early()
 
@@ -94,6 +202,9 @@ def _check_system() -> SystemInfo:
         console.print()
         print_fail("Less than 5 GB free disk space — not enough for models and dependencies.")
         raise typer.Exit(1)
+
+    # Auto-install missing prerequisites (Docker, Node, Supabase CLI, ffmpeg)
+    _auto_install_prerequisites(quick=quick)
 
     return sys_info
 
@@ -368,7 +479,9 @@ def _setup_features(config: MolebieConfig, root) -> None:
             print_warn(w)
 
 
-def _execute_install(config: MolebieConfig, sys_info: SystemInfo) -> None:
+def _execute_install(
+    config: MolebieConfig, sys_info: SystemInfo, quick: bool = False,
+) -> None:
     """Execute all installation steps."""
     root = config_manager.get_project_root()
     print_step_header(7, 8, "Installing")
@@ -386,20 +499,23 @@ def _execute_install(config: MolebieConfig, sys_info: SystemInfo) -> None:
     console.print("[heading]Generating environment...[/heading]")
     env_path = root / ".env.local"
     if env_path.exists():
-        console.print("  .env.local already exists.")
-        choice = ask_choice(
-            "What would you like to do?",
-            [
-                "Keep existing .env.local (skip generation)",
-                "Regenerate .env.local (overwrites current)",
-            ],
-            default="Keep existing .env.local (skip generation)",
-        )
-        if "Regenerate" in choice:
-            env_generator.generate_env_local(config, force=True)
-            print_ok(".env.local regenerated")
+        if quick:
+            print_ok(".env.local already exists — keeping as-is")
         else:
-            print_ok(".env.local kept as-is")
+            console.print("  .env.local already exists.")
+            choice = ask_choice(
+                "What would you like to do?",
+                [
+                    "Keep existing .env.local (skip generation)",
+                    "Regenerate .env.local (overwrites current)",
+                ],
+                default="Keep existing .env.local (skip generation)",
+            )
+            if "Regenerate" in choice:
+                env_generator.generate_env_local(config, force=True)
+                print_ok(".env.local regenerated")
+            else:
+                print_ok(".env.local kept as-is")
     else:
         env_generator.generate_env_local(config)
         print_ok(".env.local created")
@@ -480,20 +596,37 @@ def _show_summary(config: MolebieConfig) -> None:
 # Entry point
 # ──────────────────────────────────────────────────────────────
 
-def install() -> None:
+def install(
+    quick: bool = typer.Option(
+        False, "--quick", "-q",
+        help="Auto-select defaults without prompting (non-interactive mode).",
+    ),
+) -> None:
     """Interactive setup wizard for Molebie AI."""
-    _show_welcome()
-    sys_info = _check_system()
+    if not quick:
+        _show_welcome()
+
+    sys_info = _check_system(quick=quick)
 
     config = MolebieConfig()
-    _ask_setup_type(config)
-    _ask_backend(config, sys_info)
-    _ask_model_profile(config, sys_info)
-    _ask_features(config)
-    _show_review(config)
+
+    if quick:
+        _auto_configure(config, sys_info)
+    else:
+        _ask_setup_type(config)
+        _ask_backend(config, sys_info)
+        _ask_model_profile(config, sys_info)
+        _ask_features(config)
+        _show_review(config)
 
     # Preliminary save — preserves wizard choices if install fails partway
     config_manager.save_config(config)
 
-    _execute_install(config, sys_info)
-    _show_summary(config)
+    _execute_install(config, sys_info, quick=quick)
+
+    if quick:
+        console.print()
+        print_ok("Installation complete. Run: molebie-ai run")
+        console.print("  Then open [bold]http://localhost:3000[/bold]")
+    else:
+        _show_summary(config)

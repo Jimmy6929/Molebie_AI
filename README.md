@@ -15,40 +15,27 @@ A self-hosted AI assistant with voice conversation, vision, RAG document memory,
 
 ## Quick Start
 
-### Prerequisites
-
-| Requirement | Install |
-|-------------|---------|
-| Docker Desktop | [docker.com](https://docker.com) or `brew install --cask docker` |
-| Node.js 18+ | `brew install node` |
-| Python 3.10+ | `brew install python` (or comes with macOS) |
-| Supabase CLI | `brew install supabase/tap/supabase` |
-| ffmpeg (optional) | `brew install ffmpeg` (for voice features) |
-
-### Setup with the CLI (Recommended)
-
-The `molebie-ai` CLI guides you through installation, configures your backend, downloads models, and starts services — all from one command.
-
 ```bash
 git clone <your-repo-url>
 cd molebie-ai
-pip install -e .
-molebie-ai install
+./install.sh
 ```
 
-The installer will:
-1. **Check your system** — OS, chip, RAM, disk space
-2. **Detect the best backend** — recommends MLX on Apple Silicon, Ollama elsewhere
-3. **Let you choose a model profile** — Light (8+ GB RAM) or Balanced (16+ GB RAM)
-4. **Install the backend** — installs `mlx-vlm` and downloads models, or pulls Ollama models
-5. **Configure features** — web search (SearXNG), RAG document memory, voice
-6. **Set up services** — starts Docker containers, Supabase, and generates all config files
-7. **Offer to start** — launches everything with one confirmation
+That's it. The installer handles everything:
 
-After install, start the system any time with:
+1. **Checks your system** — OS, chip, RAM, disk space
+2. **Installs missing tools** — Docker, Node.js, Supabase CLI (asks first)
+3. **Detects the best backend** — recommends MLX on Apple Silicon, Ollama elsewhere
+4. **Lets you choose models** — Light (8+ GB RAM) or Balanced (16+ GB RAM)
+5. **Installs the backend** — installs `mlx-vlm` and downloads models, or pulls Ollama models
+6. **Configures features** — web search (SearXNG), RAG document memory, voice
+7. **Sets up services** — starts Docker containers, Supabase, and generates all config files
+8. **Offers to start** — launches everything with one confirmation
+
+After setup, start the system any time with:
 
 ```bash
-molebie-ai run
+./bin/molebie-ai run
 ```
 
 Open **http://localhost:3000**, create an account, and start chatting.

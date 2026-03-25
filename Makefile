@@ -1,13 +1,15 @@
 # Molebie AI - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help setup dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
+.PHONY: help quickstart setup dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
 
 # Default target
 help:
 	@echo ""
 	@echo "Molebie AI - Development Commands"
 	@echo "=========================================="
+	@echo ""
+	@echo "  make quickstart     One-command setup — installs everything and launches wizard"
 	@echo ""
 	@echo "  make setup          First-time setup (checks prereqs, installs deps, configures Supabase)"
 	@echo "  make cli            Install molebie-ai CLI (alternative to make setup)"
@@ -42,6 +44,9 @@ help:
 # ──────────────────────────────────────────────────────────────
 # INSTALLATION
 # ──────────────────────────────────────────────────────────────
+
+quickstart:
+	@bash install.sh
 
 install: install-gateway install-webapp
 	@echo "✅ All dependencies installed"

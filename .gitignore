@@ -51,6 +51,9 @@ tasks/
 # CLI local state
 .molebie/
 
+# Generated CLI wrapper (created by install.sh)
+bin/
+
 # AI tools (private)
 .claude/
 .cursor/

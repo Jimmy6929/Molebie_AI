@@ -2,10 +2,13 @@
 set -euo pipefail
 
 # ══════════════════════════════════════════════════════════════
-# Molebie AI — Setup Script
+# Molebie AI — Setup Script (Legacy)
 # ══════════════════════════════════════════════════════════════
-# Checks prerequisites, installs dependencies, starts Supabase,
-# and generates .env.local with the correct keys.
+# NOTE: For most users, use ./install.sh instead — it handles
+# everything including prerequisite installation automatically.
+#
+# This script checks prerequisites, installs dependencies,
+# starts Supabase, and generates .env.local with the correct keys.
 #
 # Usage:  bash setup.sh
 # ══════════════════════════════════════════════════════════════
