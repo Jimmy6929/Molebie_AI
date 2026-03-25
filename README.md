@@ -16,7 +16,7 @@ A self-hosted AI assistant with voice conversation, vision, RAG document memory,
 ## Quick Start
 
 ```bash
-git clone <your-repo-url>
+git clone git@github.com:Jimmy6929/Molebie_AI.git
 cd molebie-ai
 ./install.sh
 ```
