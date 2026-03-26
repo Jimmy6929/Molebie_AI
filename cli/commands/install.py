@@ -22,7 +22,6 @@ from cli.services import (
     env_generator,
     feature_setup,
     prerequisite_checker,
-    supabase_manager,
 )
 from cli.services.system_info import SystemInfo
 from cli.ui.console import (
@@ -451,14 +450,6 @@ def _resolve_prerequisites(config: MolebieConfig, quick: bool = False) -> None:
                     console.print(f"  {r.name}: [bold]{cmd}[/bold]")
                 else:
                     console.print(f"  {r.name}: {r.fix_hint}")
-            elif "supabase" in name_lower:
-                if pkg_mgr:
-                    cmd = prerequisite_checker.get_install_command_display(
-                        prerequisite_checker.SUPABASE_PREREQ, pkg_mgr,
-                    )
-                    console.print(f"  {r.name}: [bold]{cmd}[/bold]")
-                else:
-                    console.print(f"  {r.name}: {r.fix_hint}")
             elif "ffmpeg" in name_lower:
                 if pkg_mgr:
                     cmd = prerequisite_checker.get_install_command_display(
@@ -503,10 +494,6 @@ def _resolve_prerequisites(config: MolebieConfig, quick: bool = False) -> None:
             print_info("Installing Node.js...")
             res = prerequisite_checker.install_prereq(prerequisite_checker.NODE_PREREQ, pkg_mgr)
             print_ok("Node.js installed") if res.success else print_warn(f"Node.js: {res.message}")
-        elif "supabase" in name_lower:
-            print_info("Installing Supabase CLI...")
-            res = prerequisite_checker.install_prereq(prerequisite_checker.SUPABASE_PREREQ, pkg_mgr)
-            print_ok("Supabase CLI installed") if res.success else print_warn(f"Supabase CLI: {res.message}")
         elif "ffmpeg" in name_lower:
             print_info("Installing ffmpeg...")
             res = prerequisite_checker.install_prereq(prerequisite_checker.FFMPEG_PREREQ, pkg_mgr)
@@ -572,19 +559,11 @@ def _execute_install(
     _install_webapp_deps(root)
     console.print()
 
-    # 7e. Ensure Docker is running before Supabase
-    docker_check = prerequisite_checker.check_docker()
-    if not docker_check.passed:
-        console.print("[heading]Starting Docker...[/heading]")
-        if prerequisite_checker.start_docker_daemon(timeout_seconds=120):
-            print_ok("Docker daemon started")
-        else:
-            print_warn("Could not start Docker — Supabase may fail")
-        console.print()
-
-    # 7f. Start Supabase + inject keys
-    console.print("[heading]Starting Supabase...[/heading]")
-    supabase_manager.setup_supabase()
+    # 7e. Create data directory
+    console.print("[heading]Creating data directory...[/heading]")
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    print_ok("Data directory ready (SQLite DB will initialize on first start)")
     console.print()
 
     # 7f. Backend auto-setup

@@ -1,7 +1,7 @@
 # Molebie AI - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help quickstart setup dev dev-gateway dev-webapp dev-supabase test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
+.PHONY: help quickstart setup dev dev-gateway dev-webapp test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
 
 # Default target
 help:
@@ -11,14 +11,13 @@ help:
 	@echo ""
 	@echo "  make quickstart     One-command setup — installs everything and launches wizard"
 	@echo ""
-	@echo "  make setup          First-time setup (checks prereqs, installs deps, configures Supabase)"
+	@echo "  make setup          First-time setup (checks prereqs, installs deps, generates config)"
 	@echo "  make cli            Install molebie-ai CLI (alternative to make setup)"
 	@echo ""
 	@echo "  make install        Install all dependencies"
-	@echo "  make dev            Start all services (supabase, gateway, webapp)"
+	@echo "  make dev            Start all services (gateway, webapp)"
 	@echo "  make dev-gateway    Start only the gateway API"
 	@echo "  make dev-webapp     Start only the webapp"
-	@echo "  make dev-supabase   Start only Supabase local"
 	@echo ""
 	@echo "  make test           Run all tests"
 	@echo "  make test-gateway   Run gateway tests only"
@@ -90,14 +89,9 @@ dev:
 
 dev-all:
 	@command -v tmux >/dev/null 2>&1 || { echo "❌ tmux is required for dev-all. Install with: brew install tmux"; exit 1; }
-	tmux new-session -d -s localai 'make dev-supabase' \; \
-		split-window -h 'sleep 5 && make dev-gateway' \; \
-		split-window -v 'sleep 8 && make dev-webapp' \; \
+	tmux new-session -d -s localai 'make dev-gateway' \; \
+		split-window -h 'sleep 3 && make dev-webapp' \; \
 		attach
-
-dev-supabase:
-	@echo "🗄️  Starting Supabase local..."
-	cd supabase && supabase start
 
 dev-gateway:
 	@echo "⚡ Starting Gateway API on http://localhost:8000..."
@@ -109,7 +103,6 @@ dev-webapp:
 
 stop:
 	@echo "🛑 Stopping services..."
-	-cd supabase && supabase stop
 	-pkill -f "uvicorn app.main:app" 2>/dev/null || true
 	@echo "✅ Services stopped"
 
@@ -168,15 +161,8 @@ format:
 
 db-reset:
 	@echo "🗑️  Resetting database..."
-	cd supabase && supabase db reset
-
-db-migrate:
-	@echo "📝 Running migrations..."
-	cd supabase && supabase db push
-
-db-studio:
-	@echo "🎨 Opening Supabase Studio..."
-	@echo "   Visit: http://localhost:54323"
+	rm -f data/molebie.db
+	@echo "✅ Database deleted. It will be recreated on next gateway start."
 
 # ──────────────────────────────────────────────────────────────
 # CLEANUP

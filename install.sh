@@ -14,9 +14,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Pass-through flags (e.g. --quick)
-CLI_ARGS=("$@")
-
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -130,4 +127,4 @@ echo ""
 info "Launching setup wizard..."
 echo ""
 
-exec .venv/bin/molebie-ai install "${CLI_ARGS[@]+"${CLI_ARGS[@]}"}"
+exec .venv/bin/molebie-ai install "$@"

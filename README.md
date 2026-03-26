@@ -9,8 +9,8 @@ A self-hosted AI assistant with voice conversation, vision, RAG document memory,
 - **Image Understanding** — Attach images via file picker, paste, or drag-and-drop
 - **RAG Document Memory** — Upload PDFs, DOCX, TXT, MD for persistent knowledge with hybrid vector + BM25 search, cross-encoder reranking
 - **Web Search** — Self-hosted SearXNG with LLM-powered intent classification and source citation
-- **Full Data Ownership** — All data stored in your own Supabase instance
-- **Multi-User** — Row-level security from day one
+- **Full Data Ownership** — All data stored locally in SQLite with file-based storage
+- **Multi-User** — User isolation from day one, no cloud dependency
 - **Any Backend** — Works with MLX, Ollama, vLLM, llama.cpp, or OpenAI API
 
 ## Quick Start
@@ -24,12 +24,12 @@ cd molebie-ai
 That's it. The installer handles everything:
 
 1. **Checks your system** — OS, chip, RAM, disk space
-2. **Installs missing tools** — Docker, Node.js, Supabase CLI (asks first)
+2. **Installs missing tools** — Docker, Node.js (asks first)
 3. **Detects the best backend** — recommends MLX on Apple Silicon, Ollama elsewhere
 4. **Lets you choose models** — Light (8+ GB RAM) or Balanced (16+ GB RAM)
 5. **Installs the backend** — installs `mlx-vlm` and downloads models, or pulls Ollama models
 6. **Configures features** — web search (SearXNG), RAG document memory, voice
-7. **Sets up services** — starts Docker containers, Supabase, and generates all config files
+7. **Sets up services** — starts Docker containers and generates all config files
 8. **Offers to start** — launches everything with one confirmation
 
 After setup, start the system any time with:
@@ -45,7 +45,7 @@ Open **http://localhost:3000**, create an account, and start chatting.
 | Command | Description |
 |---------|-------------|
 | `molebie-ai install` | Interactive setup wizard — installs backend, downloads models, configures everything |
-| `molebie-ai run` | Start all configured services (Supabase, Gateway, Webapp, inference) |
+| `molebie-ai run` | Start all configured services (Gateway, Webapp, inference) |
 | `molebie-ai doctor` | Diagnose environment problems — checks dependencies, config, and service health |
 | `molebie-ai status` | Show current configuration and which services are running |
 | `molebie-ai config show` | Display saved configuration (JSON) |
@@ -61,7 +61,7 @@ If you prefer to set up manually or need finer control:
 bash setup.sh
 ```
 
-`setup.sh` checks prerequisites, installs dependencies, starts Supabase, and generates `.env.local`. You then start services individually:
+`setup.sh` checks prerequisites, installs dependencies, and generates `.env.local`. You then start services individually:
 
 ```bash
 # Start an inference backend (pick one)
@@ -90,7 +90,7 @@ docker compose up -d       # Optional: web search + TTS
 - **RAM**: 8GB minimum, 16GB+ recommended for local inference
 - **GPU**: Recommended for local LLM inference (Apple Silicon, NVIDIA)
 - **Disk**: ~2-10GB per model depending on quantization
-- **Docker**: Required for Supabase, optional services (SearXNG, Kokoro TTS)
+- **Docker**: Optional, only needed for SearXNG web search and Kokoro TTS
 
 ## Architecture
 
@@ -102,7 +102,7 @@ docker compose up -d       # Optional: web search + TTS
 │  │  - Chat UI (Streaming)    - Deep Think Toggle           │   │
 │  │  - Session History        - Voice Conversation          │   │
 │  │  - Image Upload/Paste     - Document Brain (RAG)        │   │
-│  │  - Auth via Supabase      - Web Search Sources          │   │
+│  │  - Auth via JWT           - Web Search Sources          │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -131,10 +131,10 @@ docker compose up -d       # Optional: web search + TTS
 ┌─────────────────────────────────────────────────────────────────┐
 │                       DATA LAYER                                │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │              Supabase                                   │   │
-│  │  - Auth (Users, JWT)     - Storage (Documents + Images)  │   │
-│  │  - Postgres (Data)       - pgvector (RAG Embeddings)    │   │
-│  │  - RLS (Multi-tenant)    - BM25 Full-Text Search        │   │
+│  │              SQLite + Local Storage                     │   │
+│  │  - Auth (JWT + bcrypt)   - Storage (Local filesystem)   │   │
+│  │  - SQLite (Data)         - sqlite-vec (RAG Embeddings)  │   │
+│  │  - User isolation        - FTS5 Full-Text Search        │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -176,11 +176,9 @@ molebie-ai/
 ├── webapp/                          # Next.js Frontend (TypeScript)
 │   └── src/
 │       ├── app/chat/                # Chat UI, sidebar, voice settings
-│       └── lib/                     # API client, voice hooks, Supabase
+│       └── lib/                     # API client, voice hooks, auth
 │
-├── supabase/                        # Database (Postgres + pgvector)
-│   ├── config.toml
-│   └── migrations/                  # SQL migrations
+├── data/                            # Runtime data (SQLite DB, documents, images)
 │
 ├── searxng/                         # SearXNG search config
 │   └── settings.yml
@@ -271,19 +269,19 @@ Split across two machines — a GPU machine for inference and a server for every
 ```
 Browser → Webapp (:3000) → Gateway (:8000) ──┬──→ Thinking LLM (:8080)  ← GPU machine
               │                                └──→ Instant LLM  (:8081)  ← GPU machine
-              └──→ Supabase (:54321)                               ← Server
+              └──→ SQLite (data/molebie.db)                         ← Server
 ```
 
 Run `molebie-ai install` and choose "Two machines" when prompted. The installer will:
 - Ask for your GPU machine IP and server IP
 - Configure all endpoints in `.env.local` automatically
-- Update Supabase auth redirects for cross-machine access
+- Configure auth endpoints for cross-machine access
 - Print exact commands to run on the GPU machine
 
 On the **server machine** (runs gateway, webapp, database):
 ```bash
 molebie-ai install    # Choose "Two machines", enter IPs
-molebie-ai run        # Starts Supabase, Gateway, Webapp, Docker services
+molebie-ai run        # Starts Gateway, Webapp, Docker services
 ```
 
 On the **GPU machine** (runs inference only):
@@ -355,12 +353,12 @@ The CLI verifies the remote GPU is reachable before starting local services.
 | `profiles` | User profiles (auto-created on signup) |
 | `chat_sessions` | Conversations with pinning support |
 | `chat_messages` | Messages with `reasoning_content` and `mode_used` |
-| `message_images` | Image attachments (metadata; bytes in Supabase Storage) |
+| `message_images` | Image attachments (metadata; files in local storage) |
 | `documents` | Uploaded document metadata |
-| `document_chunks` | Chunks with pgvector embeddings + tsvector for BM25 |
+| `document_chunks` | Chunks with sqlite-vec embeddings + FTS5 for BM25 |
 | `session_documents` | Per-session document attachments |
 
-All tables have Row-Level Security enabled — users can only access their own data.
+All queries enforce user isolation — users can only access their own data.
 
 ## Development
 
@@ -404,7 +402,7 @@ Run `molebie-ai doctor` for a full diagnostic — it checks dependencies, config
 | Something seems wrong | `molebie-ai doctor` — checks everything and suggests fixes |
 | `uvicorn: command not found` | Use `python3 -m uvicorn` (Makefile does this) |
 | Address already in use | `lsof -i :<port>` then `kill` the process |
-| Supabase 401 errors | Run `supabase status` and check keys match `.env.local` |
+| Auth 401 errors | Check `JWT_SECRET` in `.env.local` matches what the gateway is using |
 | Voice transcription fails | `brew install ffmpeg` |
 | OMP error on macOS | `make dev-gateway` sets `KMP_DUPLICATE_LIB_OK=TRUE` automatically |
 | Config looks wrong | `molebie-ai config show` to inspect, `molebie-ai install` to reconfigure |
@@ -415,7 +413,7 @@ Run `molebie-ai doctor` for a full diagnostic — it checks dependencies, config
 |-------|-----------|
 | Frontend | Next.js 16, React 19, Tailwind CSS v4, TypeScript |
 | Backend | FastAPI, Uvicorn, Pydantic |
-| Auth & DB | Supabase (Auth, Postgres, pgvector, Storage) |
+| Auth & DB | SQLite, sqlite-vec, JWT + bcrypt, local file storage |
 | Inference | Any OpenAI-compatible server (MLX, Ollama, vLLM, llama.cpp) |
 | Embeddings | sentence-transformers |
 | Reranking | cross-encoder/ms-marco-MiniLM-L6-v2 |
@@ -438,7 +436,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 - [MLX](https://github.com/ml-explore/mlx) — Apple's ML framework for Apple Silicon
 - [Qwen](https://github.com/QwenLM/Qwen3) — Alibaba's open-source LLM family
-- [Supabase](https://supabase.com/) — Backend as a Service
 - [FastAPI](https://fastapi.tiangolo.com/) — Modern Python web framework
 - [Next.js](https://nextjs.org/) — React framework
 - [SearXNG](https://github.com/searxng/searxng) — Privacy-respecting metasearch engine

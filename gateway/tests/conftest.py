@@ -16,27 +16,18 @@ sys.path.insert(0, str(gateway_root))
 
 
 @pytest.fixture
-def test_env():
-    """Set up test environment variables."""
+def test_env(tmp_path):
+    """Set up test environment variables with a temporary data directory."""
     original_env = os.environ.copy()
-    
-    # Override with test values
+
     os.environ.update({
         "DEBUG": "true",
-        "SUPABASE_URL": "http://127.0.0.1:54321",
-        "SUPABASE_ANON_KEY": "test_anon_key",
-        "SUPABASE_SERVICE_ROLE_KEY": "test_service_role_key",
-        "JWT_SECRET": "test_jwt_secret",
+        "JWT_SECRET": "test_jwt_secret_for_testing_only",
+        "DATA_DIR": str(tmp_path / "data"),
+        "AUTH_MODE": "single",
     })
-    
+
     yield os.environ
-    
-    # Restore original environment
+
     os.environ.clear()
     os.environ.update(original_env)
-
-
-@pytest.fixture
-def mock_supabase_client(mocker):
-    """Mock Supabase client for unit tests."""
-    return mocker.patch("app.services.database.get_supabase_client")

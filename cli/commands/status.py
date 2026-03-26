@@ -61,7 +61,6 @@ def status() -> None:
     table.add_column("Status", min_width=10)
 
     services: list[tuple[str, str]] = [
-        ("Supabase", f"http://{ip}:54321/rest/v1/"),
         ("Gateway", f"http://{ip}:8000/health"),
         ("Webapp", f"http://{ip}:3000"),
     ]

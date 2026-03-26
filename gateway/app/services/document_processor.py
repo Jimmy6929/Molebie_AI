@@ -2,7 +2,7 @@
 Document processing pipeline for RAG.
 
 Handles text extraction (PDF, DOCX, TXT, MD), chunking with overlap,
-embedding generation, and storage in Supabase (document_chunks table).
+embedding generation, and storage in the document_chunks table.
 Supports markdown-header-aware splitting for better chunk boundaries.
 """
 

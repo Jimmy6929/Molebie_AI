@@ -174,11 +174,6 @@ class Settings(BaseSettings):
     vision_max_image_size: int = 5 * 1024 * 1024  # 5 MB max base64 payload
     vision_allowed_types: str = "image/jpeg,image/png,image/gif,image/webp"
 
-    # Legacy (kept for backwards-compat env files, unused)
-    supabase_url: str = ""
-    supabase_anon_key: str = ""
-    supabase_service_role_key: str = ""
-    database_url: str = ""
     
     # ── Helpers ────────────────────────────────────────────────
     

@@ -95,16 +95,6 @@ NODE_PREREQ = InstallablePrereq(
     },
 )
 
-SUPABASE_PREREQ = InstallablePrereq(
-    name="Supabase CLI",
-    install_cmds={
-        "brew": ["brew", "install", "supabase/tap/supabase"],
-        "apt": ["npm", "i", "-g", "supabase"],
-        "dnf": ["npm", "i", "-g", "supabase"],
-        "pacman": ["npm", "i", "-g", "supabase"],
-    },
-)
-
 FFMPEG_PREREQ = InstallablePrereq(
     name="ffmpeg",
     install_cmds={
@@ -176,17 +166,6 @@ def check_python() -> CheckResult:
             fix_hint="brew install python",
         )
     return CheckResult("Python 3", True, f"3.{minor}")
-
-
-def check_supabase_cli() -> CheckResult:
-    if not shutil.which("supabase"):
-        return CheckResult(
-            "Supabase CLI", False, "Not installed",
-            fix_hint="brew install supabase/tap/supabase",
-        )
-    rc, out = _run_quiet(["supabase", "--version"])
-    version = out if rc == 0 else "unknown"
-    return CheckResult("Supabase CLI", True, version)
 
 
 def check_ffmpeg() -> CheckResult:
@@ -265,7 +244,6 @@ def check_all(
         docker_result,
         check_node(),
         check_python(),
-        check_supabase_cli(),
     ]
     if voice_enabled:
         results.append(check_ffmpeg())
@@ -305,10 +283,6 @@ def find_missing_prereqs() -> list[InstallablePrereq]:
                 pass
     if not node_ok:
         missing.append(NODE_PREREQ)
-
-    # Supabase CLI
-    if not shutil.which("supabase"):
-        missing.append(SUPABASE_PREREQ)
 
     # ffmpeg (optional)
     if not shutil.which("ffmpeg"):

@@ -27,8 +27,7 @@ def _build_overrides(config: MolebieConfig) -> dict[str, str]:
         # Inference URLs point to GPU machine
         overrides["INFERENCE_THINKING_URL"] = f"http://{gpu}:8080"
         overrides["INFERENCE_INSTANT_URL"] = f"http://{gpu}:8081"
-        # Supabase/Gateway/Webapp URLs point to server machine
-        overrides["NEXT_PUBLIC_SUPABASE_URL"] = f"http://{server}:54321"
+        # Gateway/Webapp URLs point to server machine
         overrides["NEXT_PUBLIC_GATEWAY_URL"] = f"http://{server}:8000"
         overrides["CORS_ORIGINS"] = (
             f"http://localhost:3000,http://127.0.0.1:3000,http://{server}:3000"
@@ -117,33 +116,7 @@ def generate_env_local(config: MolebieConfig, force: bool = False) -> Path:
 
     output.write_text("\n".join(result) + "\n")
 
-    # For two-machine setups, update supabase/config.toml auth redirect URLs
-    if config.setup_type == SetupType.TWO_MACHINE:
-        _update_supabase_redirects(root, config.server_ip)
-
     return output
-
-
-def _update_supabase_redirects(root: Path, server_ip: str) -> None:
-    """Add server IP to Supabase auth redirect URLs for two-machine setups."""
-    config_toml = root / "supabase" / "config.toml"
-    if not config_toml.exists():
-        return
-
-    content = config_toml.read_text()
-    new_origin = f'"http://{server_ip}:3000"'
-
-    # Only add if not already present
-    if new_origin in content:
-        return
-
-    # Match the additional_redirect_urls line and append the server IP
-    old = 'additional_redirect_urls = ["http://127.0.0.1:3000", "http://localhost:3000"]'
-    new = f'additional_redirect_urls = ["http://127.0.0.1:3000", "http://localhost:3000", "http://{server_ip}:3000"]'
-
-    if old in content:
-        content = content.replace(old, new)
-        config_toml.write_text(content)
 
 
 def update_env_key(key: str, value: str) -> bool:

@@ -61,7 +61,7 @@ def _check_remote_inference(config) -> None:
 def run(
     service: Optional[str] = typer.Option(
         None, "--service", "-s",
-        help="Start only a specific service (e.g., gateway, webapp, supabase)",
+        help="Start only a specific service (e.g., gateway, webapp)",
     ),
     no_inference: bool = typer.Option(
         False, "--no-inference",

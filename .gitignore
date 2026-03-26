@@ -5,9 +5,6 @@
 .env.production
 .env.staging
 
-# Local Supabase info (contains secrets)
-LOCAL-SUPABASE-INFO.txt
-
 # Local data directory (SQLite database + uploaded files)
 data/
 
@@ -34,10 +31,6 @@ build/
 *.swp
 *.swo
 *.code-workspace
-
-# Supabase local
-supabase/.branches/
-supabase/.temp/
 
 # Project docs (private - do not push)
 Local_AI_model_Project_doc/

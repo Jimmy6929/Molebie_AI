@@ -17,7 +17,6 @@ from pathlib import Path
 from cli.models.config import InferenceBackend, MolebieConfig, SetupType
 from cli.services.config_manager import get_project_root
 from cli.services.prerequisite_checker import check_docker, start_docker_daemon
-from cli.services.supabase_manager import extract_keys, inject_keys
 from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
 
 
@@ -59,17 +58,7 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
 
     services: list[ServiceDef] = []
 
-    # 1. Supabase
-    services.append(ServiceDef(
-        name="Supabase",
-        port=54321,
-        health_url=f"http://{ip}:54321/rest/v1/",
-        start_cmd=["supabase", "start"],
-        cwd=str(root / "supabase"),
-        start_order=0,
-    ))
-
-    # 2. Docker services
+    # 1. Docker services (optional)
     if config.search_enabled:
         services.append(ServiceDef(
             name="SearXNG",
@@ -94,7 +83,7 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
             start_order=1,
         ))
 
-    # 3. Inference (only on single-machine or if we're the GPU machine)
+    # 2. Inference (only on single-machine or if we're the GPU machine)
     if config.setup_type == SetupType.SINGLE:
         if config.inference_backend == InferenceBackend.MLX:
             services.append(ServiceDef(
@@ -115,7 +104,7 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
                 start_order=2,
             ))
 
-    # 4. Gateway
+    # 3. Gateway
     services.append(ServiceDef(
         name="Gateway",
         port=8000,
@@ -129,7 +118,7 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
         start_order=3,
     ))
 
-    # 5. Webapp
+    # 4. Webapp
     services.append(ServiceDef(
         name="Webapp",
         port=3000,
@@ -141,23 +130,6 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
 
     services.sort(key=lambda s: s.start_order)
     return services
-
-
-def _read_env_keys(env_path: Path) -> dict[str, str]:
-    """Read Supabase keys and JWT secret from .env.local."""
-    keys: dict[str, str] = {}
-    if not env_path.exists():
-        return keys
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        k = k.strip()
-        v = v.strip().strip('"').strip("'")
-        if k in ("SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "JWT_SECRET"):
-            keys[k] = v
-    return keys
 
 
 def _print_startup_summary(
@@ -176,17 +148,13 @@ def _print_startup_summary(
     console.print("  [bold cyan]Services:[/bold cyan]")
     webapp_svc = next((s for s in definitions if s.name == "Webapp"), None)
     gateway_svc = next((s for s in definitions if s.name == "Gateway"), None)
-    supabase_svc = next((s for s in definitions if s.name == "Supabase"), None)
     if webapp_svc:
         console.print(f"    App:        http://{ip}:{webapp_svc.port}")
     if gateway_svc:
         console.print(f"    API:        http://{ip}:{gateway_svc.port}")
-    if supabase_svc:
-        status = "running" if _check_health(supabase_svc.health_url, timeout=2.0) else "not running"
-        console.print(f"    Supabase:   http://{ip}:{supabase_svc.port}  [dim]({status})[/dim]")
-        console.print(f"    DB:         postgresql://postgres:postgres@{ip}:54322/postgres")
+    console.print(f"    Database:   data/molebie.db (SQLite)")
     for svc in definitions:
-        if svc.name in ("Webapp", "Gateway", "Supabase") or svc.name.startswith("MLX"):
+        if svc.name in ("Webapp", "Gateway") or svc.name.startswith("MLX"):
             continue
         if _check_health(svc.health_url, timeout=2.0):
             console.print(f"    {svc.name + ':':12s}http://{ip}:{svc.port}")
@@ -216,18 +184,8 @@ def _print_startup_summary(
     console.print(f"    Voice:      {'enabled' if config.voice_enabled else 'disabled'}")
     console.print()
 
-    # ── Keys ──
-    env_path = root / ".env.local"
-    keys = _read_env_keys(env_path)
-    console.print("  [bold cyan]Keys:[/bold cyan]")
-    if keys.get("SUPABASE_ANON_KEY"):
-        console.print(f"    Anon:       {keys['SUPABASE_ANON_KEY']}")
-    if keys.get("SUPABASE_SERVICE_ROLE_KEY"):
-        console.print(f"    Service:    {keys['SUPABASE_SERVICE_ROLE_KEY']}")
-    if keys.get("JWT_SECRET"):
-        console.print(f"    JWT:        {keys['JWT_SECRET']}")
-    if not keys:
-        console.print("    [dim](no keys found — Supabase may not have started)[/dim]")
+    # ── Config ──
+    console.print("  [bold cyan]Config:[/bold cyan]")
     console.print(f"    Config:     .molebie/config.json")
     console.print(f"    Env:        .env.local")
     console.print()
@@ -263,7 +221,7 @@ class ServiceRunner:
             return None
 
     def _start_and_wait(self, svc: ServiceDef) -> bool:
-        """Start a service that runs to completion (supabase start, docker compose)."""
+        """Start a service that runs to completion (docker compose)."""
         try:
             result = subprocess.run(
                 svc.start_cmd,
@@ -294,18 +252,16 @@ class ServiceRunner:
         if skip_inference:
             definitions = [s for s in definitions if "MLX" not in s.name and "Ollama" not in s.name]
 
-        # Check if Docker is needed and ensure it's running
-        needs_docker = any(
-            s.name == "Supabase" or s.is_docker for s in definitions
-        )
+        # Check if Docker is needed (only for optional services now)
+        needs_docker = any(s.is_docker for s in definitions)
         if needs_docker:
             docker_result = check_docker()
             if not docker_result.passed:
-                print_info("Docker is required but not running — starting automatically...")
+                print_info("Docker is required for optional services — starting automatically...")
                 if start_docker_daemon(timeout_seconds=120):
                     print_ok("Docker daemon started")
                 else:
-                    print_warn("Could not start Docker — Supabase and Docker services may fail")
+                    print_warn("Could not start Docker — optional services (search, TTS) may fail")
                 console.print()
 
         # Set up signal handler
@@ -326,22 +282,17 @@ class ServiceRunner:
             # Skip if already running
             if _check_health(svc.health_url, timeout=2.0):
                 print_ok(f"{svc.name} already running on :{svc.port}")
-                if svc.name == "Supabase":
-                    self._ensure_supabase_keys()
                 continue
 
             print_info(f"Starting {svc.name}...")
 
-            # Supabase and Docker services run-to-completion
-            if svc.name == "Supabase" or svc.is_docker:
+            # Docker services run-to-completion
+            if svc.is_docker:
                 if self._start_and_wait(svc):
                     if _wait_healthy(svc.health_url, svc.name, max_wait=30):
                         print_ok(f"{svc.name} started on :{svc.port}")
                     else:
                         print_warn(f"{svc.name} started but not yet healthy — may need more time")
-                    # After Supabase starts, ensure keys are in .env.local
-                    if svc.name == "Supabase":
-                        self._ensure_supabase_keys()
                 else:
                     if svc.is_optional:
                         print_warn(f"{svc.name} failed to start (optional, continuing)")
@@ -364,7 +315,6 @@ class ServiceRunner:
             if _wait_healthy(svc.health_url, svc.name, max_wait=30):
                 print_ok(f"{svc.name} started on :{svc.port}")
             else:
-                # Check if process died
                 if proc.poll() is not None:
                     if svc.is_optional:
                         print_warn(f"{svc.name} exited unexpectedly (optional, continuing)")
@@ -375,10 +325,8 @@ class ServiceRunner:
 
         if not self._shutdown and self._processes:
             _print_startup_summary(config, definitions)
-            # Block until signal
             try:
                 while not self._shutdown:
-                    # Check if any process has died
                     for name, proc in self._processes:
                         if proc.poll() is not None:
                             print_warn(f"{name} exited with code {proc.returncode}")
@@ -387,20 +335,6 @@ class ServiceRunner:
                 pass
             finally:
                 self.stop_all()
-
-    @staticmethod
-    def _ensure_supabase_keys() -> None:
-        """Extract and inject Supabase keys if .env.local has placeholders."""
-        env_path = get_project_root() / ".env.local"
-        if not env_path.exists():
-            return
-        content = env_path.read_text()
-        # Check if keys are still placeholders
-        if "YOUR_ANON_KEY_HERE" in content or "YOUR_SERVICE_ROLE_KEY_HERE" in content or "YOUR_JWT_SECRET_HERE" in content:
-            keys = extract_keys()
-            if keys:
-                inject_keys(keys)
-                print_ok("Supabase keys injected into .env.local")
 
     def stop_all(self) -> None:
         """Stop all managed background processes."""

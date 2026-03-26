@@ -116,7 +116,6 @@ def doctor() -> None:
     gpu_ip = config.gpu_ip if config.setup_type.value == "two-machine" else "localhost"
 
     services = [
-        (f"http://{ip}:54321/rest/v1/", "Supabase"),
         (f"http://{ip}:8000/health", "Gateway"),
         (f"http://{ip}:3000", "Webapp"),
     ]

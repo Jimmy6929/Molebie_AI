@@ -7,7 +7,7 @@ set -euo pipefail
 # Checks prerequisites, installs dependencies, generates .env.local
 # with a JWT secret, and creates the data directory.
 #
-# No Docker or Supabase required for the database.
+# No Docker required for the database — uses local SQLite.
 # Docker is only needed for optional services (SearXNG, Kokoro TTS).
 #
 # Usage:  bash setup.sh

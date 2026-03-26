@@ -129,16 +129,6 @@ def setup_rag() -> FeatureSetupResult:
     """Prepare RAG prerequisites and optionally pre-download the embedding model."""
     warnings: list[str] = []
 
-    # Verify Supabase is reachable (pgvector + migrations handled by supabase start)
-    try:
-        resp = httpx.get("http://localhost:54321/rest/v1/", timeout=3)
-        if resp.status_code >= 400:
-            warnings.append("Supabase may not be fully ready — RAG needs pgvector")
-    except (httpx.ConnectError, httpx.TimeoutException):
-        warnings.append(
-            "Supabase not reachable — RAG requires Supabase with pgvector extension"
-        )
-
     # Attempt to pre-download embedding model
     result = subprocess.run(
         [sys.executable, "-c",
