@@ -6,6 +6,7 @@ Embeds the user query, searches document_chunks via hybrid search
 and formats matching chunks as context for injection into the LLM prompt.
 """
 
+import asyncio
 import time
 from typing import Any, Dict, List, Optional
 
@@ -132,17 +133,82 @@ class RAGService:
             print("[rag] Falling back to vector-only search")
             return await self._search_chunks(user_token, query_embedding, count, threshold)
 
+    async def _rewrite_query(
+        self,
+        query: str,
+        conversation_context: List[Dict[str, str]],
+    ) -> str:
+        """Rewrite the query using conversation context for better retrieval.
+
+        Falls back to original query on timeout or error.
+        """
+        context_lines = []
+        for msg in conversation_context[-6:]:
+            role = msg.get("role", "").upper()
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    p.get("text", "") for p in content if isinstance(p, dict)
+                )
+            content = content[:300]
+            context_lines.append(f"{role}: {content}")
+        context_text = "\n".join(context_lines)
+
+        prompt = (
+            "Given this conversation context and the latest user query, "
+            "rewrite the query as a standalone search query that would "
+            "retrieve the most relevant documents. Include key terms and "
+            "context that might be implied by the conversation.\n\n"
+            f"CONVERSATION:\n{context_text}\n\n"
+            f"LATEST QUERY: {query}\n\n"
+            "Rewritten search query (one line, no explanation):"
+        )
+
+        try:
+            from app.services.inference import get_inference_service
+            inference = get_inference_service()
+
+            result = await asyncio.wait_for(
+                inference.generate_response(
+                    messages=[{"role": "user", "content": prompt}],
+                    mode=self.settings.rag_query_rewrite_llm_mode,
+                    max_tokens=self.settings.rag_query_rewrite_max_tokens,
+                    temperature=0.0,
+                ),
+                timeout=self.settings.rag_query_rewrite_timeout,
+            )
+
+            rewritten = result.get("content", "").strip()
+            if "</think>" in rewritten:
+                rewritten = rewritten.split("</think>", 1)[-1].strip()
+            rewritten = rewritten.strip("\"'")
+
+            if rewritten and len(rewritten) > 3:
+                print(f"[rag] Query rewritten: '{query[:60]}' -> '{rewritten[:60]}'")
+                return rewritten
+            else:
+                print("[rag] Rewrite produced empty/short result, using original")
+                return query
+
+        except asyncio.TimeoutError:
+            print(f"[rag] Query rewrite timed out ({self.settings.rag_query_rewrite_timeout}s), using original")
+            return query
+        except Exception as exc:
+            print(f"[rag] Query rewrite failed ({type(exc).__name__}: {exc}), using original")
+            return query
+
     async def retrieve_context(
         self,
         user_token: str,
         query: str,
         limit: Optional[int] = None,
         threshold: Optional[float] = None,
+        conversation_context: Optional[List[Dict[str, str]]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Embed the query and search for matching document chunks.
 
-        Pipeline: embed → hybrid/vector search → (rerank in Phase 4) → return
+        Pipeline: (rewrite) → embed → hybrid/vector search → rerank → return
         When hybrid search is enabled, uses RRF fusion of vector + BM25.
         Otherwise falls back to pure vector search.
 
@@ -158,17 +224,28 @@ class RAGService:
         thresh = threshold or self.match_threshold
         timings: Dict[str, float] = {}
 
+        # Step 0: Query rewriting (contextual expansion)
+        search_query = query
+        if (self.settings.rag_query_rewrite_enabled
+                and conversation_context
+                and len(conversation_context) >= 2):
+            t_rw = time.monotonic()
+            search_query = await self._rewrite_query(query, conversation_context)
+            timings["t_rewrite_ms"] = round((time.monotonic() - t_rw) * 1000, 1)
+        else:
+            timings["t_rewrite_ms"] = 0
+
         # Step 1: Embed query
         t0 = time.monotonic()
-        print(f"[rag] Embedding query ({len(query)} chars)...")
-        query_embedding = self.embedding.embed(query)
+        print(f"[rag] Embedding query ({len(search_query)} chars)...")
+        query_embedding = self.embedding.embed(search_query)
         timings["t_embed_ms"] = round((time.monotonic() - t0) * 1000, 1)
 
         # Step 2: Search
         t1 = time.monotonic()
         if self.hybrid_enabled:
             results = await self._hybrid_search(
-                user_token, query_embedding, query, count, thresh
+                user_token, query_embedding, search_query, count, thresh
             )
         else:
             results = await self._search_chunks(
@@ -201,7 +278,7 @@ class RAGService:
             timings["t_rerank_ms"] = 0
 
         timings["t_total_ms"] = round(
-            timings["t_embed_ms"] + timings["t_search_ms"] + timings["t_rerank_ms"], 1
+            timings.get("t_rewrite_ms", 0) + timings["t_embed_ms"] + timings["t_search_ms"] + timings["t_rerank_ms"], 1
         )
 
         # Attach timings to results for metrics

@@ -144,6 +144,31 @@ class Settings(BaseSettings):
     # ── Session Document Attachments ──────────────────────────────
     session_doc_max_chars: int = 12000  # max extracted text per attachment
 
+    # ── Conversation Summarisation (8a) ─────────────────────────
+    summary_enabled: bool = True
+    summary_trigger_threshold: int = 16    # unsummarised messages before compressing
+    summary_recent_messages: int = 10      # recent messages kept raw (not summarised)
+    summary_max_input_chars: int = 8000    # max chars of messages sent to summariser LLM
+    summary_max_output_tokens: int = 300   # max tokens for LLM summary response
+    summary_llm_mode: str = "instant"      # LLM tier for summarisation
+
+    # ── Structured Memory (8b) ──────────────────────────────────
+    memory_enabled: bool = True
+    memory_extract_interval: int = 6       # extract facts every N messages
+    memory_max_facts_per_extraction: int = 5
+    memory_dedup_threshold: float = 0.9    # cosine sim above this = duplicate
+    memory_retrieval_threshold: float = 0.5
+    memory_retrieval_top_k: int = 5
+    memory_max_per_user: int = 200         # max stored memories per user
+    memory_llm_mode: str = "instant"       # LLM tier for extraction
+    memory_extract_max_tokens: int = 400   # max tokens for extraction response
+
+    # ── RAG Query Rewriting (8c) ────────────────────────────────
+    rag_query_rewrite_enabled: bool = True
+    rag_query_rewrite_timeout: float = 3.0  # hard timeout; fallback to original
+    rag_query_rewrite_max_tokens: int = 50  # short rewritten query
+    rag_query_rewrite_llm_mode: str = "instant"
+
     # ── Vision / Image ──────────────────────────────────────────
     vision_max_image_size: int = 5 * 1024 * 1024  # 5 MB max base64 payload
     vision_allowed_types: str = "image/jpeg,image/png,image/gif,image/webp"

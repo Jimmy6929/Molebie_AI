@@ -32,6 +32,8 @@ from app.services.database import DatabaseService, get_database_service
 from app.services.inference import InferenceService, get_inference_service
 from app.services.web_search import WebSearchService, get_web_search_service
 from app.services.rag import RAGService, get_rag_service
+from app.services.summarizer import get_summariser_service
+from app.services.memory import get_memory_service
 
 
 @lru_cache(maxsize=4)
@@ -176,13 +178,22 @@ def _validate_response_sources(
     print(f"[chat] Response validation: {tag} (provided: {source_count} sources)")
 
 
-def _build_system_message(conversation_mode: bool = False) -> dict:
+def _build_system_message(
+    conversation_mode: bool = False,
+    summary: Optional[str] = None,
+    memories_text: Optional[str] = None,
+) -> dict:
     template_name = "system_voice" if conversation_mode else "system"
     prompt_template = _load_prompt_template(template_name)
-    return {
-        "role": "system",
-        "content": prompt_template.format(current_date=date.today().strftime("%A, %B %d, %Y")),
-    }
+    content = prompt_template.format(current_date=date.today().strftime("%A, %B %d, %Y"))
+
+    if summary:
+        content += f"\n\nCONVERSATION SUMMARY (earlier messages condensed):\n{summary}"
+
+    if memories_text:
+        content += f"\n\n{memories_text}"
+
+    return {"role": "system", "content": content}
 
 
 def _validate_image(data_uri: str, settings) -> tuple:
@@ -373,6 +384,8 @@ async def send_message(
             )
     
     session_id = session["id"]
+    session_summary = session.get("summary")
+    summary_msg_count = session.get("summary_message_count", 0)
 
     # Auto-rename "New Chat" sessions on first message
     if session.get("title") == "New Chat":
@@ -413,8 +426,9 @@ async def send_message(
             user_token=token,
         )
 
-    # Get conversation history for context
-    history = db.get_session_messages(session_id, user_id, limit=20, user_token=token)
+    # Get conversation history (reduced window when summary exists)
+    history_limit = settings.summary_recent_messages if session_summary else 20
+    history = db.get_session_messages(session_id, user_id, limit=history_limit, user_token=token)
 
     # Build messages — for past messages with images, use placeholder text
     image_map = db.get_message_images(
@@ -440,7 +454,21 @@ async def send_message(
         else:
             hist_messages.append({"role": msg["role"], "content": msg["content"]})
 
-    messages = [_build_system_message(request.conversation_mode)] + hist_messages
+    # Retrieve relevant user memories for context injection
+    memory_service = get_memory_service()
+    memories_text = ""
+    if memory_service.enabled and not request.conversation_mode:
+        try:
+            memories = await memory_service.retrieve_relevant_memories(token, request.message)
+            memories_text = memory_service.format_memories_for_context(memories)
+        except Exception as exc:
+            print(f"[chat] Memory retrieval failed: {exc}")
+
+    messages = [_build_system_message(
+        request.conversation_mode,
+        summary=session_summary,
+        memories_text=memories_text,
+    )] + hist_messages
 
     # Session attachments: inject full document text (highest priority context)
     attach_text = _fetch_session_attachments(session_id, user_id, token)
@@ -461,7 +489,9 @@ async def send_message(
     rag_chunks = []
     if not request.conversation_mode:
         if await rag.user_has_documents(token):
-            rag_chunks = await rag.retrieve_context(token, request.message)
+            rag_chunks = await rag.retrieve_context(
+                token, request.message, conversation_context=hist_messages,
+            )
             if rag_chunks:
                 rag_text = rag.format_context(rag_chunks)
                 header = _rag_quality_header(rag_chunks)
@@ -517,6 +547,24 @@ async def send_message(
 
     # Log whether the response referenced provided sources
     _validate_response_sources(clean_content, search_results, rag_chunks)
+
+    # Background tasks: summarisation and memory extraction (non-blocking)
+    total_msg_count = len(history) + 1  # +1 for the assistant message just saved
+    summariser = get_summariser_service()
+    if summariser.should_summarise(total_msg_count + summary_msg_count, summary_msg_count):
+        asyncio.create_task(
+            summariser.summarise_session(session_id, user_id, token)
+        )
+
+    if memory_service.should_extract(total_msg_count):
+        recent_for_extraction = hist_messages + [
+            {"role": "assistant", "content": clean_content}
+        ]
+        asyncio.create_task(
+            memory_service.extract_and_store(
+                session_id, user_id, token, recent_for_extraction
+            )
+        )
 
     # Build inference metadata for the response
     rag_metrics = rag.get_metrics(rag_chunks) if rag_chunks else None
@@ -722,6 +770,8 @@ async def send_message_stream(
             )
 
     session_id = session["id"]
+    session_summary = session.get("summary")
+    summary_msg_count = session.get("summary_message_count", 0)
 
     # Auto-rename "New Chat" sessions on first message
     if session.get("title") == "New Chat":
@@ -755,8 +805,9 @@ async def send_message_stream(
             user_token=token,
         )
 
-    # Get conversation history
-    history = db.get_session_messages(session_id, user_id, limit=20, user_token=token)
+    # Get conversation history (reduced window when summary exists)
+    history_limit = settings.summary_recent_messages if session_summary else 20
+    history = db.get_session_messages(session_id, user_id, limit=history_limit, user_token=token)
 
     # Build messages — for past messages with images, use placeholder text
     image_map = db.get_message_images(
@@ -782,7 +833,21 @@ async def send_message_stream(
         else:
             hist_messages.append({"role": msg["role"], "content": msg["content"]})
 
-    messages = [_build_system_message(request.conversation_mode)] + hist_messages
+    # Retrieve relevant user memories for context injection
+    memory_service = get_memory_service()
+    memories_text = ""
+    if memory_service.enabled and not request.conversation_mode:
+        try:
+            memories = await memory_service.retrieve_relevant_memories(token, request.message)
+            memories_text = memory_service.format_memories_for_context(memories)
+        except Exception as exc:
+            print(f"[chat] Memory retrieval failed: {exc}")
+
+    messages = [_build_system_message(
+        request.conversation_mode,
+        summary=session_summary,
+        memories_text=memories_text,
+    )] + hist_messages
 
     # Session attachments: inject full document text (highest priority context)
     attach_text = _fetch_session_attachments(session_id, user_id, token)
@@ -803,7 +868,9 @@ async def send_message_stream(
     rag_chunks = []
     if not request.conversation_mode:
         if await rag.user_has_documents(token):
-            rag_chunks = await rag.retrieve_context(token, request.message)
+            rag_chunks = await rag.retrieve_context(
+                token, request.message, conversation_context=hist_messages,
+            )
             if rag_chunks:
                 rag_text = rag.format_context(rag_chunks)
                 header = _rag_quality_header(rag_chunks)
@@ -901,6 +968,24 @@ async def send_message_stream(
                     user_token=token,
                 )
                 _validate_response_sources(save_content, search_results, rag_chunks)
+
+                # Background tasks: summarisation and memory extraction (non-blocking)
+                total_msg_count = len(history) + 1
+                summariser = get_summariser_service()
+                if summariser.should_summarise(total_msg_count + summary_msg_count, summary_msg_count):
+                    asyncio.create_task(
+                        summariser.summarise_session(session_id, user_id, token)
+                    )
+
+                if memory_service.should_extract(total_msg_count):
+                    recent_for_extraction = hist_messages + [
+                        {"role": "assistant", "content": save_content}
+                    ]
+                    asyncio.create_task(
+                        memory_service.extract_and_store(
+                            session_id, user_id, token, recent_for_extraction
+                        )
+                    )
             except Exception as db_err:
                 print(f"[chat] Failed to save assistant message to DB: {db_err}")
     
