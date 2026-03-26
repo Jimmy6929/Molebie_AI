@@ -7,7 +7,6 @@ message. When a summary exists, the chat route reduces history from 20
 to 10 recent messages and prepends the summary to the system message.
 """
 
-import asyncio
 import re
 from typing import Optional, Dict, Any, List
 
@@ -53,14 +52,13 @@ class SummariserService:
         self,
         session_id: str,
         user_id: str,
-        user_token: str,
     ) -> None:
         """Background task: fetch messages, generate summary, store it.
 
         Runs via asyncio.create_task — must not raise into the caller.
         """
         try:
-            await self._do_summarise(session_id, user_id, user_token)
+            await self._do_summarise(session_id, user_id)
         except Exception as exc:
             print(f"[summariser] Error for session {session_id}: {type(exc).__name__}: {exc}")
 
@@ -68,16 +66,13 @@ class SummariserService:
         self,
         session_id: str,
         user_id: str,
-        user_token: str,
     ) -> None:
         """Core summarisation logic."""
         from app.services.database import get_database_service
         db = get_database_service()
 
         # 1. Get session to read existing summary state
-        session = await asyncio.to_thread(
-            db.get_session, session_id, user_id, user_token
-        )
+        session = await db.get_session(session_id, user_id)
         if not session:
             print(f"[summariser] Session {session_id} not found")
             return
@@ -86,9 +81,7 @@ class SummariserService:
         summary_msg_count = session.get("summary_message_count", 0)
 
         # 2. Fetch ALL messages for this session
-        all_messages = await asyncio.to_thread(
-            db.get_session_messages, session_id, user_id, limit=500, user_token=user_token
-        )
+        all_messages = await db.get_session_messages(session_id, user_id, limit=500)
         total_count = len(all_messages)
 
         if not self.should_summarise(total_count, summary_msg_count):
@@ -144,9 +137,8 @@ class SummariserService:
 
         # 7. Update session in DB
         new_summary_count = end_idx
-        await asyncio.to_thread(
-            self._update_session_summary,
-            session_id, user_id, summary_text, new_summary_count, user_token,
+        await db.update_session_summary(
+            session_id, user_id, summary_text, new_summary_count
         )
 
         print(
@@ -172,27 +164,6 @@ class SummariserService:
             lines.append(line)
             total_chars += len(line)
         return "\n\n".join(lines)
-
-    def _update_session_summary(
-        self,
-        session_id: str,
-        user_id: str,
-        summary: str,
-        summary_message_count: int,
-        user_token: str,
-    ) -> None:
-        """Synchronous DB update for the session summary fields."""
-        from app.services.database import get_database_service
-        db = get_database_service()
-        db._request(
-            "PATCH",
-            f"chat_sessions?id=eq.{session_id}&user_id=eq.{user_id}",
-            user_token=user_token,
-            json={
-                "summary": summary,
-                "summary_message_count": summary_message_count,
-            },
-        )
 
 
 _summariser_service: Optional[SummariserService] = None

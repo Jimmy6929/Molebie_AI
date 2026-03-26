@@ -2,17 +2,15 @@
 Document management endpoints for RAG.
 
 Handles file upload, processing, listing, and deletion.
-Files are stored in Supabase Storage; metadata and chunks in Postgres.
+Files are stored locally; metadata and chunks in SQLite.
 """
 
-import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Dict, List
 
-import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.middleware.auth import JWTPayload, get_current_user
 from app.models.documents import (
     AttachResponse,
@@ -24,6 +22,7 @@ from app.models.documents import (
 )
 from app.services.document_processor import extract_text
 from app.services.database import DatabaseService, get_database_service
+from app.services.storage import LocalStorageService, get_storage_service
 from app.services.document_processor import DocumentProcessor, get_document_processor
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
@@ -38,103 +37,6 @@ ALLOWED_TYPES: Dict[str, str] = {
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
-# ── Supabase Storage helpers ─────────────────────────────────────────────
-
-def _storage_headers(settings: Settings) -> dict:
-    """Headers for Supabase Storage API calls using service role."""
-    return {
-        "apikey": settings.supabase_service_role_key,
-        "Authorization": f"Bearer {settings.supabase_service_role_key}",
-    }
-
-
-def _upload_to_storage(
-    settings: Settings,
-    user_id: str,
-    filename: str,
-    data: bytes,
-    content_type: str,
-) -> str:
-    """Upload file to Supabase Storage. Returns the storage path."""
-    storage_path = f"{user_id}/{uuid.uuid4().hex}_{filename}"
-    url = f"{settings.supabase_url}/storage/v1/object/documents/{storage_path}"
-
-    with httpx.Client(timeout=60.0) as client:
-        resp = client.post(
-            url,
-            content=data,
-            headers={
-                **_storage_headers(settings),
-                "Content-Type": content_type,
-            },
-        )
-        if not resp.is_success:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Storage upload failed: {resp.status_code} {resp.text[:300]}",
-            )
-    return storage_path
-
-
-def _download_from_storage(settings: Settings, storage_path: str) -> bytes:
-    """Download file bytes from Supabase Storage."""
-    url = f"{settings.supabase_url}/storage/v1/object/documents/{storage_path}"
-    with httpx.Client(timeout=60.0) as client:
-        resp = client.get(url, headers=_storage_headers(settings))
-        resp.raise_for_status()
-        return resp.content
-
-
-def _delete_from_storage(settings: Settings, storage_path: str) -> None:
-    """Delete a file from Supabase Storage."""
-    url = f"{settings.supabase_url}/storage/v1/object/documents/{storage_path}"
-    with httpx.Client(timeout=30.0) as client:
-        client.delete(url, headers=_storage_headers(settings))
-
-
-# ── Document DB helpers (service-role for status updates) ────────────────
-
-def _db_headers_service(settings: Settings) -> dict:
-    return {
-        "apikey": settings.supabase_service_role_key,
-        "Authorization": f"Bearer {settings.supabase_service_role_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
-
-
-def _insert_document(settings: Settings, doc: dict) -> dict:
-    url = f"{settings.supabase_url}/rest/v1/documents"
-    with httpx.Client() as client:
-        resp = client.post(url, json=doc, headers=_db_headers_service(settings))
-        resp.raise_for_status()
-        return resp.json()[0]
-
-
-def _update_document_status(
-    settings: Settings, doc_id: str, doc_status: str, processed_at: str = None
-):
-    url = f"{settings.supabase_url}/rest/v1/documents?id=eq.{doc_id}"
-    body: dict = {"status": doc_status}
-    if processed_at:
-        body["processed_at"] = processed_at
-    with httpx.Client() as client:
-        resp = client.patch(url, json=body, headers=_db_headers_service(settings))
-        resp.raise_for_status()
-
-
-def _insert_chunks(settings: Settings, chunks: List[dict]):
-    url = f"{settings.supabase_url}/rest/v1/document_chunks"
-    with httpx.Client(timeout=120.0) as client:
-        resp = client.post(url, json=chunks, headers=_db_headers_service(settings))
-        if resp.status_code == 400 and "dimension" in resp.text.lower():
-            raise ValueError(
-                f"Vector dimension mismatch: embedding model and DB column disagree. "
-                f"Apply the 1536-dim migration. Supabase: {resp.text[:200]}"
-            )
-        resp.raise_for_status()
-
-
 # ── Endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/upload", response_model=UploadResponse)
@@ -146,11 +48,13 @@ async def upload_document(
     """
     Upload a document for RAG processing.
 
-    Accepts TXT, MD, PDF, DOCX (up to 50 MB). The file is stored in
-    Supabase Storage, then text is extracted, chunked, embedded, and
-    inserted into document_chunks for vector search.
+    Accepts TXT, MD, PDF, DOCX (up to 50 MB). The file is stored locally,
+    then text is extracted, chunked, embedded, and inserted into
+    document_chunks for vector search.
     """
     settings = get_settings()
+    storage = get_storage_service()
+    db = get_database_service()
     user_id = user.user_id
 
     content_type = file.content_type or ""
@@ -171,27 +75,20 @@ async def upload_document(
 
     filename = file.filename or "document"
 
-    # 1. Upload to storage
-    storage_path = _upload_to_storage(settings, user_id, filename, data, content_type)
+    # 1. Upload to local storage
+    storage_path = storage.upload_document(user_id, filename, data, content_type)
 
     # 2. Create document row (pending)
-    doc_row = _insert_document(settings, {
-        "user_id": user_id,
-        "filename": filename,
-        "storage_path": storage_path,
-        "file_type": content_type,
-        "file_size": len(data),
-        "status": "pending",
-    })
+    doc_row = await db.insert_document(user_id, filename, storage_path, content_type, len(data))
     doc_id = doc_row["id"]
 
     # 3. Process: extract → chunk → embed (with optional contextual retrieval)
     try:
-        _update_document_status(settings, doc_id, "processing")
+        await db.update_document_status(doc_id, "processing")
         print(f"[documents] Processing {filename} ({len(data)} bytes, {content_type})")
 
         if settings.rag_contextual_retrieval_enabled:
-            _update_document_status(settings, doc_id, "processing_context")
+            await db.update_document_status(doc_id, "processing_context")
             chunk_triples = await processor.process_async(data, content_type)
         else:
             chunk_triples = processor.process(data, content_type)
@@ -199,7 +96,7 @@ async def upload_document(
         print(f"[documents] Processing complete: {len(chunk_triples)} chunk+embedding pairs")
     except Exception as exc:
         print(f"[documents] Processing FAILED: {type(exc).__name__}: {exc}")
-        _update_document_status(settings, doc_id, "failed")
+        await db.update_document_status(doc_id, "failed")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Processing failed: {exc}",
@@ -225,19 +122,18 @@ async def upload_document(
         batch_size = 20
         for i in range(0, len(chunk_rows), batch_size):
             batch = chunk_rows[i : i + batch_size]
-            _insert_chunks(settings, batch)
+            await db.insert_chunks(batch)
             print(f"[documents] Inserted chunks {i}–{i + len(batch) - 1}")
     except Exception as exc:
         print(f"[documents] Chunk insert FAILED: {type(exc).__name__}: {exc}")
-        _update_document_status(settings, doc_id, "failed")
+        await db.update_document_status(doc_id, "failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to store chunks: {exc}",
         )
 
     # 5. Mark completed
-    _update_document_status(
-        settings,
+    await db.update_document_status(
         doc_id,
         "completed",
         processed_at=datetime.now(timezone.utc).isoformat(),
@@ -258,19 +154,7 @@ async def list_documents(
     db: DatabaseService = Depends(get_database_service),
 ):
     """List all documents uploaded by the current user."""
-    token = user.raw_token
-    settings = get_settings()
-    url = (
-        f"{settings.supabase_url}/rest/v1/documents"
-        f"?user_id=eq.{user.user_id}&order=created_at.desc"
-    )
-    with httpx.Client() as client:
-        resp = client.get(url, headers={
-            "apikey": settings.supabase_anon_key,
-            "Authorization": f"Bearer {token}",
-        })
-        resp.raise_for_status()
-        rows = resp.json()
+    rows = await db.list_documents(user.user_id)
 
     return DocumentListResponse(
         documents=[
@@ -294,46 +178,20 @@ async def delete_document(
     user: JWTPayload = Depends(get_current_user),
 ):
     """Delete a document, its chunks, and the storage file."""
-    settings = get_settings()
-    token = user.raw_token
+    db = get_database_service()
+    storage = get_storage_service()
 
-    # Fetch document (with user RLS)
-    url = (
-        f"{settings.supabase_url}/rest/v1/documents"
-        f"?id=eq.{document_id}&user_id=eq.{user.user_id}&select=*"
-    )
-    with httpx.Client() as client:
-        resp = client.get(url, headers={
-            "apikey": settings.supabase_anon_key,
-            "Authorization": f"Bearer {token}",
-        })
-        resp.raise_for_status()
-        rows = resp.json()
-
-    if not rows:
+    doc = await db.get_document(document_id, user.user_id)
+    if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
-    storage_path = rows[0]["storage_path"]
+    storage_path = doc["storage_path"]
 
-    # Delete chunks (service role — cascades from documents FK, but explicit is safer)
-    with httpx.Client() as client:
-        client.delete(
-            f"{settings.supabase_url}/rest/v1/document_chunks?document_id=eq.{document_id}",
-            headers=_db_headers_service(settings),
-        )
+    # Delete document row and associated chunks from DB
+    await db.delete_document(document_id, user.user_id)
 
-    # Delete document row
-    with httpx.Client() as client:
-        client.delete(
-            f"{settings.supabase_url}/rest/v1/documents?id=eq.{document_id}",
-            headers=_db_headers_service(settings),
-        )
-
-    # Delete from storage
-    try:
-        _delete_from_storage(settings, storage_path)
-    except Exception:
-        pass  # file may already be gone
+    # Delete from local storage
+    storage.delete_document(storage_path)
 
 
 # ── Session Attachment Endpoints ("Attach to Chat") ──────────────────────
@@ -357,8 +215,8 @@ async def attach_document_to_session(
     No embeddings or chunking — just full text.
     """
     settings = get_settings()
+    db = get_database_service()
     user_id = user.user_id
-    token = user.raw_token
     max_chars = settings.session_doc_max_chars
 
     content_type = file.content_type or ""
@@ -380,21 +238,12 @@ async def attach_document_to_session(
     filename = file.filename or "document"
 
     # Verify the session belongs to this user
-    session_url = (
-        f"{settings.supabase_url}/rest/v1/chat_sessions"
-        f"?id=eq.{session_id}&user_id=eq.{user_id}&select=id"
-    )
-    with httpx.Client() as client:
-        resp = client.get(session_url, headers={
-            "apikey": settings.supabase_anon_key,
-            "Authorization": f"Bearer {token}",
-        })
-        resp.raise_for_status()
-        if not resp.json():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not found",
-            )
+    session = await db.get_session(session_id, user_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
 
     # Extract text
     try:
@@ -415,28 +264,8 @@ async def attach_document_to_session(
     if truncated:
         text = text[:max_chars]
 
-    # Insert into session_documents (use user token for RLS)
-    insert_url = f"{settings.supabase_url}/rest/v1/session_documents"
-    row = {
-        "session_id": session_id,
-        "user_id": user_id,
-        "filename": filename,
-        "content": text,
-        "file_size": len(data),
-    }
-    with httpx.Client() as client:
-        resp = client.post(insert_url, json=row, headers={
-            "apikey": settings.supabase_anon_key,
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation",
-        })
-        if not resp.is_success:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to store attachment: {resp.text[:300]}",
-            )
-        created = resp.json()[0]
+    # Insert into session_documents
+    created = await db.insert_session_document(session_id, user_id, filename, text, len(data))
 
     msg = "Document attached to session"
     if truncated:
@@ -465,22 +294,8 @@ async def list_session_attachments(
     user: JWTPayload = Depends(get_current_user),
 ):
     """List documents attached to a chat session."""
-    settings = get_settings()
-    token = user.raw_token
-
-    url = (
-        f"{settings.supabase_url}/rest/v1/session_documents"
-        f"?session_id=eq.{session_id}&user_id=eq.{user.user_id}"
-        f"&select=id,session_id,filename,file_size,created_at,content"
-        f"&order=created_at.asc"
-    )
-    with httpx.Client() as client:
-        resp = client.get(url, headers={
-            "apikey": settings.supabase_anon_key,
-            "Authorization": f"Bearer {token}",
-        })
-        resp.raise_for_status()
-        rows = resp.json()
+    db = get_database_service()
+    rows = await db.list_session_documents(session_id, user.user_id)
 
     return SessionAttachmentListResponse(
         attachments=[
@@ -508,18 +323,8 @@ async def remove_session_attachment(
     user: JWTPayload = Depends(get_current_user),
 ):
     """Remove a document attachment from a chat session."""
-    settings = get_settings()
-    token = user.raw_token
-
-    url = (
-        f"{settings.supabase_url}/rest/v1/session_documents"
-        f"?id=eq.{attachment_id}&session_id=eq.{session_id}&user_id=eq.{user.user_id}"
-    )
-    with httpx.Client() as client:
-        resp = client.delete(url, headers={
-            "apikey": settings.supabase_anon_key,
-            "Authorization": f"Bearer {token}",
-        })
+    db = get_database_service()
+    await db.delete_session_document(attachment_id, session_id, user.user_id)
 
 
 # ── RAG Evaluation Endpoint ──────────────────────────────────────────────
@@ -551,5 +356,5 @@ async def evaluate_rag(
     from app.services.rag_eval import evaluate_queries
 
     cases = [{"query": tc.query, "expected_doc_ids": tc.expected_doc_ids} for tc in request.test_cases]
-    results = await evaluate_queries(cases, user.raw_token)
+    results = await evaluate_queries(cases, user.user_id)
     return results

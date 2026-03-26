@@ -16,15 +16,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import health, chat, documents
+from app.routes import auth, health, chat, documents
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown."""
     settings = get_settings()
+
+    # Initialize SQLite database on startup
+    from app.schema import init_database
+    db_path = await init_database(
+        data_dir=settings.data_dir,
+        auth_mode=getattr(settings, "auth_mode", "single"),
+    )
+
     print(f" Starting {settings.app_name}")
-    print(f"   Supabase URL: {settings.supabase_url}")
+    print(f"   Database: {db_path}")
+    print(f"   Auth mode: {getattr(settings, 'auth_mode', 'single')}")
     print(f"   Debug mode: {settings.debug}")
     print(f"   Instant tier: {settings.inference_instant_url or '(not configured — mock)'}")
     print(f"     Model: {settings.get_model_for_mode('instant')}")
@@ -78,6 +87,7 @@ def create_app() -> FastAPI:
     )
     
     # Register routes
+    app.include_router(auth.router)
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(documents.router)

@@ -34,12 +34,13 @@ class Settings(BaseSettings):
     # ── Inference API Key (for commercial backends like OpenAI) ──
     inference_api_key: str = ""
     
-    # Supabase Configuration
-    supabase_url: str = "http://127.0.0.1:54321"
-    supabase_anon_key: str = ""  # Set via SUPABASE_ANON_KEY env var
-    supabase_service_role_key: str = ""  # Set via SUPABASE_SERVICE_ROLE_KEY env var
-    
-    # JWT Configuration (for local Supabase, this is the default secret)
+    # Data directory (SQLite database + local file storage)
+    data_dir: str = "data"
+
+    # Authentication mode: "single" (password only) or "multi" (email + password)
+    auth_mode: str = "single"
+
+    # JWT Configuration
     jwt_secret: str = ""  # Set via JWT_SECRET env var
     jwt_algorithm: str = "HS256"
     
@@ -173,8 +174,11 @@ class Settings(BaseSettings):
     vision_max_image_size: int = 5 * 1024 * 1024  # 5 MB max base64 payload
     vision_allowed_types: str = "image/jpeg,image/png,image/gif,image/webp"
 
-    # Database URL (for direct connections if needed)
-    database_url: str = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+    # Legacy (kept for backwards-compat env files, unused)
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
+    database_url: str = ""
     
     # ── Helpers ────────────────────────────────────────────────
     

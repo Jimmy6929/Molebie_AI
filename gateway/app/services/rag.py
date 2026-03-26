@@ -2,7 +2,7 @@
 RAG (Retrieval-Augmented Generation) service.
 
 Embeds the user query, searches document_chunks via hybrid search
-(pgvector + tsvector with RRF), optionally reranks with a cross-encoder,
+(SQLite vector + FTS with RRF), optionally reranks with a cross-encoder,
 and formats matching chunks as context for injection into the LLM prompt.
 """
 
@@ -10,9 +10,8 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional
 
-import httpx
-
 from app.config import Settings, get_settings
+from app.services.database import DatabaseService, get_database_service
 from app.services.embedding import EmbeddingService, get_embedding_service
 
 
@@ -25,12 +24,51 @@ def _quality_label(similarity: float) -> str:
     return "WEAK MATCH"
 
 
+def _rrf_fuse(
+    vector_results: List[Dict[str, Any]],
+    text_results: List[Dict[str, Any]],
+    k: int = 60,
+    vector_weight: float = 0.7,
+    text_weight: float = 0.3,
+) -> List[Dict[str, Any]]:
+    """Reciprocal Rank Fusion of vector and full-text search results."""
+    vec_ranked = {r["chunk_id"]: (i + 1, r) for i, r in enumerate(vector_results)}
+    txt_ranked = {r["chunk_id"]: (i + 1, r) for i, r in enumerate(text_results)}
+    all_ids = set(vec_ranked) | set(txt_ranked)
+
+    fused: List[Dict[str, Any]] = []
+    for chunk_id in all_ids:
+        vec_entry = vec_ranked.get(chunk_id)
+        txt_entry = txt_ranked.get(chunk_id)
+        rrf_score = 0.0
+        if vec_entry:
+            rrf_score += vector_weight * (1.0 / (k + vec_entry[0]))
+        if txt_entry:
+            rrf_score += text_weight * (1.0 / (k + txt_entry[0]))
+        row = (vec_entry[1] if vec_entry else txt_entry[1]).copy()
+        row["rrf_score"] = rrf_score
+        if vec_entry:
+            row["similarity"] = vec_entry[1].get("similarity", 0)
+        if txt_entry:
+            row["text_rank"] = txt_entry[1].get("text_rank", 0)
+        fused.append(row)
+
+    fused.sort(key=lambda r: r["rrf_score"], reverse=True)
+    return fused
+
+
 class RAGService:
     """Retrieve relevant document context for a user query."""
 
-    def __init__(self, settings: Settings, embedding_service: EmbeddingService):
+    def __init__(
+        self,
+        settings: Settings,
+        embedding_service: EmbeddingService,
+        db: DatabaseService,
+    ):
         self.settings = settings
         self.embedding = embedding_service
+        self.db = db
         self.enabled = settings.rag_enabled
         self.match_count = settings.rag_match_count
         self.match_threshold = settings.rag_match_threshold
@@ -40,98 +78,60 @@ class RAGService:
         self.text_weight = settings.rag_text_weight
         self.rrf_k = settings.rag_rrf_k
 
-    async def user_has_documents(self, user_token: str) -> bool:
+    async def user_has_documents(self, user_id: str) -> bool:
         """
         Check if the user has any document chunks (completed RAG documents).
         Skips embedding load when user has no documents.
         """
         if not self.enabled:
             return False
-        url = f"{self.settings.supabase_url}/rest/v1/document_chunks?select=id&limit=1"
-        headers = {
-            "apikey": self.settings.supabase_anon_key,
-            "Authorization": f"Bearer {user_token}",
-            "Prefer": "count=none",
-        }
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url, headers=headers)
-                resp.raise_for_status()
-                rows = resp.json()
-                return len(rows) > 0
+            return await self.db.user_has_document_chunks(user_id)
         except Exception as exc:
             print(f"[rag] user_has_documents check failed: {type(exc).__name__}: {exc}")
             return False
 
     async def _search_chunks(
         self,
-        user_token: str,
+        user_id: str,
         query_embedding: List[float],
         count: int,
         threshold: float,
     ) -> List[Dict[str, Any]]:
         """Run a single vector similarity search against document_chunks."""
-        rpc_url = f"{self.settings.supabase_url}/rest/v1/rpc/match_documents_with_metadata"
-        headers = {
-            "apikey": self.settings.supabase_anon_key,
-            "Authorization": f"Bearer {user_token}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "query_embedding": query_embedding,
-            "match_threshold": threshold,
-            "match_count": count,
-        }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(rpc_url, json=payload, headers=headers)
-                resp.raise_for_status()
-                return resp.json()
-        except httpx.HTTPStatusError as exc:
-            print(f"[rag] RPC HTTP error {exc.response.status_code}: {exc.response.text[:500]}")
-            return []
+            return await self.db.vector_search_chunks(
+                user_id, query_embedding, threshold, count
+            )
         except Exception as exc:
             print(f"[rag] Similarity search failed: {type(exc).__name__}: {exc}")
             return []
 
     async def _hybrid_search(
         self,
-        user_token: str,
+        user_id: str,
         query_embedding: List[float],
         query_text: str,
         count: int,
         threshold: float,
     ) -> List[Dict[str, Any]]:
         """Run hybrid search (vector + full-text) with RRF fusion."""
-        rpc_url = f"{self.settings.supabase_url}/rest/v1/rpc/hybrid_search"
-        headers = {
-            "apikey": self.settings.supabase_anon_key,
-            "Authorization": f"Bearer {user_token}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "query_embedding": query_embedding,
-            "query_text": query_text,
-            "match_count": count,
-            "match_threshold": threshold,
-            "rrf_k": self.rrf_k,
-            "vector_weight": self.vector_weight,
-            "text_weight": self.text_weight,
-        }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(rpc_url, json=payload, headers=headers)
-                resp.raise_for_status()
-                return resp.json()
-        except httpx.HTTPStatusError as exc:
-            print(f"[rag] Hybrid search HTTP error {exc.response.status_code}: {exc.response.text[:500]}")
-            # Fall back to vector-only search
-            print("[rag] Falling back to vector-only search")
-            return await self._search_chunks(user_token, query_embedding, count, threshold)
+            vector_results, text_results = await asyncio.gather(
+                self.db.vector_search_chunks(user_id, query_embedding, threshold, count),
+                self.db.fts_search_chunks(user_id, query_text, count),
+            )
+            return _rrf_fuse(
+                vector_results,
+                text_results,
+                k=self.rrf_k,
+                vector_weight=self.vector_weight,
+                text_weight=self.text_weight,
+            )[:count]
         except Exception as exc:
             print(f"[rag] Hybrid search failed: {type(exc).__name__}: {exc}")
             print("[rag] Falling back to vector-only search")
-            return await self._search_chunks(user_token, query_embedding, count, threshold)
+            return await self._search_chunks(user_id, query_embedding, count, threshold)
 
     async def _rewrite_query(
         self,
@@ -199,7 +199,7 @@ class RAGService:
 
     async def retrieve_context(
         self,
-        user_token: str,
+        user_id: str,
         query: str,
         limit: Optional[int] = None,
         threshold: Optional[float] = None,
@@ -208,8 +208,8 @@ class RAGService:
         """
         Embed the query and search for matching document chunks.
 
-        Pipeline: (rewrite) → embed → hybrid/vector search → rerank → return
-        When hybrid search is enabled, uses RRF fusion of vector + BM25.
+        Pipeline: (rewrite) -> embed -> hybrid/vector search -> rerank -> return
+        When hybrid search is enabled, uses RRF fusion of vector + FTS.
         Otherwise falls back to pure vector search.
 
         Returns list of dicts with keys:
@@ -245,11 +245,11 @@ class RAGService:
         t1 = time.monotonic()
         if self.hybrid_enabled:
             results = await self._hybrid_search(
-                user_token, query_embedding, search_query, count, thresh
+                user_id, query_embedding, search_query, count, thresh
             )
         else:
             results = await self._search_chunks(
-                user_token, query_embedding, count, thresh
+                user_id, query_embedding, count, thresh
             )
         timings["t_search_ms"] = round((time.monotonic() - t1) * 1000, 1)
 
@@ -364,5 +364,5 @@ def get_rag_service() -> RAGService:
     """Get cached RAGService instance."""
     global _rag_service
     if _rag_service is None:
-        _rag_service = RAGService(get_settings(), get_embedding_service())
+        _rag_service = RAGService(get_settings(), get_embedding_service(), get_database_service())
     return _rag_service

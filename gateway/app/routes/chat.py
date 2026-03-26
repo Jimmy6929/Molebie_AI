@@ -5,14 +5,12 @@ Chat endpoints for the Gateway API.
 import asyncio
 import base64
 import re
-import uuid
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
-import httpx
 
 from app.middleware.auth import JWTPayload, get_current_user
 from app.models.chat import (
@@ -32,6 +30,7 @@ from app.services.database import DatabaseService, get_database_service
 from app.services.inference import InferenceService, get_inference_service
 from app.services.web_search import WebSearchService, get_web_search_service
 from app.services.rag import RAGService, get_rag_service
+from app.services.storage import LocalStorageService, get_storage_service
 from app.services.summarizer import get_summariser_service
 from app.services.memory import get_memory_service
 
@@ -223,80 +222,6 @@ def _validate_image(data_uri: str, settings) -> tuple:
     return mime_type, raw_bytes
 
 
-def _upload_image_to_storage(settings, user_id: str, raw_bytes: bytes, mime_type: str, filename: str = "image") -> str:
-    """Upload image bytes to Supabase Storage chat-images bucket. Returns storage_path."""
-    ext = mime_type.split("/")[-1]
-    if ext == "jpeg":
-        ext = "jpg"
-    storage_path = f"{user_id}/{uuid.uuid4().hex}_{filename}.{ext}"
-    url = f"{settings.supabase_url}/storage/v1/object/chat-images/{storage_path}"
-
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.post(
-            url,
-            content=raw_bytes,
-            headers={
-                "apikey": settings.supabase_service_role_key,
-                "Authorization": f"Bearer {settings.supabase_service_role_key}",
-                "Content-Type": mime_type,
-            },
-        )
-        if not resp.is_success:
-            print(f"[chat] Image storage upload failed: {resp.status_code} {resp.text[:300]}")
-            raise HTTPException(status_code=502, detail="Failed to store image")
-
-    return storage_path
-
-
-def _download_image_from_storage(settings, storage_path: str) -> bytes:
-    """Download image bytes from Supabase Storage."""
-    url = f"{settings.supabase_url}/storage/v1/object/chat-images/{storage_path}"
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.get(url, headers={
-            "apikey": settings.supabase_service_role_key,
-            "Authorization": f"Bearer {settings.supabase_service_role_key}",
-        })
-        resp.raise_for_status()
-        return resp.content
-
-
-def _fetch_session_attachments(session_id: str, user_id: str, token: str) -> str:
-    """Fetch session_documents and format them for system prompt injection.
-
-    Returns an empty string if no attachments exist.
-    """
-    import httpx
-
-    settings = get_settings()
-    url = (
-        f"{settings.supabase_url}/rest/v1/session_documents"
-        f"?session_id=eq.{session_id}&user_id=eq.{user_id}"
-        f"&select=filename,content"
-        f"&order=created_at.asc"
-    )
-    with httpx.Client() as client:
-        resp = client.get(url, headers={
-            "apikey": settings.supabase_anon_key,
-            "Authorization": f"Bearer {token}",
-        })
-        if not resp.is_success:
-            print(f"[chat] Failed to fetch session attachments: {resp.status_code}")
-            return ""
-        rows = resp.json()
-
-    if not rows:
-        return ""
-
-    parts = ["ATTACHED DOCUMENTS (read by user request — use this as primary context):"]
-    for idx, row in enumerate(rows, 1):
-        content = row.get("content", "")
-        filename = row.get("filename", "document")
-        parts.append(f"\n[{idx}] {filename} ({len(content):,} chars)")
-        parts.append(content)
-
-    return "\n".join(parts)
-
-
 def _extract_thinking(content: str) -> Optional[str]:
     """Extract thinking block text from raw content, if present."""
     m = _THINK_RE.search(content)
@@ -335,7 +260,7 @@ async def create_session(
     db: DatabaseService = Depends(get_database_service),
 ) -> SessionInfo:
     """Create an empty chat session (for attaching docs before first message)."""
-    session = db.create_session(user.user_id, "New Chat", user_token=user.raw_token)
+    session = await db.create_session(user.user_id, "New Chat")
     if not session:
         raise HTTPException(status_code=500, detail="Failed to create session")
     return SessionInfo(
@@ -364,11 +289,10 @@ async def send_message(
     - Returns the AI response with session info
     """
     user_id = user.user_id
-    token = user.raw_token
-    
+
     # Get or create session
     if request.session_id:
-        session = db.get_session(request.session_id, user_id, user_token=token)
+        session = await db.get_session(request.session_id, user_id)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -376,13 +300,13 @@ async def send_message(
             )
     else:
         title = request.message[:50] + "..." if len(request.message) > 50 else request.message
-        session = db.create_session(user_id, title, user_token=token)
+        session = await db.create_session(user_id, title)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create session"
             )
-    
+
     session_id = session["id"]
     session_summary = session.get("summary")
     summary_msg_count = session.get("summary_message_count", 0)
@@ -390,7 +314,7 @@ async def send_message(
     # Auto-rename "New Chat" sessions on first message
     if session.get("title") == "New Chat":
         title = request.message[:50] + ("..." if len(request.message) > 50 else "")
-        db.update_session_title(session_id, user_id, title, user_token=token)
+        await db.update_session_title(session_id, user_id, title)
 
     # Validate image if provided
     settings = get_settings()
@@ -400,12 +324,11 @@ async def send_message(
         image_mime, image_bytes = _validate_image(request.image, settings)
 
     # Store user message
-    user_msg = db.create_message(
+    user_msg = await db.create_message(
         session_id=session_id,
         user_id=user_id,
         role="user",
         content=request.message,
-        user_token=token,
     )
     if not user_msg:
         raise HTTPException(
@@ -413,26 +336,25 @@ async def send_message(
             detail="Failed to store message"
         )
 
-    # Store image in Supabase Storage if provided
+    # Store image locally if provided
     if image_bytes and image_mime:
-        storage_path = _upload_image_to_storage(settings, user_id, image_bytes, image_mime)
-        db.create_message_image(
+        storage_path = get_storage_service().upload_image(user_id, image_bytes, image_mime)
+        await db.create_message_image(
             message_id=user_msg["id"],
             user_id=user_id,
             storage_path=storage_path,
             filename="image",
             mime_type=image_mime,
             file_size=len(image_bytes),
-            user_token=token,
         )
 
     # Get conversation history (reduced window when summary exists)
     history_limit = settings.summary_recent_messages if session_summary else 20
-    history = db.get_session_messages(session_id, user_id, limit=history_limit, user_token=token)
+    history = await db.get_session_messages(session_id, user_id, limit=history_limit)
 
     # Build messages — for past messages with images, use placeholder text
-    image_map = db.get_message_images(
-        [m["id"] for m in history if m["role"] == "user"], user_id, user_token=token
+    image_map = await db.get_message_images(
+        [m["id"] for m in history if m["role"] == "user"], user_id
     )
     hist_messages = []
     for msg in history:
@@ -459,7 +381,7 @@ async def send_message(
     memories_text = ""
     if memory_service.enabled and not request.conversation_mode:
         try:
-            memories = await memory_service.retrieve_relevant_memories(token, request.message)
+            memories = await memory_service.retrieve_relevant_memories(user_id, request.message)
             memories_text = memory_service.format_memories_for_context(memories)
         except Exception as exc:
             print(f"[chat] Memory retrieval failed: {exc}")
@@ -471,7 +393,7 @@ async def send_message(
     )] + hist_messages
 
     # Session attachments: inject full document text (highest priority context)
-    attach_text = _fetch_session_attachments(session_id, user_id, token)
+    attach_text = await db.fetch_session_attachments_text(session_id, user_id)
     if attach_text:
         messages[0]["content"] += f"\n\n{attach_text}"
 
@@ -488,9 +410,9 @@ async def send_message(
     # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
     rag_chunks = []
     if not request.conversation_mode:
-        if await rag.user_has_documents(token):
+        if await rag.user_has_documents(user_id):
             rag_chunks = await rag.retrieve_context(
-                token, request.message, conversation_context=hist_messages,
+                user_id, request.message, conversation_context=hist_messages,
             )
             if rag_chunks:
                 rag_text = rag.format_context(rag_chunks)
@@ -529,7 +451,7 @@ async def send_message(
     raw = inference_result["content"]
     reasoning = inference_result.get("reasoning_content") or _extract_thinking(raw)
     clean_content = _strip_thinking(raw)
-    assistant_msg = db.create_message(
+    assistant_msg = await db.create_message(
         session_id=session_id,
         user_id=user_id,
         role="assistant",
@@ -537,7 +459,6 @@ async def send_message(
         mode_used=inference_result["mode_used"],
         tokens_used=inference_result.get("tokens_used"),
         reasoning_content=reasoning,
-        user_token=token,
     )
     if not assistant_msg:
         raise HTTPException(
@@ -553,7 +474,7 @@ async def send_message(
     summariser = get_summariser_service()
     if summariser.should_summarise(total_msg_count + summary_msg_count, summary_msg_count):
         asyncio.create_task(
-            summariser.summarise_session(session_id, user_id, token)
+            summariser.summarise_session(session_id, user_id)
         )
 
     if memory_service.should_extract(total_msg_count):
@@ -562,7 +483,7 @@ async def send_message(
         ]
         asyncio.create_task(
             memory_service.extract_and_store(
-                session_id, user_id, token, recent_for_extraction
+                session_id, user_id, recent_for_extraction
             )
         )
 
@@ -602,7 +523,7 @@ async def list_sessions(
     db: DatabaseService = Depends(get_database_service),
 ) -> SessionListResponse:
     """List all chat sessions for the current user."""
-    sessions = db.list_sessions(user.user_id, user_token=user.raw_token)
+    sessions = await db.list_sessions(user.user_id)
     return SessionListResponse(
         sessions=[
             SessionInfo(
@@ -625,19 +546,18 @@ async def get_session_messages(
     db: DatabaseService = Depends(get_database_service),
 ) -> List[ChatMessage]:
     """Get all messages in a session."""
-    token = user.raw_token
-    session = db.get_session(session_id, user.user_id, user_token=token)
+    session = await db.get_session(session_id, user.user_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Session not found"
         )
-    
-    messages = db.get_session_messages(session_id, user.user_id, user_token=token)
+
+    messages = await db.get_session_messages(session_id, user.user_id)
 
     # Fetch image metadata for user messages
     user_msg_ids = [m["id"] for m in messages if m["role"] == "user"]
-    image_map = db.get_message_images(user_msg_ids, user.user_id, user_token=token) if user_msg_ids else {}
+    image_map = await db.get_message_images(user_msg_ids, user.user_id) if user_msg_ids else {}
 
     return [
         ChatMessage(
@@ -662,15 +582,14 @@ async def rename_session(
     db: DatabaseService = Depends(get_database_service),
 ) -> SessionInfo:
     """Rename a chat session."""
-    token = user.raw_token
-    session = db.get_session(session_id, user.user_id, user_token=token)
+    session = await db.get_session(session_id, user.user_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Session not found"
         )
-    db.update_session_title(session_id, user.user_id, request.title, user_token=token)
-    updated = db.get_session(session_id, user.user_id, user_token=token)
+    await db.update_session_title(session_id, user.user_id, request.title)
+    updated = await db.get_session(session_id, user.user_id)
     return SessionInfo(
         id=updated["id"],
         title=updated["title"],
@@ -689,15 +608,14 @@ async def pin_session(
     db: DatabaseService = Depends(get_database_service),
 ) -> SessionInfo:
     """Pin or unpin a chat session."""
-    token = user.raw_token
-    session = db.get_session(session_id, user.user_id, user_token=token)
+    session = await db.get_session(session_id, user.user_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Session not found"
         )
-    db.pin_session(session_id, user.user_id, request.is_pinned, user_token=token)
-    updated = db.get_session(session_id, user.user_id, user_token=token)
+    await db.pin_session(session_id, user.user_id, request.is_pinned)
+    updated = await db.get_session(session_id, user.user_id)
     return SessionInfo(
         id=updated["id"],
         title=updated["title"],
@@ -715,7 +633,7 @@ async def delete_session(
     db: DatabaseService = Depends(get_database_service),
 ):
     """Delete a chat session and all its messages."""
-    success = db.delete_session(session_id, user.user_id, user_token=user.raw_token)
+    success = await db.delete_session(session_id, user.user_id)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -743,7 +661,6 @@ async def send_message_stream(
     import json
 
     user_id = user.user_id
-    token = user.raw_token
     settings = get_settings()
 
     # Validate image if provided
@@ -754,7 +671,7 @@ async def send_message_stream(
 
     # Get or create session
     if request.session_id:
-        session = db.get_session(request.session_id, user_id, user_token=token)
+        session = await db.get_session(request.session_id, user_id)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -762,7 +679,7 @@ async def send_message_stream(
             )
     else:
         title = request.message[:50] + "..." if len(request.message) > 50 else request.message
-        session = db.create_session(user_id, title, user_token=token)
+        session = await db.create_session(user_id, title)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -776,15 +693,14 @@ async def send_message_stream(
     # Auto-rename "New Chat" sessions on first message
     if session.get("title") == "New Chat":
         title = request.message[:50] + ("..." if len(request.message) > 50 else "")
-        db.update_session_title(session_id, user_id, title, user_token=token)
+        await db.update_session_title(session_id, user_id, title)
 
     # Store user message
-    user_msg = db.create_message(
+    user_msg = await db.create_message(
         session_id=session_id,
         user_id=user_id,
         role="user",
         content=request.message,
-        user_token=token,
     )
     if not user_msg:
         raise HTTPException(
@@ -792,26 +708,25 @@ async def send_message_stream(
             detail="Failed to store message"
         )
 
-    # Store image in Supabase Storage if provided
+    # Store image locally if provided
     if image_bytes and image_mime:
-        storage_path = _upload_image_to_storage(settings, user_id, image_bytes, image_mime)
-        db.create_message_image(
+        storage_path = get_storage_service().upload_image(user_id, image_bytes, image_mime)
+        await db.create_message_image(
             message_id=user_msg["id"],
             user_id=user_id,
             storage_path=storage_path,
             filename="image",
             mime_type=image_mime,
             file_size=len(image_bytes),
-            user_token=token,
         )
 
     # Get conversation history (reduced window when summary exists)
     history_limit = settings.summary_recent_messages if session_summary else 20
-    history = db.get_session_messages(session_id, user_id, limit=history_limit, user_token=token)
+    history = await db.get_session_messages(session_id, user_id, limit=history_limit)
 
     # Build messages — for past messages with images, use placeholder text
-    image_map = db.get_message_images(
-        [m["id"] for m in history if m["role"] == "user"], user_id, user_token=token
+    image_map = await db.get_message_images(
+        [m["id"] for m in history if m["role"] == "user"], user_id
     )
     hist_messages = []
     for msg in history:
@@ -838,7 +753,7 @@ async def send_message_stream(
     memories_text = ""
     if memory_service.enabled and not request.conversation_mode:
         try:
-            memories = await memory_service.retrieve_relevant_memories(token, request.message)
+            memories = await memory_service.retrieve_relevant_memories(user_id, request.message)
             memories_text = memory_service.format_memories_for_context(memories)
         except Exception as exc:
             print(f"[chat] Memory retrieval failed: {exc}")
@@ -850,7 +765,7 @@ async def send_message_stream(
     )] + hist_messages
 
     # Session attachments: inject full document text (highest priority context)
-    attach_text = _fetch_session_attachments(session_id, user_id, token)
+    attach_text = await db.fetch_session_attachments_text(session_id, user_id)
     if attach_text:
         messages[0]["content"] += f"\n\n{attach_text}"
 
@@ -867,9 +782,9 @@ async def send_message_stream(
     # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
     rag_chunks = []
     if not request.conversation_mode:
-        if await rag.user_has_documents(token):
+        if await rag.user_has_documents(user_id):
             rag_chunks = await rag.retrieve_context(
-                token, request.message, conversation_context=hist_messages,
+                user_id, request.message, conversation_context=hist_messages,
             )
             if rag_chunks:
                 rag_text = rag.format_context(rag_chunks)
@@ -958,14 +873,13 @@ async def send_message_stream(
         save_content = content if content else ("(no visible response)" if reasoning else None)
         if save_content:
             try:
-                db.create_message(
+                await db.create_message(
                     session_id=session_id,
                     user_id=user_id,
                     role="assistant",
                     content=save_content,
                     mode_used=inference_mode,
                     reasoning_content=reasoning,
-                    user_token=token,
                 )
                 _validate_response_sources(save_content, search_results, rag_chunks)
 
@@ -974,7 +888,7 @@ async def send_message_stream(
                 summariser = get_summariser_service()
                 if summariser.should_summarise(total_msg_count + summary_msg_count, summary_msg_count):
                     asyncio.create_task(
-                        summariser.summarise_session(session_id, user_id, token)
+                        summariser.summarise_session(session_id, user_id)
                     )
 
                 if memory_service.should_extract(total_msg_count):
@@ -983,7 +897,7 @@ async def send_message_stream(
                     ]
                     asyncio.create_task(
                         memory_service.extract_and_store(
-                            session_id, user_id, token, recent_for_extraction
+                            session_id, user_id, recent_for_extraction
                         )
                     )
             except Exception as db_err:
@@ -1116,19 +1030,11 @@ async def get_image(
     user: JWTPayload = Depends(get_current_user),
     db: DatabaseService = Depends(get_database_service),
 ):
-    """Serve a chat image from Supabase Storage."""
-    settings = get_settings()
-    # Fetch image metadata (RLS ensures user can only see their own)
-    result = db._request(
-        "GET",
-        f"message_images?id=eq.{image_id}&user_id=eq.{user.user_id}&select=storage_path,mime_type",
-        user_token=user.raw_token,
-    )
-    if not result:
+    """Serve a chat image from local storage."""
+    row = await db.get_image_metadata(image_id, user.user_id)
+    if not row:
         raise HTTPException(status_code=404, detail="Image not found")
-
-    row = result[0]
-    image_bytes = _download_image_from_storage(settings, row["storage_path"])
+    image_bytes = get_storage_service().download_image(row["storage_path"])
     return Response(content=image_bytes, media_type=row["mime_type"])
 
 
@@ -1139,15 +1045,14 @@ async def get_session_images(
     db: DatabaseService = Depends(get_database_service),
 ):
     """Get all image metadata for messages in a session."""
-    token = user.raw_token
-    session = db.get_session(session_id, user.user_id, user_token=token)
+    session = await db.get_session(session_id, user.user_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    messages = db.get_session_messages(session_id, user.user_id, user_token=token)
+    messages = await db.get_session_messages(session_id, user.user_id)
     msg_ids = [m["id"] for m in messages if m["role"] == "user"]
     if not msg_ids:
         return {}
 
-    images = db.get_message_images(msg_ids, user.user_id, user_token=token)
+    images = await db.get_message_images(msg_ids, user.user_id)
     return images

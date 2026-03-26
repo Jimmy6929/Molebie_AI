@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase";
+import { getToken, logout as authLogout } from "@/lib/auth";
 import {
   sendMessageStream,
   createSession,
@@ -184,17 +184,21 @@ export default function ChatPage() {
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) { router.replace("/login"); return; }
-      setToken(session.access_token);
-      setUserEmail(session.user.email || "");
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-      if (!session) router.replace("/login");
-      else setToken(session.access_token);
-    });
-    return () => subscription.unsubscribe();
+    const storedToken = getToken();
+    if (!storedToken) {
+      router.replace("/login");
+      return;
+    }
+    setToken(storedToken);
+    // Decode email from JWT payload (base64)
+    try {
+      const payload = JSON.parse(atob(storedToken.split(".")[1]));
+      setUserEmail(payload.email || "");
+    } catch {
+      // token is malformed, redirect to login
+      authLogout();
+      router.replace("/login");
+    }
   }, [router]);
 
   const loadSessions = useCallback(async () => {
@@ -724,9 +728,8 @@ export default function ChatPage() {
     }
   }
 
-  async function handleLogout() {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+  function handleLogout() {
+    authLogout();
     router.replace("/login");
   }
 

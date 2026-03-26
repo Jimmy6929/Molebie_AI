@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # ══════════════════════════════════════════════════════════════
-# Molebie AI — Setup Script (Legacy)
+# Molebie AI — Setup Script
 # ══════════════════════════════════════════════════════════════
-# NOTE: For most users, use ./install.sh instead — it handles
-# everything including prerequisite installation automatically.
+# Checks prerequisites, installs dependencies, generates .env.local
+# with a JWT secret, and creates the data directory.
 #
-# This script checks prerequisites, installs dependencies,
-# starts Supabase, and generates .env.local with the correct keys.
+# No Docker or Supabase required for the database.
+# Docker is only needed for optional services (SearXNG, Kokoro TTS).
 #
 # Usage:  bash setup.sh
 # ══════════════════════════════════════════════════════════════
@@ -22,7 +22,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
 ok()    { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -40,22 +40,6 @@ echo ""
 # ──────────────────────────────────────────────────────────────
 info "Checking prerequisites..."
 MISSING=0
-
-# Docker
-if command -v docker &>/dev/null; then
-    ok "Docker found"
-else
-    echo -e "${RED}[MISSING]${NC} Docker — install from https://docker.com or: brew install --cask docker"
-    MISSING=1
-fi
-
-# Docker daemon
-if docker info &>/dev/null; then
-    ok "Docker daemon running"
-else
-    echo -e "${RED}[MISSING]${NC} Docker daemon not running — open Docker Desktop first"
-    MISSING=1
-fi
 
 # Node.js
 if command -v node &>/dev/null; then
@@ -85,12 +69,11 @@ else
     MISSING=1
 fi
 
-# Supabase CLI
-if command -v supabase &>/dev/null; then
-    ok "Supabase CLI $(supabase --version 2>/dev/null || echo '')"
+# Docker (optional — for SearXNG, Kokoro TTS)
+if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+    ok "Docker found (optional services available: web search, TTS)"
 else
-    echo -e "${RED}[MISSING]${NC} Supabase CLI — brew install supabase/tap/supabase"
-    MISSING=1
+    warn "Docker not found — optional services (web search, TTS) won't be available"
 fi
 
 # ffmpeg (optional — for voice features)
@@ -124,16 +107,11 @@ MODE_CHOICE="${MODE_CHOICE:-1}"
 if [ "$MODE_CHOICE" = "2" ]; then
     DEPLOY_MODE="two-machine"
     echo ""
-    echo "Enter the IP addresses of your two machines."
-    echo "(Use Tailscale IPs for reliable connectivity)"
-    echo ""
     read -rp "  IP of GPU machine (runs MLX inference): " GPU_IP
     read -rp "  IP of THIS machine (runs gateway/webapp): " SERVER_IP
-
     if [ -z "$GPU_IP" ] || [ -z "$SERVER_IP" ]; then
         fail "Both IPs are required for two-machine setup."
     fi
-
     ok "Two-machine mode: GPU=$GPU_IP, Server=$SERVER_IP"
 else
     ok "Single-machine mode: all services on localhost"
@@ -142,7 +120,7 @@ fi
 echo ""
 
 # ──────────────────────────────────────────────────────────────
-# Phase 3: Generate .env.local
+# Phase 3: Generate .env.local with JWT secret
 # ──────────────────────────────────────────────────────────────
 if [ -f .env.local ]; then
     warn ".env.local already exists — skipping generation. Delete it to regenerate."
@@ -150,20 +128,18 @@ else
     info "Generating .env.local from template..."
     cp .env.example .env.local
 
+    # Generate a random JWT secret
+    JWT_SECRET_VAL=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+    sed -i '' "s|JWT_SECRET=CHANGE_ME_TO_A_RANDOM_SECRET|JWT_SECRET=${JWT_SECRET_VAL}|" .env.local
+
     if [ "$DEPLOY_MODE" = "two-machine" ]; then
-        # Replace localhost URLs with the actual IPs
         sed -i '' "s|INFERENCE_THINKING_URL=http://localhost:8080|INFERENCE_THINKING_URL=http://${GPU_IP}:8080|" .env.local
         sed -i '' "s|INFERENCE_INSTANT_URL=http://localhost:8081|INFERENCE_INSTANT_URL=http://${GPU_IP}:8081|" .env.local
-        sed -i '' "s|NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321|NEXT_PUBLIC_SUPABASE_URL=http://${SERVER_IP}:54321|" .env.local
         sed -i '' "s|NEXT_PUBLIC_GATEWAY_URL=http://localhost:8000|NEXT_PUBLIC_GATEWAY_URL=http://${SERVER_IP}:8000|" .env.local
         sed -i '' "s|CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000|CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://${SERVER_IP}:3000|" .env.local
-
-        # Update Supabase auth redirect URLs
-        info "Updating supabase/config.toml with server IP..."
-        sed -i '' "s|additional_redirect_urls = \[\"http://127.0.0.1:3000\", \"http://localhost:3000\"\]|additional_redirect_urls = [\"http://127.0.0.1:3000\", \"http://localhost:3000\", \"http://${SERVER_IP}:3000\"]|" supabase/config.toml
     fi
 
-    ok ".env.local created"
+    ok ".env.local created with JWT secret"
 fi
 
 echo ""
@@ -183,32 +159,11 @@ ok "Webapp dependencies installed"
 echo ""
 
 # ──────────────────────────────────────────────────────────────
-# Phase 5: Start Supabase and inject keys
+# Phase 5: Create data directory
 # ──────────────────────────────────────────────────────────────
-info "Starting Supabase (this may take a minute on first run)..."
-cd supabase && supabase start
-cd "$SCRIPT_DIR"
-ok "Supabase is running"
-
-# Extract keys from Supabase
-info "Extracting Supabase keys..."
-SUPABASE_OUTPUT=$(cd supabase && supabase status -o env 2>/dev/null)
-
-ANON_KEY=$(echo "$SUPABASE_OUTPUT" | grep '^ANON_KEY=' | cut -d= -f2- | tr -d '"')
-SERVICE_KEY=$(echo "$SUPABASE_OUTPUT" | grep '^SERVICE_ROLE_KEY=' | cut -d= -f2- | tr -d '"')
-JWT_SECRET_VAL=$(echo "$SUPABASE_OUTPUT" | grep '^JWT_SECRET=' | cut -d= -f2- | tr -d '"')
-
-if [ -z "$ANON_KEY" ] || [ -z "$SERVICE_KEY" ] || [ -z "$JWT_SECRET_VAL" ]; then
-    warn "Could not extract Supabase keys automatically."
-    warn "Run 'cd supabase && supabase status' and update .env.local manually."
-else
-    # Inject keys into .env.local
-    sed -i '' "s|SUPABASE_ANON_KEY=YOUR_ANON_KEY_HERE|SUPABASE_ANON_KEY=${ANON_KEY}|" .env.local
-    sed -i '' "s|SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY_HERE|SUPABASE_SERVICE_ROLE_KEY=${SERVICE_KEY}|" .env.local
-    sed -i '' "s|NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_KEY_HERE|NEXT_PUBLIC_SUPABASE_ANON_KEY=${ANON_KEY}|" .env.local
-    sed -i '' "s|JWT_SECRET=YOUR_JWT_SECRET_HERE|JWT_SECRET=${JWT_SECRET_VAL}|" .env.local
-    ok "Supabase keys injected into .env.local"
-fi
+info "Creating data directory..."
+mkdir -p data
+ok "Data directory created (SQLite database will be initialized on first start)"
 
 echo ""
 
@@ -228,30 +183,23 @@ if [ "$DEPLOY_MODE" = "two-machine" ]; then
     echo "     make mlx-instant         # Start instant LLM (optional)"
     echo ""
     echo "  2. On this machine ($SERVER_IP):"
-    echo "     make dev-all             # Start gateway + webapp (requires tmux)"
-    echo "       -- or start individually --"
     echo "     make dev-gateway         # Terminal 1"
     echo "     make dev-webapp          # Terminal 2"
     echo ""
-    echo "  3. Start optional services (web search + TTS):"
-    echo "     docker compose up -d"
+    echo "  3. Optional: docker compose up -d  (web search + TTS)"
     echo ""
-    echo "  4. Open http://${SERVER_IP}:3000 and create an account"
+    echo "  4. Open http://${SERVER_IP}:3000 and set your password"
 else
     echo "  1. Start MLX inference (in a new terminal):"
     echo "     make mlx-thinking        # Required — Qwen 3.5 9B"
-    echo "     make mlx-instant         # Optional — Qwen 3.5 4B (voice/fast mode)"
     echo ""
     echo "  2. Start the app:"
-    echo "     make dev-all             # Start gateway + webapp (requires tmux)"
-    echo "       -- or start individually --"
     echo "     make dev-gateway         # Terminal 1"
     echo "     make dev-webapp          # Terminal 2"
     echo ""
-    echo "  3. Start optional services (web search + TTS):"
-    echo "     docker compose up -d"
+    echo "  3. Optional: docker compose up -d  (web search + TTS)"
     echo ""
-    echo "  4. Open http://localhost:3000 and create an account"
+    echo "  4. Open http://localhost:3000 and set your password"
 fi
 
 echo ""

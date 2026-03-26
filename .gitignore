@@ -8,6 +8,9 @@
 # Local Supabase info (contains secrets)
 LOCAL-SUPABASE-INFO.txt
 
+# Local data directory (SQLite database + uploaded files)
+data/
+
 # OS files
 .DS_Store
 Thumbs.db

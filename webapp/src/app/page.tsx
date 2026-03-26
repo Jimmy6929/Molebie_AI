@@ -2,20 +2,17 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase";
+import { isLoggedIn } from "@/lib/auth";
 
 export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        router.replace("/chat");
-      } else {
-        router.replace("/login");
-      }
-    });
+    if (isLoggedIn()) {
+      router.replace("/chat");
+    } else {
+      router.replace("/login");
+    }
   }, [router]);
 
   return (

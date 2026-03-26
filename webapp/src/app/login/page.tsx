@@ -1,8 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase";
+import {
+  login,
+  register,
+  loginSimple,
+  getAuthMode,
+  type AuthMode,
+} from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,29 +17,28 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
+
+  useEffect(() => {
+    getAuthMode()
+      .then(setAuthMode)
+      .catch(() => setAuthMode({ mode: "single", setup_complete: false }));
+  }, []);
+
+  const isSingleUser = authMode?.mode === "single";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
 
-    const supabase = createClient();
-
     try {
-      if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        const { error: loginError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (loginError) throw loginError;
+      if (isSingleUser) {
+        await loginSimple(password);
+      } else if (isSignUp) {
+        await register(email, password);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
+        await login(email, password);
       }
       router.push("/chat");
     } catch (err: unknown) {
@@ -41,6 +46,14 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (!authMode) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="glow">initializing...</div>
+      </div>
+    );
   }
 
   return (
@@ -55,20 +68,22 @@ export default function LoginPage() {
 
         <div className="glass rounded-2xl p-6">
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-[11px] text-[#aaa] mb-1.5 ml-1">
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-black/40 border border-white/[0.08] text-[#f0f0f0] px-4 py-2.5 text-sm font-mono rounded-xl focus:outline-none focus:border-[#00ff41]/50 transition-all"
-                placeholder="user@example.com"
-                required
-                autoFocus
-              />
-            </div>
+            {!isSingleUser && (
+              <div>
+                <label className="block text-[11px] text-[#aaa] mb-1.5 ml-1">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-black/40 border border-white/[0.08] text-[#f0f0f0] px-4 py-2.5 text-sm font-mono rounded-xl focus:outline-none focus:border-[#00ff41]/50 transition-all"
+                  placeholder="user@example.com"
+                  required
+                  autoFocus
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-[11px] text-[#aaa] mb-1.5 ml-1">
@@ -79,9 +94,14 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full bg-black/40 border border-white/[0.08] text-[#f0f0f0] px-4 py-2.5 text-sm font-mono rounded-xl focus:outline-none focus:border-[#00ff41]/50 transition-all"
-                placeholder="••••••••"
+                placeholder={
+                  isSingleUser && !authMode.setup_complete
+                    ? "Choose a password"
+                    : "••••••••"
+                }
                 required
                 minLength={6}
+                autoFocus={isSingleUser}
               />
             </div>
 
@@ -98,6 +118,10 @@ export default function LoginPage() {
             >
               {loading
                 ? "Connecting..."
+                : isSingleUser
+                ? authMode.setup_complete
+                  ? "Sign in"
+                  : "Set password & continue"
                 : isSignUp
                 ? "Create account"
                 : "Sign in"}
@@ -105,19 +129,21 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <div className="mt-5 text-center">
-          <button
-            onClick={() => {
-              setIsSignUp(!isSignUp);
-              setError("");
-            }}
-            className="text-xs text-[#aaa] hover:text-[#00ff41] transition-colors"
-          >
-            {isSignUp
-              ? "Already have an account? Sign in"
-              : "Need an account? Sign up"}
-          </button>
-        </div>
+        {!isSingleUser && (
+          <div className="mt-5 text-center">
+            <button
+              onClick={() => {
+                setIsSignUp(!isSignUp);
+                setError("");
+              }}
+              className="text-xs text-[#aaa] hover:text-[#00ff41] transition-colors"
+            >
+              {isSignUp
+                ? "Already have an account? Sign in"
+                : "Need an account? Sign up"}
+            </button>
+          </div>
+        )}
 
         <div className="mt-8 text-center text-[10px] text-[#888]">
           v0.1.0 · All data stays local

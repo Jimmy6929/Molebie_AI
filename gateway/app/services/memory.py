@@ -12,9 +12,8 @@ import json
 import re
 from typing import Optional, Dict, Any, List
 
-import httpx
-
 from app.config import Settings, get_settings
+from app.services.database import DatabaseService, get_database_service
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -43,8 +42,9 @@ Examples:
 class MemoryService:
     """Extract, store, and retrieve cross-session user memories."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, db: DatabaseService):
         self.settings = settings
+        self.db = db
         self.enabled = settings.memory_enabled
         self.extract_interval = settings.memory_extract_interval
         self.max_facts = settings.memory_max_facts_per_extraction
@@ -64,7 +64,6 @@ class MemoryService:
         self,
         session_id: str,
         user_id: str,
-        user_token: str,
         recent_messages: List[Dict[str, Any]],
     ) -> None:
         """Background task: extract facts from recent messages, dedup, store.
@@ -73,7 +72,7 @@ class MemoryService:
         """
         try:
             await self._do_extract_and_store(
-                session_id, user_id, user_token, recent_messages
+                session_id, user_id, recent_messages
             )
         except Exception as exc:
             print(f"[memory] Error extracting for user {user_id}: {type(exc).__name__}: {exc}")
@@ -82,7 +81,6 @@ class MemoryService:
         self,
         session_id: str,
         user_id: str,
-        user_token: str,
         recent_messages: List[Dict[str, Any]],
     ) -> None:
         """Core extraction and storage logic."""
@@ -130,7 +128,6 @@ class MemoryService:
         for fact, embedding in zip(facts, embeddings):
             action = await self._dedup_and_store(
                 user_id=user_id,
-                user_token=user_token,
                 content=fact["content"],
                 category=fact["category"],
                 embedding=embedding,
@@ -150,7 +147,6 @@ class MemoryService:
     async def _dedup_and_store(
         self,
         user_id: str,
-        user_token: str,
         content: str,
         category: str,
         embedding: List[float],
@@ -161,99 +157,38 @@ class MemoryService:
         Returns 'stored', 'updated', or 'skipped'.
         """
         similar = await self._search_similar(
-            user_token, embedding, threshold=self.dedup_threshold, limit=1
+            user_id, embedding, threshold=self.dedup_threshold, limit=1
         )
 
         if similar:
             existing = similar[0]
             if existing["content"].strip().lower() != content.strip().lower():
-                await asyncio.to_thread(
-                    self._update_memory, existing["memory_id"], content, embedding, user_token
-                )
+                await self.db.update_memory(existing["memory_id"], content, embedding)
                 return "updated"
             return "skipped"
 
-        await asyncio.to_thread(
-            self._store_memory, user_id, content, category, embedding, session_id, user_token
-        )
+        await self.db.store_memory(user_id, content, category, embedding, session_id)
         return "stored"
 
     async def _search_similar(
         self,
-        user_token: str,
+        user_id: str,
         embedding: List[float],
         threshold: float,
         limit: int,
     ) -> List[Dict[str, Any]]:
-        """Search for similar memories using the match_memories RPC."""
-        rpc_url = f"{self.settings.supabase_url}/rest/v1/rpc/match_memories"
-        headers = {
-            "apikey": self.settings.supabase_anon_key,
-            "Authorization": f"Bearer {user_token}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "query_embedding": embedding,
-            "match_threshold": threshold,
-            "match_count": limit,
-        }
+        """Search for similar memories using vector similarity."""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(rpc_url, json=payload, headers=headers)
-                resp.raise_for_status()
-                return resp.json()
+            return await self.db.vector_search_memories(
+                user_id, embedding, threshold, limit
+            )
         except Exception as exc:
             print(f"[memory] Similar search failed: {type(exc).__name__}: {exc}")
             return []
 
-    def _store_memory(
-        self,
-        user_id: str,
-        content: str,
-        category: str,
-        embedding: List[float],
-        session_id: str,
-        user_token: str,
-    ) -> None:
-        """Store a new memory via REST API (synchronous)."""
-        from app.services.database import get_database_service
-        db = get_database_service()
-        db._request(
-            "POST",
-            "user_memories",
-            user_token=user_token,
-            json={
-                "user_id": user_id,
-                "content": content,
-                "category": category,
-                "embedding": embedding,
-                "source_session_id": session_id,
-            },
-        )
-
-    def _update_memory(
-        self,
-        memory_id: str,
-        content: str,
-        embedding: List[float],
-        user_token: str,
-    ) -> None:
-        """Update an existing memory's content and embedding (synchronous)."""
-        from app.services.database import get_database_service
-        db = get_database_service()
-        db._request(
-            "PATCH",
-            f"user_memories?id=eq.{memory_id}",
-            user_token=user_token,
-            json={
-                "content": content,
-                "embedding": embedding,
-            },
-        )
-
     async def retrieve_relevant_memories(
         self,
-        user_token: str,
+        user_id: str,
         query: str,
     ) -> List[Dict[str, Any]]:
         """Retrieve memories relevant to the current query.
@@ -271,7 +206,7 @@ class MemoryService:
         )
 
         memories = await self._search_similar(
-            user_token, query_embedding,
+            user_id, query_embedding,
             threshold=self.retrieval_threshold,
             limit=self.retrieval_top_k,
         )
@@ -347,5 +282,5 @@ def get_memory_service() -> MemoryService:
     """Get cached MemoryService instance."""
     global _memory_service
     if _memory_service is None:
-        _memory_service = MemoryService(get_settings())
+        _memory_service = MemoryService(get_settings(), get_database_service())
     return _memory_service

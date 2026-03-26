@@ -14,7 +14,7 @@ from app.services.rag import RAGService, get_rag_service
 
 async def evaluate_queries(
     test_cases: List[Dict[str, Any]],
-    user_token: str,
+    user_id: str,
     settings: Optional[Settings] = None,
 ) -> Dict[str, Any]:
     """Run test cases through the RAG pipeline and compute metrics.
@@ -40,7 +40,7 @@ async def evaluate_queries(
         query = case["query"]
         expected_ids = set(case.get("expected_doc_ids", []))
 
-        chunks = await rag.retrieve_context(user_token, query)
+        chunks = await rag.retrieve_context(user_id, query)
         metrics = rag.get_metrics(chunks)
 
         # Check if any expected document was found
