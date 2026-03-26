@@ -49,6 +49,9 @@ Open **http://localhost:3000**, create an account, and start chatting.
 | `molebie-ai doctor` | Diagnose environment problems — checks dependencies, config, and service health |
 | `molebie-ai status` | Show current configuration and which services are running |
 | `molebie-ai config show` | Display saved configuration (JSON) |
+| `molebie-ai config env` | List all environment variables from `.env.local` (secrets masked) |
+| `molebie-ai config get KEY` | Show the value of an environment variable |
+| `molebie-ai config set KEY=VALUE` | Update an environment variable in `.env.local` |
 | `molebie-ai feature list` | Show optional features and their status |
 | `molebie-ai feature add voice` | Enable a feature (also: `search`, `rag`) |
 | `molebie-ai feature remove voice` | Disable a feature |

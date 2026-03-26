@@ -25,7 +25,7 @@ def _check_env_keys(env_path: Path) -> bool:
     if not env_path.exists():
         return False
     text = env_path.read_text()
-    placeholders = ["YOUR_ANON_KEY_HERE", "YOUR_SERVICE_ROLE_KEY_HERE", "YOUR_JWT_SECRET_HERE"]
+    placeholders = ["YOUR_ANON_KEY_HERE", "YOUR_SERVICE_ROLE_KEY_HERE", "YOUR_JWT_SECRET_HERE", "CHANGE_ME_TO_A_RANDOM_SECRET"]
     found = [p for p in placeholders if p in text]
     if found:
         print_warn(f".env.local still has placeholder keys: {', '.join(found)}")
