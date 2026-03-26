@@ -9,7 +9,8 @@ import typer
 
 from cli.models.config import MolebieConfig
 from cli.services import config_manager, prerequisite_checker
-from cli.ui.console import console, make_status_table, print_fail, print_ok, print_warn
+from cli.services.env_generator import init_env_local
+from cli.ui.console import console, make_status_table, print_fail, print_info, print_ok, print_warn
 
 
 def _check_file(path: Path, label: str) -> bool:
@@ -52,7 +53,9 @@ def _health_check(url: str, name: str, timeout: float = 3.0) -> bool:
         return False
 
 
-def doctor() -> None:
+def doctor(
+    fix: bool = typer.Option(False, "--fix", help="Auto-fix missing .env.local and config"),
+) -> None:
     """Diagnose environment and setup problems."""
     console.print()
     console.print("[heading]Molebie AI — Doctor[/heading]")
@@ -94,20 +97,32 @@ def doctor() -> None:
             print_fail(f"Config file invalid: {e}")
             all_ok = False
             config = MolebieConfig()
+    elif fix:
+        config = MolebieConfig(installed=True)
+        config_manager.ensure_config_dir()
+        config_manager.save_config(config)
+        print_ok("Config file created with defaults")
     else:
-        print_warn("No config file — run [bold]molebie-ai install[/bold] first")
+        print_warn("No config file — run [bold]molebie-ai doctor --fix[/bold] or [bold]molebie-ai install[/bold]")
         config = MolebieConfig()
     console.print()
 
     # 3. Environment files
     console.print("[heading]Environment[/heading]")
     env_path = root / ".env.local"
-    _check_file(env_path, ".env.local")
+    if not env_path.exists() and fix:
+        init_env_local()
+        print_ok(".env.local generated from template")
+    elif not env_path.exists():
+        print_fail(".env.local missing")
+        console.print("    Fix: run [bold]molebie-ai doctor --fix[/bold] or [bold]molebie-ai config init[/bold]")
+        all_ok = False
+    else:
+        print_ok(".env.local exists")
+
     if env_path.exists():
         if not _check_env_keys(env_path):
             all_ok = False
-    else:
-        all_ok = False
     console.print()
 
     # 4. Service health

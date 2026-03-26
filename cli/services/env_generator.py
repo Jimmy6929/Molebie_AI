@@ -89,6 +89,37 @@ def parse_env_file(env_path: Path) -> list[tuple[str, str, str | None]]:
     return entries
 
 
+def init_env_local(force: bool = False) -> Path:
+    """Generate a default .env.local from .env.example with a real JWT secret.
+
+    Unlike generate_env_local(), this doesn't need a MolebieConfig — it just
+    copies the template and replaces the JWT_SECRET placeholder.
+    """
+    root = get_project_root()
+    template = root / ".env.example"
+    output = root / ".env.local"
+
+    if output.exists() and not force:
+        return output
+
+    if not template.exists():
+        raise FileNotFoundError(f"Template not found: {template}")
+
+    jwt_secret = secrets.token_urlsafe(48)
+    lines = template.read_text().splitlines()
+    result: list[str] = []
+
+    for line in lines:
+        m = _KV_PATTERN.match(line)
+        if m and m.group(1) == "JWT_SECRET":
+            result.append(f"JWT_SECRET={jwt_secret}")
+        else:
+            result.append(line)
+
+    output.write_text("\n".join(result) + "\n")
+    return output
+
+
 def _build_overrides(config: MolebieConfig) -> dict[str, str]:
     """Build a key→value override map from the config."""
     overrides: dict[str, str] = {}

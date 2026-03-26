@@ -47,7 +47,9 @@ Open **http://localhost:3000**, create an account, and start chatting.
 | `molebie-ai install` | Interactive setup wizard — installs backend, downloads models, configures everything |
 | `molebie-ai run` | Start all configured services (Gateway, Webapp, inference) |
 | `molebie-ai doctor` | Diagnose environment problems — checks dependencies, config, and service health |
+| `molebie-ai doctor --fix` | Auto-generate missing `.env.local` and config |
 | `molebie-ai status` | Show current configuration and which services are running |
+| `molebie-ai config init` | Generate `.env.local` from template (auto-creates JWT secret) |
 | `molebie-ai config show` | Display saved configuration (JSON) |
 | `molebie-ai config env` | List all environment variables from `.env.local` (secrets masked) |
 | `molebie-ai config get KEY` | Show the value of an environment variable |
