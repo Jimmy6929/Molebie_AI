@@ -7,10 +7,85 @@ from typing import Optional
 import httpx
 import typer
 
-from cli.models.config import InferenceBackend, SetupType
+from cli.models.config import InferenceBackend, MolebieConfig, ModelProfile, SetupType
 from cli.services import config_manager
 from cli.services.service_manager import ServiceRunner
-from cli.ui.console import console, print_banner, print_fail, print_ok, print_warn
+from cli.ui.console import console, print_banner, print_fail, print_info, print_ok, print_warn
+
+
+def _ensure_ready() -> MolebieConfig:
+    """Ensure config, .env.local, and data/ exist. Auto-create if missing.
+
+    Returns a valid MolebieConfig ready for service startup.
+    """
+    from cli.services import backend_setup, env_generator
+    from cli.services.system_info import get_system_info
+
+    root = config_manager.get_project_root()
+    needs_save = False
+
+    # --- 1. Config ---
+    if config_manager.config_exists():
+        config = config_manager.load_config()
+    else:
+        console.print("[heading]First run — auto-configuring...[/heading]")
+        console.print()
+        config = MolebieConfig()
+        sys_info = get_system_info(root)
+
+        # Detect best backend
+        rec = backend_setup.detect_recommended_backend(sys_info, config.setup_type)
+        config.inference_backend = rec.backend
+        print_ok(f"Backend: {rec.backend.value} ({rec.reason})")
+
+        # Pick model profile
+        if config.inference_backend != InferenceBackend.OPENAI_COMPATIBLE:
+            profile = backend_setup.recommend_model_profile(sys_info)
+            config.model_profile = ModelProfile(profile)
+            thinking, instant = backend_setup.get_models_for_profile(
+                profile, config.inference_backend,
+            )
+            config.thinking_model = thinking
+            config.instant_model = instant
+            print_ok(f"Models: {profile} profile")
+
+        config.search_enabled = True
+        config.rag_enabled = True
+        config.voice_enabled = False
+        config.installed = True
+        needs_save = True
+
+    # Mark installed if not already (handles partial-install case)
+    if not config.installed:
+        config.installed = True
+        needs_save = True
+
+    # Save config if we created or modified it
+    if needs_save:
+        config_manager.ensure_config_dir()
+        config_manager.save_config(config)
+        print_ok(f"Config saved")
+
+    # --- 2. .env.local ---
+    env_path = root / ".env.local"
+    if not env_path.exists():
+        print_info("Generating .env.local...")
+        try:
+            env_generator.generate_env_local(config)
+        except Exception:
+            env_generator.init_env_local()
+        print_ok(".env.local created")
+
+    # --- 3. data/ directory ---
+    data_dir = root / "data"
+    if not data_dir.exists():
+        data_dir.mkdir(parents=True, exist_ok=True)
+        print_ok("Data directory created")
+
+    if needs_save:
+        console.print()
+
+    return config
 
 
 def _check_remote_inference(config) -> None:
@@ -71,17 +146,7 @@ def run(
     """Start all configured services."""
     print_banner()
 
-    if not config_manager.config_exists():
-        console.print("[warn]No configuration found. Run [bold]molebie-ai install[/bold] first.[/warn]")
-        console.print()
-        raise typer.Exit(1)
-
-    config = config_manager.load_config()
-
-    if not config.installed:
-        console.print("[warn]Installation not complete. Run [bold]molebie-ai install[/bold] first.[/warn]")
-        console.print()
-        raise typer.Exit(1)
+    config = _ensure_ready()
 
     _check_remote_inference(config)
 

@@ -115,11 +115,11 @@ def get_models_for_profile(
 # ──────────────────────────────────────────────────────────────
 
 def _is_mlx_vlm_installed() -> bool:
-    """Check if mlx-vlm is importable."""
+    """Check if mlx-vlm is installed (lightweight metadata check, no heavy import)."""
     try:
         result = subprocess.run(
-            [sys.executable, "-c", "import mlx_vlm"],
-            capture_output=True, timeout=60,
+            [sys.executable, "-c", "from importlib.metadata import version; version('mlx-vlm')"],
+            capture_output=True, timeout=10,
         )
         return result.returncode == 0
     except subprocess.TimeoutExpired:

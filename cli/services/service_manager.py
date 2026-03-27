@@ -284,12 +284,14 @@ class ServiceRunner:
                 print_ok(f"{svc.name} already running on :{svc.port}")
                 continue
 
-            print_info(f"Starting {svc.name}...")
-
             # Docker services run-to-completion
             if svc.is_docker:
-                if self._start_and_wait(svc):
-                    if _wait_healthy(svc.health_url, svc.name, max_wait=30):
+                with console.status(f"[info]Starting {svc.name}...[/info]"):
+                    started = self._start_and_wait(svc)
+                if started:
+                    with console.status(f"[info]Waiting for {svc.name} health...[/info]"):
+                        healthy = _wait_healthy(svc.health_url, svc.name, max_wait=30)
+                    if healthy:
                         print_ok(f"{svc.name} started on :{svc.port}")
                     else:
                         print_warn(f"{svc.name} started but not yet healthy — may need more time")
@@ -301,7 +303,8 @@ class ServiceRunner:
                 continue
 
             # Long-running services
-            proc = self._start_background(svc)
+            with console.status(f"[info]Starting {svc.name}...[/info]"):
+                proc = self._start_background(svc)
             if proc is None:
                 if svc.is_optional:
                     print_warn(f"{svc.name} failed to start (optional, continuing)")
@@ -311,8 +314,10 @@ class ServiceRunner:
 
             self._processes.append((svc.name, proc))
 
-            # Wait for health
-            if _wait_healthy(svc.health_url, svc.name, max_wait=30):
+            # Wait for health with spinner
+            with console.status(f"[info]Waiting for {svc.name} to become healthy...[/info]"):
+                healthy = _wait_healthy(svc.health_url, svc.name, max_wait=30)
+            if healthy:
                 print_ok(f"{svc.name} started on :{svc.port}")
             else:
                 if proc.poll() is not None:

@@ -521,6 +521,10 @@ def _execute_install(
     root = config_manager.get_project_root()
     print_step_header(7, 8, "Installing")
 
+    # Create data directory early (before any step might need it)
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
     # 7a. Check prerequisites — offer to install if missing
     _resolve_prerequisites(config, quick=quick)
     console.print()
