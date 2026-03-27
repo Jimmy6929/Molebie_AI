@@ -37,7 +37,7 @@ def _check_health(url: str, timeout: float = 3.0) -> bool:
     try:
         resp = httpx.get(url, timeout=timeout, follow_redirects=True)
         return resp.status_code < 400
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except httpx.TransportError:
         return False
 
 
@@ -104,14 +104,15 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
                 start_order=2,
             ))
 
-    # 3. Gateway
+    # 3. Gateway (use venv Python so gateway deps are available)
+    venv_python = str(root / ".venv" / "bin" / "python")
     services.append(ServiceDef(
         name="Gateway",
         port=8000,
         health_url=f"http://{ip}:8000/health",
         start_cmd=[
-            "python3", "-m", "uvicorn", "app.main:app",
-            "--reload", "--host", "0.0.0.0", "--port", "8000",
+            venv_python, "-m", "uvicorn", "app.main:app",
+            "--host", "0.0.0.0", "--port", "8000",
         ],
         cwd=str(root / "gateway"),
         env_extra={"KMP_DUPLICATE_LIB_OK": "TRUE"},
@@ -201,24 +202,65 @@ class ServiceRunner:
 
     def __init__(self) -> None:
         self._processes: list[tuple[str, subprocess.Popen]] = []
+        self._log_files: dict[str, Path] = {}
         self._shutdown = False
 
+    def _get_log_dir(self) -> Path:
+        """Return (and create) the log directory."""
+        log_dir = get_project_root() / "data" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir
+
     def _start_background(self, svc: ServiceDef) -> subprocess.Popen | None:
-        """Start a long-running service as a background process."""
+        """Start a long-running service as a background process with log capture."""
         env = os.environ.copy()
         env.update(svc.env_extra)
+        log_path = self._get_log_dir() / f"{svc.name.lower().replace(' ', '-')}.log"
         try:
+            log_file = open(log_path, "w")
             proc = subprocess.Popen(
                 svc.start_cmd,
                 cwd=svc.cwd,
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
             )
+            self._log_files[svc.name] = log_path
             return proc
         except FileNotFoundError:
             print_fail(f"Command not found: {svc.start_cmd[0]}")
             return None
+
+    @staticmethod
+    def _free_port(port: int, name: str) -> None:
+        """Kill any stale process occupying a port before starting a service."""
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            pids = result.stdout.strip().split()
+            for pid in pids:
+                if pid:
+                    os.kill(int(pid), signal.SIGTERM)
+            if pids and pids[0]:
+                print_warn(f"Killed stale process on :{port} for {name}")
+                time.sleep(1)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+
+    def _show_error_log(self, name: str, max_lines: int = 10) -> None:
+        """Show the last N lines of a service's log when it fails."""
+        log_path = self._log_files.get(name)
+        if not log_path or not log_path.exists():
+            return
+        lines = log_path.read_text().strip().splitlines()
+        if not lines:
+            return
+        tail = lines[-max_lines:]
+        console.print(f"  [dim]Log ({log_path}):[/dim]")
+        for line in tail:
+            console.print(f"  [dim]{line}[/dim]")
 
     def _start_and_wait(self, svc: ServiceDef) -> bool:
         """Start a service that runs to completion (docker compose)."""
@@ -279,10 +321,14 @@ class ServiceRunner:
             if self._shutdown:
                 break
 
-            # Skip if already running
+            # Skip if already healthy (and responding correctly)
             if _check_health(svc.health_url, timeout=2.0):
                 print_ok(f"{svc.name} already running on :{svc.port}")
                 continue
+
+            # Kill stale process on the port (non-Docker only)
+            if not svc.is_docker:
+                self._free_port(svc.port, svc.name)
 
             # Docker services run-to-completion
             if svc.is_docker:
@@ -324,17 +370,21 @@ class ServiceRunner:
                     if svc.is_optional:
                         print_warn(f"{svc.name} exited unexpectedly (optional, continuing)")
                     else:
-                        print_fail(f"{svc.name} exited unexpectedly")
+                        print_fail(f"{svc.name} exited unexpectedly (code {proc.returncode})")
+                    self._show_error_log(svc.name)
                 else:
                     print_warn(f"{svc.name} running but not healthy yet — may need more time")
 
         if not self._shutdown and self._processes:
             _print_startup_summary(config, definitions)
             try:
+                exited_names: set[str] = set()
                 while not self._shutdown:
                     for name, proc in self._processes:
-                        if proc.poll() is not None:
-                            print_warn(f"{name} exited with code {proc.returncode}")
+                        if proc.poll() is not None and name not in exited_names:
+                            exited_names.add(name)
+                            print_fail(f"{name} exited with code {proc.returncode}")
+                            self._show_error_log(name)
                     time.sleep(2)
             except KeyboardInterrupt:
                 pass
