@@ -769,14 +769,8 @@ async def send_message_stream(
     if attach_text:
         messages[0]["content"] += f"\n\n{attach_text}"
 
-    # Web search: run before streaming so results are ready
-    search_results = []
-    if await web_search.should_search(request.message):
-        search_results = await web_search.search(request.message)
-        if search_results:
-            search_results = await web_search.enrich_with_full_content(search_results)
-            context_text = web_search.format_results_for_context(search_results)
-            messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
+    # Web search: check intent now (cheap), actual search runs inside the SSE generator
+    will_search = await web_search.should_search(request.message)
 
     # RAG: inject relevant document chunks (skip in conversation mode to avoid embedding load)
     # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
@@ -790,18 +784,6 @@ async def send_message_stream(
                 rag_text = rag.format_context(rag_chunks)
                 header = _rag_quality_header(rag_chunks)
                 messages[0]["content"] += f"\n\n{header}\n{rag_text}"
-
-    # Inject evidence summary so the model can self-calibrate confidence
-    evidence_summary = _build_evidence_summary(search_results, rag_chunks)
-    messages[0]["content"] += f"\n\n{evidence_summary}"
-
-    total_chars = sum(
-        len(m["content"]) if isinstance(m.get("content"), str) else sum(
-            len(p.get("text", "")) for p in m.get("content", []) if isinstance(p, dict)
-        )
-        for m in messages
-    )
-    print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
 
     # Force thinking tier when image is attached (instant tier is text-only)
     # Voice conversation always uses instant tier (Qwen 3.5 4B); config via INFERENCE_INSTANT_*
@@ -827,13 +809,38 @@ async def send_message_stream(
         except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
             return
 
-        if search_results:
+        # Web search: run inside generator so we can send real-time SSE events
+        search_results = []
+        if will_search:
+            try:
+                yield f"data: {json.dumps({'type': 'search_start'})}\n\n"
+            except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+                return
+
+            search_results = await web_search.search(request.message)
+            if search_results:
+                search_results = await web_search.enrich_with_full_content(search_results)
+                context_text = web_search.format_results_for_context(search_results)
+                messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
+
             sources = [{"title": r["title"], "url": r["url"]} for r in search_results]
             try:
                 yield f"data: {json.dumps({'type': 'search_done', 'sources': sources})}\n\n"
             except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
                 return
-        
+
+        # Inject evidence summary so the model can self-calibrate confidence
+        evidence_summary = _build_evidence_summary(search_results, rag_chunks)
+        messages[0]["content"] += f"\n\n{evidence_summary}"
+
+        total_chars = sum(
+            len(m["content"]) if isinstance(m.get("content"), str) else sum(
+                len(p.get("text", "")) for p in m.get("content", []) if isinstance(p, dict)
+            )
+            for m in messages
+        )
+        print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
+
         async for chunk in inference.generate_response_stream(
             messages=messages,
             mode=inference_mode,

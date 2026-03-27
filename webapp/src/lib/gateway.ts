@@ -88,6 +88,7 @@ export async function sendMessageStream(
   onChunk: (text: string) => void = () => {},
   onSessionId: (id: string) => void = () => {},
   signal?: AbortSignal,
+  onSearchStart?: () => void,
   onSearchDone?: (sources: SearchSource[]) => void,
   image?: string,
 ): Promise<string> {
@@ -144,6 +145,11 @@ export async function sendMessageStream(
 
     if (data.session_id && !data.choices) {
       onSessionId(data.session_id);
+      return;
+    }
+
+    if (data.type === "search_start" && onSearchStart) {
+      onSearchStart();
       return;
     }
 

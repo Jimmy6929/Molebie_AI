@@ -423,7 +423,6 @@ export default function ChatPage() {
     abortControllerRef.current = controller;
     const now = Date.now();
 
-    setIsSearching(true);
     setMessages((prev) => [
       ...prev,
       { id: `temp-${now}`, role: "user", content: userMessage, imageUrl: localImagePreview },
@@ -458,6 +457,7 @@ export default function ChatPage() {
         },
         (sid) => { setActiveSessionId(sid); },
         controller.signal,
+        () => setIsSearching(true),
         (sources) => {
           setIsSearching(false);
           setMessages((prev) =>
@@ -466,8 +466,6 @@ export default function ChatPage() {
         },
         imageDataUri,
       );
-
-      setIsSearching(false);
       setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m));
 
       // Flush final partial sentence and wait for all playback to finish
@@ -478,7 +476,6 @@ export default function ChatPage() {
 
       loadSessions();
     } catch (err) {
-      setIsSearching(false);
       if (controller.signal.aborted) {
         setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m));
       } else {
@@ -494,6 +491,7 @@ export default function ChatPage() {
     } finally {
       abortControllerRef.current = null;
       isStreamingRef.current = false;
+      setIsSearching(false);
       setLoading(false);
       inputRef.current?.focus();
     }
@@ -532,7 +530,6 @@ export default function ChatPage() {
     abortControllerRef.current = controller;
     const now = Date.now();
 
-    setIsSearching(true);
     setMessages((prev) => [
       ...prev,
       {
@@ -558,16 +555,15 @@ export default function ChatPage() {
         },
         () => {},
         controller.signal,
+        () => setIsSearching(true),
         (sources) => {
           setIsSearching(false);
           setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, sources } : m)));
         },
       );
-      setIsSearching(false);
       setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
       loadSessions();
     } catch (err) {
-      setIsSearching(false);
       if (controller.signal.aborted) {
         setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
       } else {
@@ -582,6 +578,7 @@ export default function ChatPage() {
     } finally {
       abortControllerRef.current = null;
       isStreamingRef.current = false;
+      setIsSearching(false);
       setLoading(false);
     }
   }
