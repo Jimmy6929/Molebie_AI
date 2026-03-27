@@ -55,6 +55,8 @@ The wizard lets you choose your backend, models, features, and setup type (singl
 | `molebie-ai config env` | List all environment variables from `.env.local` (secrets masked) |
 | `molebie-ai config get KEY` | Show the value of an environment variable |
 | `molebie-ai config set KEY=VALUE` | Update an environment variable in `.env.local` |
+| `molebie-ai config profile light` | Switch to light models (4B+4B) — less RAM |
+| `molebie-ai config profile balanced` | Switch to balanced models (9B+4B) — better quality |
 | **Features** | |
 | `molebie-ai feature list` | Show optional features and their status |
 | `molebie-ai feature add voice` | Enable a feature and start its service (also: `search`, `rag`) |

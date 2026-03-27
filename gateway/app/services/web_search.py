@@ -70,17 +70,21 @@ _SKIP_PATTERNS = re.compile(
 )
 
 # Messages that definitely DO need a web search
+# NOTE: Keep patterns specific. Loose single-word triggers (e.g. "happened",
+# "released", "election") cause false positives on general-knowledge queries.
+# Temporal signals (today, latest, 202X) already catch the real-time cases.
 _SEARCH_PATTERNS = re.compile(
     r"("
-    # Temporal / recency
-    r"\btoday\b|\bright now\b|\bcurrently\b|\blatest\b|\brecent(ly)?\b"
+    # Temporal / recency — these are the reliable search signals
+    r"\btoday\b|\bright now\b|\bcurrently\b|\blatest\b"
     r"|\bthis (week|month|year)\b|\b202[4-9]\b|\b203\d\b"
-    # News / events
-    r"|\bnews\b|\bhappened\b|\bupdate on\b|\bannounce[ds]?\b|\breleased\b|\blaunched\b"
-    r"|\belection\b|\bbreaking\b"
-    # Real-time data
-    r"|\bweather\b|\bstock price\b|\bexchange rate\b|\bscore\b|\bstandings\b|\bforecast\b"
-    # Commerce / lookup
+    # News / events — require news-intent phrasing, not bare topic words
+    r"|\bnews\b|\bupdate on\b|\bannounce[ds]?\b"
+    r"|\bbreaking news\b"
+    # Real-time data — tightened to avoid false positives
+    r"|\bweather\b|\bstock price\b|\bexchange rate\b"
+    r"|\b(live|game) scores?\b|\bstandings\b"
+    # Commerce / lookup (already specific enough)
     r"|\bprice of\b|\bcost of\b|\bwhere to buy\b"
     r"|\bhours of\b|\baddress of\b|\bopen now\b|\bdirections to\b"
     # Explicit search intent
@@ -191,13 +195,19 @@ class WebSearchService:
 
             inference = get_inference_service()
             prompt = (
-                "Decide if this message needs a live web search.\n"
-                "Answer SEARCH if it asks about current events, recent news, "
-                "real-time data, or facts that change over time.\n"
-                "Answer SKIP if it asks about timeless knowledge, creative tasks, "
-                "coding, math, personal advice, or explanations.\n\n"
+                "Does this message require a LIVE web search to answer correctly?\n\n"
+                "Answer SEARCH only if the user is clearly asking about:\n"
+                "- Events or changes from the last few days/weeks\n"
+                "- Live data (stock prices, weather, sports scores)\n"
+                "- Something an AI would likely get wrong without current data\n\n"
+                "Answer SKIP for:\n"
+                "- General knowledge, history, science, definitions\n"
+                "- Coding, math, creative writing, advice, opinions\n"
+                "- How-to questions, explanations, comparisons\n"
+                "- Anything an AI can answer well from training data\n\n"
+                "If unsure, answer SKIP.\n\n"
                 f'Message: "{message}"\n\n'
-                "One word answer:"
+                "One word:"
             )
             result = await asyncio.wait_for(
                 inference.generate_response(

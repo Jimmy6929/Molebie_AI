@@ -8,6 +8,7 @@ import typer
 from rich.syntax import Syntax
 from rich.table import Table
 
+from cli.models.config import InferenceBackend, ModelProfile
 from cli.services import config_manager
 from cli.services.config_manager import get_project_root
 from cli.services.env_generator import (
@@ -183,3 +184,49 @@ def env_set(
     else:
         print_fail(f"{key} not found in .env.local. Run [bold]molebie-ai config init --force[/bold] to regenerate.")
         raise typer.Exit(1)
+
+
+@app.command(name="profile")
+def set_profile(
+    profile: str = typer.Argument(help="Model profile: light (4B+4B) or balanced (9B+4B)"),
+) -> None:
+    """Switch model profile (light or balanced). Updates config and .env.local."""
+    from cli.services.backend_setup import get_models_for_profile, MLX_MODELS, OLLAMA_MODELS
+
+    profile = profile.lower()
+    valid = list(MLX_MODELS.keys())
+    if profile not in valid:
+        print_fail(f"Unknown profile: {profile}")
+        console.print(f"  Available: {', '.join(valid)}")
+        raise typer.Exit(1)
+
+    if not config_manager.config_exists():
+        print_fail("No config found. Run [bold]molebie-ai run[/bold] first to auto-configure.")
+        raise typer.Exit(1)
+
+    config = config_manager.load_config()
+
+    # Get models for this profile + backend
+    thinking, instant = get_models_for_profile(profile, config.inference_backend)
+
+    old_profile = config.model_profile.value if config.model_profile else "unknown"
+    if old_profile == profile and config.thinking_model == thinking and config.instant_model == instant:
+        print_ok(f"Already on {profile} profile ({thinking} + {instant})")
+        return
+
+    # Update config
+    config.model_profile = ModelProfile(profile)
+    config.thinking_model = thinking
+    config.instant_model = instant
+    config_manager.save_config(config)
+
+    # Update .env.local
+    _ensure_env_local()
+    update_env_key("INFERENCE_THINKING_MODEL", thinking)
+    update_env_key("INFERENCE_INSTANT_MODEL", instant)
+
+    print_ok(f"Switched to {profile} profile")
+    console.print(f"  Thinking: {thinking}")
+    console.print(f"  Instant:  {instant}")
+    console.print()
+    console.print("[dim]Restart services for changes to take effect: molebie-ai run[/dim]")

@@ -69,6 +69,11 @@ SKIP_CASES = [
     ("Hey", "greeting"),
     ("Thanks!", "thanks"),
     ("ok", "acknowledgement"),
+    # Former false positives — these used to trigger SEARCH via loose keywords
+    ("Explain the election process", "explain beats removed 'election' keyword"),
+    ("What are breaking changes in React?", "'what are' skip, 'breaking' alone no longer triggers search"),
+    ("Explain forecasting methods", "explain beats removed 'forecast' keyword"),
+    ("I recently learned Python, help me with lists", "'python' skip, 'recently' no longer triggers search"),
 ]
 
 SEARCH_CASES = [
@@ -76,16 +81,16 @@ SEARCH_CASES = [
     ("Weather in Tokyo today", "today keyword"),
     ("What's the latest AI news?", "latest keyword"),
     ("Who won the Super Bowl 2025?", "year 2025"),
-    ("What happened this week in tech?", "this week"),
+    ("What happened this week in tech?", "this week — temporal signal catches it"),
     # News / events
     ("Ukraine war update on the situation", "update on keyword"),
     ("Did Apple announce anything?", "announced keyword"),
-    ("Breaking news about the earthquake", "breaking keyword"),
+    ("Breaking news about the earthquake", "breaking news (tightened from bare 'breaking')"),
     # Real-time data
     ("Stock price of Apple", "stock price"),
-    ("Current exchange rate USD to EUR", "currently keyword"),
+    ("Current exchange rate USD to EUR", "exchange rate keyword"),
     ("NBA standings", "standings keyword"),
-    ("Weather forecast for tomorrow", "forecast keyword"),
+    ("Weather forecast for tomorrow", "weather keyword catches it"),
     # Commerce / lookup
     ("Where to buy a PS5?", "where to buy"),
     ("Hours of the local library", "hours of"),
@@ -101,7 +106,11 @@ AMBIGUOUS_CASES = [
     ("What is the capital of France?", "factual but timeless"),
     ("Trump", "short ambiguous"),
     ("Bitcoin", "single topic word"),
-    ("Ukraine war update", "no strong search keyword"),
+    ("Ukraine war update", "no strong search keyword — 'update' without 'on' doesn't match"),
+    # Former false positives — used to trigger search via removed loose keywords
+    ("What happened to the dinosaurs?", "'happened' removed — no search or skip match"),
+    ("When was Star Wars released?", "'released' removed — no search or skip match"),
+    ("What's a good credit score?", "'score' tightened — no search or skip match"),
 ]
 
 
