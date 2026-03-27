@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import typer
 from rich.table import Table
 
 from cli.models.config import FEATURE_DESCRIPTIONS, VALID_FEATURES
 from cli.services import config_manager, env_generator
-from cli.ui.console import console, print_fail, print_ok
+from cli.services.config_manager import get_project_root
+from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -17,10 +20,54 @@ def _feature_field(feature: str) -> str:
     return f"{feature}_enabled"
 
 
+# Mapping: feature name → (env_key, enabled_value, disabled_value)
+_ENV_KEYS = {
+    "search": ("WEB_SEARCH_ENABLED", "true", "false"),
+    "rag": ("RAG_ENABLED", "true", "false"),
+}
+
+# Mapping: feature name → docker compose service name
+_DOCKER_SERVICES = {
+    "voice": "kokoro-tts",
+    "search": "searxng",
+}
+
+
+def _docker_up(service: str) -> bool:
+    """Start a Docker Compose service. Returns True on success."""
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "up", "-d", service],
+            cwd=str(get_project_root()),
+            capture_output=True, text=True, timeout=120,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _docker_down(service: str) -> bool:
+    """Stop a Docker Compose service. Returns True on success."""
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "stop", service],
+            cwd=str(get_project_root()),
+            capture_output=True, text=True, timeout=30,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 @app.command(name="list")
 def list_features() -> None:
     """Show all features and their current status."""
     console.print()
+
+    if not config_manager.config_exists():
+        print_warn("No config found. Run [bold]molebie-ai run[/bold] or [bold]molebie-ai install[/bold] first.")
+        console.print()
+        raise typer.Exit(0)
 
     config = config_manager.load_config()
 
@@ -48,6 +95,10 @@ def add_feature(feature: str = typer.Argument(help="Feature to enable (voice, se
         console.print(f"  Available: {', '.join(VALID_FEATURES)}")
         raise typer.Exit(1)
 
+    if not config_manager.config_exists():
+        print_fail("No config found. Run [bold]molebie-ai run[/bold] first to auto-configure.")
+        raise typer.Exit(1)
+
     config = config_manager.load_config()
     field_name = _feature_field(feature)
 
@@ -58,21 +109,24 @@ def add_feature(feature: str = typer.Argument(help="Feature to enable (voice, se
     setattr(config, field_name, True)
     config_manager.save_config(config)
 
-    # Update .env.local if it exists
-    env_keys = {
-        "search": ("WEB_SEARCH_ENABLED", "true"),
-        "rag": ("RAG_ENABLED", "true"),
-    }
-    if feature in env_keys:
-        key, val = env_keys[feature]
-        env_generator.update_env_key(key, val)
+    # Update .env.local
+    if feature in _ENV_KEYS:
+        key, enabled_val, _ = _ENV_KEYS[feature]
+        if not env_generator.update_env_key(key, enabled_val):
+            print_warn(f"Could not update .env.local — run [bold]molebie-ai config init[/bold] to regenerate")
 
     print_ok(f"{feature} enabled")
 
-    if feature == "voice":
-        console.print("  [dim]Start Kokoro TTS: docker compose up -d kokoro-tts[/dim]")
-    elif feature == "search":
-        console.print("  [dim]Start SearXNG: docker compose up -d searxng[/dim]")
+    # Auto-start Docker service
+    if feature in _DOCKER_SERVICES:
+        svc_name = _DOCKER_SERVICES[feature]
+        print_info(f"Starting {svc_name}...")
+        if _docker_up(svc_name):
+            print_ok(f"{svc_name} started")
+        else:
+            print_warn(f"{svc_name} failed to start — run manually: docker compose up -d {svc_name}")
+    elif feature == "rag":
+        print_info("Embedding model will download automatically on first use")
 
     console.print()
 
@@ -86,6 +140,10 @@ def remove_feature(feature: str = typer.Argument(help="Feature to disable (voice
         console.print(f"  Available: {', '.join(VALID_FEATURES)}")
         raise typer.Exit(1)
 
+    if not config_manager.config_exists():
+        print_fail("No config found. Run [bold]molebie-ai run[/bold] first to auto-configure.")
+        raise typer.Exit(1)
+
     config = config_manager.load_config()
     field_name = _feature_field(feature)
 
@@ -96,14 +154,21 @@ def remove_feature(feature: str = typer.Argument(help="Feature to disable (voice
     setattr(config, field_name, False)
     config_manager.save_config(config)
 
-    # Update .env.local if it exists
-    env_keys = {
-        "search": ("WEB_SEARCH_ENABLED", "false"),
-        "rag": ("RAG_ENABLED", "false"),
-    }
-    if feature in env_keys:
-        key, val = env_keys[feature]
-        env_generator.update_env_key(key, val)
+    # Update .env.local
+    if feature in _ENV_KEYS:
+        key, _, disabled_val = _ENV_KEYS[feature]
+        if not env_generator.update_env_key(key, disabled_val):
+            print_warn(f"Could not update .env.local — run [bold]molebie-ai config init[/bold] to regenerate")
 
     print_ok(f"{feature} disabled")
+
+    # Stop Docker service
+    if feature in _DOCKER_SERVICES:
+        svc_name = _DOCKER_SERVICES[feature]
+        print_info(f"Stopping {svc_name}...")
+        if _docker_down(svc_name):
+            print_ok(f"{svc_name} stopped")
+        else:
+            print_warn(f"{svc_name} failed to stop — run manually: docker compose stop {svc_name}")
+
     console.print()

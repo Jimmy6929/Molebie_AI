@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import typer
 from rich.panel import Panel
@@ -296,10 +297,12 @@ def _display_check_results(results: list) -> bool:
 
 
 def _install_gateway_deps(root) -> None:
-    """Install gateway Python dependencies."""
+    """Install gateway Python dependencies into the project venv."""
+    venv_python = str(root / ".venv" / "bin" / "python")
+    python_cmd = venv_python if Path(venv_python).exists() else sys.executable
     with console.status("[info]Installing gateway dependencies...[/info]"):
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--quiet"],
+            [python_cmd, "-m", "pip", "install", "-r", "requirements.txt", "--quiet"],
             cwd=str(root / "gateway"),
             capture_output=True, text=True, timeout=300,
         )
@@ -563,10 +566,7 @@ def _execute_install(
     _install_webapp_deps(root)
     console.print()
 
-    # 7e. Create data directory
-    console.print("[heading]Creating data directory...[/heading]")
-    data_dir = root / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
+    # 7e. Data directory (already created at top of _execute_install)
     print_ok("Data directory ready (SQLite DB will initialize on first start)")
     console.print()
 

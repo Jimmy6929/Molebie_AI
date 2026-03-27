@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import typer
 
-from cli.models.config import MolebieConfig
+from cli.models.config import InferenceBackend, MolebieConfig
 from cli.services import config_manager, prerequisite_checker
 from cli.services.env_generator import init_env_local
 from cli.ui.console import console, make_status_table, print_fail, print_info, print_ok, print_warn
@@ -45,11 +45,11 @@ def _health_check(url: str, name: str, timeout: float = 3.0) -> bool:
             return True
         print_fail(f"{name} returned {resp.status_code} at {url}")
         return False
-    except httpx.ConnectError:
-        print_fail(f"{name} not reachable at {url}")
-        return False
     except httpx.TimeoutException:
         print_warn(f"{name} timed out at {url}")
+        return False
+    except httpx.TransportError:
+        print_fail(f"{name} not reachable at {url}")
         return False
 
 
@@ -136,10 +136,10 @@ def doctor(
     ]
 
     # Inference endpoints
-    if config.inference_backend == config.inference_backend.MLX:
+    if config.inference_backend == InferenceBackend.MLX:
         services.append((f"http://{gpu_ip}:8080/v1/models", "MLX Thinking"))
         services.append((f"http://{gpu_ip}:8081/v1/models", "MLX Instant"))
-    elif config.inference_backend == config.inference_backend.OLLAMA:
+    elif config.inference_backend == InferenceBackend.OLLAMA:
         services.append((f"http://{gpu_ip}:11434/v1/models", "Ollama"))
 
     # Optional services
@@ -149,7 +149,8 @@ def doctor(
         services.append((f"http://{ip}:8880/", "Kokoro TTS"))
 
     for url, name in services:
-        _health_check(url, name)
+        if not _health_check(url, name):
+            all_ok = False
     console.print()
 
     # Summary

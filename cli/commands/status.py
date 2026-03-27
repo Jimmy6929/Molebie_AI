@@ -16,10 +16,10 @@ def _health(url: str, timeout: float = 2.0) -> str:
     try:
         resp = httpx.get(url, timeout=timeout, follow_redirects=True)
         return "[green]up[/green]" if resp.status_code < 400 else f"[red]{resp.status_code}[/red]"
-    except httpx.ConnectError:
-        return "[red]down[/red]"
     except httpx.TimeoutException:
         return "[yellow]timeout[/yellow]"
+    except httpx.TransportError:
+        return "[red]down[/red]"
 
 
 def status() -> None:

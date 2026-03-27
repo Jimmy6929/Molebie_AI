@@ -17,46 +17,48 @@ A self-hosted AI assistant with voice conversation, vision, RAG document memory,
 
 ```bash
 git clone git@github.com:Jimmy6929/Molebie_AI.git
-cd Molebie-AI
+cd Molebie_AI
 ./install.sh
+molebie-ai run
 ```
 
-That's it. The installer handles everything:
+That's it. `molebie-ai run` auto-detects your system and configures everything on first launch:
+- Detects Apple Silicon → MLX, or falls back to Ollama
+- Picks the best model profile for your RAM
+- Generates `.env.local` with a secure JWT secret
+- Creates the SQLite database on first gateway start
 
-1. **Checks your system** — OS, chip, RAM, disk space
-2. **Installs missing tools** — Docker, Node.js (asks first)
-3. **Detects the best backend** — recommends MLX on Apple Silicon, Ollama elsewhere
-4. **Lets you choose models** — Light (8+ GB RAM) or Balanced (16+ GB RAM)
-5. **Installs the backend** — installs `mlx-vlm` and downloads models, or pulls Ollama models
-6. **Configures features** — web search (SearXNG), RAG document memory, voice
-7. **Sets up services** — starts Docker containers and generates all config files
-8. **Offers to start** — launches everything with one confirmation
+Open **http://localhost:3000** and start chatting.
 
-After setup, start the system any time with:
+### Want more control? Use the interactive wizard:
 
 ```bash
-./bin/molebie-ai run
+molebie-ai install
 ```
 
-Open **http://localhost:3000**, create an account, and start chatting.
+The wizard lets you choose your backend, models, features, and setup type (single or two-machine).
 
 ### CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `molebie-ai install` | Interactive setup wizard — installs backend, downloads models, configures everything |
-| `molebie-ai run` | Start all configured services (Gateway, Webapp, inference) |
-| `molebie-ai doctor` | Diagnose environment problems — checks dependencies, config, and service health |
+| **Startup** | |
+| `molebie-ai run` | Start all services — auto-configures on first run |
+| `molebie-ai install` | Interactive setup wizard (optional — for full control) |
+| **Diagnostics** | |
+| `molebie-ai doctor` | Diagnose problems — checks dependencies, config, and service health |
 | `molebie-ai doctor --fix` | Auto-generate missing `.env.local` and config |
 | `molebie-ai status` | Show current configuration and which services are running |
+| **Configuration** | |
 | `molebie-ai config init` | Generate `.env.local` from template (auto-creates JWT secret) |
-| `molebie-ai config show` | Display saved configuration (JSON) |
+| `molebie-ai config show` | Display saved setup configuration (JSON) |
 | `molebie-ai config env` | List all environment variables from `.env.local` (secrets masked) |
 | `molebie-ai config get KEY` | Show the value of an environment variable |
 | `molebie-ai config set KEY=VALUE` | Update an environment variable in `.env.local` |
+| **Features** | |
 | `molebie-ai feature list` | Show optional features and their status |
-| `molebie-ai feature add voice` | Enable a feature (also: `search`, `rag`) |
-| `molebie-ai feature remove voice` | Disable a feature |
+| `molebie-ai feature add voice` | Enable a feature and start its service (also: `search`, `rag`) |
+| `molebie-ai feature remove voice` | Disable a feature and stop its service |
 
 ### Alternative: Manual Setup
 
@@ -203,11 +205,16 @@ Template variables: `{current_date}` (auto-injected)
 
 ### Environment Variables
 
-All config lives in `.env.local` at the project root. Copy the template:
+All config lives in `.env.local` at the project root. The CLI manages this for you:
 
 ```bash
-cp .env.example .env.local
+molebie-ai config env                  # List all variables
+molebie-ai config get KEY              # Show a specific value
+molebie-ai config set KEY=VALUE        # Update a value
+molebie-ai config init                 # Regenerate from template
 ```
+
+Or copy the template manually: `cp .env.example .env.local`
 
 Key variables:
 
@@ -226,19 +233,19 @@ See `.env.example` for the complete list with descriptions.
 
 ### Optional Features
 
-Toggle features via the CLI or environment variables:
+Toggle features via the CLI. Docker services are started/stopped automatically:
 
 ```bash
 molebie-ai feature list          # See what's enabled
-molebie-ai feature add voice     # Enable voice
-molebie-ai feature remove search # Disable search
+molebie-ai feature add voice     # Enable voice + starts Kokoro TTS container
+molebie-ai feature remove search # Disable search + stops SearXNG container
 ```
 
-| Feature | CLI Toggle | Env Variable | Setup |
-|---------|-----------|-------------|-------|
-| Web Search | `molebie-ai feature add search` | `WEB_SEARCH_ENABLED` | SearXNG Docker container |
-| Text-to-Speech | `molebie-ai feature add voice` | — | Kokoro TTS Docker container + ffmpeg |
-| RAG Documents | `molebie-ai feature add rag` | `RAG_ENABLED` | Embedding model auto-downloads on first use |
+| Feature | CLI Toggle | Env Variable | What happens |
+|---------|-----------|-------------|-------------|
+| Web Search | `feature add search` | `WEB_SEARCH_ENABLED` | Starts/stops SearXNG Docker container |
+| Text-to-Speech | `feature add voice` | — | Starts/stops Kokoro TTS Docker container |
+| RAG Documents | `feature add rag` | `RAG_ENABLED` | Embedding model downloads on first use |
 | Image Vision | Always available | — | Requires a vision-capable model |
 
 ### Custom Wake Words
@@ -370,20 +377,20 @@ All queries enforce user isolation — users can only access their own data.
 ### Commands
 
 ```bash
-# CLI (recommended)
-molebie-ai install       # Guided setup wizard
-molebie-ai run           # Start all services
+# CLI (recommended for running)
+molebie-ai run           # Start all services (auto-configures on first run)
+molebie-ai install       # Interactive setup wizard (optional)
 molebie-ai doctor        # Diagnose issues
 molebie-ai status        # Check what's running
 
-# Make targets (for individual service control)
-make dev-gateway         # Start Gateway API (:8000)
+# Make targets (for development — hot-reload enabled)
+make dev-gateway         # Start Gateway API with hot-reload (:8000)
 make dev-webapp          # Start Web App (:3000)
 make dev-all             # Start all via tmux
 make test                # Run tests
 make lint                # Lint gateway code
 make format              # Format gateway code
-make db-reset            # Reset database
+make db-reset            # Reset SQLite database
 make clean               # Remove build artifacts
 make stop                # Stop all services
 make cli                 # Install the CLI (pip install -e .)
@@ -405,12 +412,13 @@ Run `molebie-ai doctor` for a full diagnostic — it checks dependencies, config
 | Problem | Solution |
 |---------|----------|
 | Something seems wrong | `molebie-ai doctor` — checks everything and suggests fixes |
-| `uvicorn: command not found` | Use `python3 -m uvicorn` (Makefile does this) |
-| Address already in use | `lsof -i :<port>` then `kill` the process |
-| Auth 401 errors | Check `JWT_SECRET` in `.env.local` matches what the gateway is using |
+| Missing `.env.local` or config | `molebie-ai doctor --fix` or just `molebie-ai run` (auto-creates both) |
+| Address already in use | `molebie-ai run` auto-kills stale processes; or `lsof -i :<port>` then `kill` |
+| Gateway crashes | Check `data/logs/gateway.log` — error details logged there |
+| Auth 401 errors | `molebie-ai config get JWT_SECRET --show-secrets` to inspect |
 | Voice transcription fails | `brew install ffmpeg` |
 | OMP error on macOS | `make dev-gateway` sets `KMP_DUPLICATE_LIB_OK=TRUE` automatically |
-| Config looks wrong | `molebie-ai config show` to inspect, `molebie-ai install` to reconfigure |
+| Config looks wrong | `molebie-ai config env` to list all vars, `molebie-ai config set KEY=VALUE` to fix |
 
 ## Tech Stack
 
