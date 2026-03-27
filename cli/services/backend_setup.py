@@ -114,7 +114,7 @@ def get_models_for_profile(
 # MLX setup
 # ──────────────────────────────────────────────────────────────
 
-def _is_mlx_vlm_installed() -> bool:
+def is_mlx_vlm_installed() -> bool:
     """Check if mlx-vlm is installed (lightweight metadata check, no heavy import)."""
     try:
         result = subprocess.run(
@@ -126,7 +126,7 @@ def _is_mlx_vlm_installed() -> bool:
         return False
 
 
-def _install_mlx_vlm() -> bool:
+def install_mlx_vlm() -> bool:
     """Install mlx-vlm using sys.executable -m pip. Matches Makefile mlx-vlm-install."""
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "-U", "mlx-vlm"],
@@ -135,7 +135,7 @@ def _install_mlx_vlm() -> bool:
     return result.returncode == 0
 
 
-def _download_mlx_model(repo_id: str) -> bool:
+def download_mlx_model(repo_id: str) -> bool:
     """Pre-download an MLX model via huggingface_hub.snapshot_download."""
     result = subprocess.run(
         [sys.executable, "-c",
@@ -157,8 +157,8 @@ def setup_mlx(profile: str, sys_info: SystemInfo) -> SetupResult:
         )
 
     # 2. Install mlx-vlm if needed
-    if not _is_mlx_vlm_installed():
-        if not _install_mlx_vlm():
+    if not is_mlx_vlm_installed():
+        if not install_mlx_vlm():
             return SetupResult(
                 success=False,
                 message="Failed to install mlx-vlm. Try manually: python -m pip install -U mlx-vlm",
@@ -174,7 +174,7 @@ def setup_mlx(profile: str, sys_info: SystemInfo) -> SetupResult:
 
     for model in models_to_download:
         short_name = model.split("/")[-1] if "/" in model else model
-        if not _download_mlx_model(model):
+        if not download_mlx_model(model):
             warnings.append(f"Could not pre-download {short_name} — it will download on first server start")
 
     return SetupResult(
@@ -190,7 +190,7 @@ def setup_mlx(profile: str, sys_info: SystemInfo) -> SetupResult:
 # Ollama setup
 # ──────────────────────────────────────────────────────────────
 
-def _is_ollama_running() -> bool:
+def is_ollama_running() -> bool:
     """Check if Ollama API is reachable."""
     try:
         resp = httpx.get("http://localhost:11434/api/version", timeout=3)
@@ -199,7 +199,7 @@ def _is_ollama_running() -> bool:
         return False
 
 
-def _start_ollama_daemon() -> bool:
+def start_ollama_daemon() -> bool:
     """Attempt to start ollama serve in the background."""
     try:
         subprocess.Popen(
@@ -213,12 +213,12 @@ def _start_ollama_daemon() -> bool:
     # Wait up to 15 seconds for it to come up
     for _ in range(15):
         time.sleep(1)
-        if _is_ollama_running():
+        if is_ollama_running():
             return True
     return False
 
 
-def _pull_ollama_model(model: str) -> bool:
+def pull_ollama_model(model: str) -> bool:
     """Pull an Ollama model. Lets native progress bars show through."""
     result = subprocess.run(
         ["ollama", "pull", model],
@@ -240,8 +240,8 @@ def setup_ollama(profile: str) -> SetupResult:
         )
 
     # 2. Ensure Ollama is running
-    if not _is_ollama_running():
-        if not _start_ollama_daemon():
+    if not is_ollama_running():
+        if not start_ollama_daemon():
             warnings.append(
                 "Could not start Ollama automatically — start it manually: ollama serve"
             )
@@ -250,13 +250,13 @@ def setup_ollama(profile: str) -> SetupResult:
     thinking, instant = get_models_for_profile(profile, InferenceBackend.OLLAMA)
 
     # 4. Pull models (only if Ollama is running)
-    if _is_ollama_running():
+    if is_ollama_running():
         models_to_pull = [thinking]
         if instant != thinking:
             models_to_pull.append(instant)
 
         for model in models_to_pull:
-            if not _pull_ollama_model(model):
+            if not pull_ollama_model(model):
                 warnings.append(f"Could not pull {model} — pull it manually: ollama pull {model}")
     else:
         warnings.append(
@@ -264,7 +264,7 @@ def setup_ollama(profile: str) -> SetupResult:
         )
 
     # 5. Verify
-    if _is_ollama_running():
+    if is_ollama_running():
         try:
             httpx.get("http://localhost:11434/v1/models", timeout=3)
         except (httpx.ConnectError, httpx.TimeoutException):

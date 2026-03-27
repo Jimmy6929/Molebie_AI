@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 
 from cli import __version__
-from cli.commands import config_cmd, doctor, feature, install, run, status
+from cli.commands import config_cmd, doctor, feature, install, model_cmd, run, status
 
 app = typer.Typer(
     name="molebie-ai",
@@ -23,6 +23,7 @@ app.command(name="status", help="Show current config and service state")(status.
 # Sub-apps
 app.add_typer(config_cmd.app, name="config", help="View and manage configuration")
 app.add_typer(feature.app, name="feature", help="Manage optional features")
+app.add_typer(model_cmd.app, name="model", help="Manage LLM models (download, remove, start/stop)")
 
 
 def version_callback(value: bool) -> None:

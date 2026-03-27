@@ -57,6 +57,12 @@ The wizard lets you choose your backend, models, features, and setup type (singl
 | `molebie-ai config set KEY=VALUE` | Update an environment variable in `.env.local` |
 | `molebie-ai config profile light` | Switch to light models (4B+4B) — less RAM |
 | `molebie-ai config profile balanced` | Switch to balanced models (9B+4B) — better quality |
+| **Models** | |
+| `molebie-ai model list` | Show available models, download status, and active tier |
+| `molebie-ai model add 9b` | Download/pull a model (aliases: `4b`, `9b`, or full name) |
+| `molebie-ai model remove 9b` | Remove a downloaded model from disk |
+| `molebie-ai model start` | Start inference server(s) (`--tier thinking`, `instant`, or `all`) |
+| `molebie-ai model stop` | Stop inference server(s) (`--tier thinking`, `instant`, or `all`) |
 | **Features** | |
 | `molebie-ai feature list` | Show optional features and their status |
 | `molebie-ai feature add voice` | Enable a feature and start its service (also: `search`, `rag`) |
@@ -160,7 +166,7 @@ molebie-ai/
 │
 ├── cli/                             # CLI (Python + Typer)
 │   ├── main.py                      # Typer app entry point
-│   ├── commands/                    # install, run, doctor, status, config, feature
+│   ├── commands/                    # install, run, doctor, status, config, feature, model
 │   ├── services/                    # Backend setup, feature setup, system detection
 │   ├── models/                      # Config schema (Pydantic)
 │   └── ui/                          # Console output + interactive prompts (Rich)
@@ -232,6 +238,26 @@ Key variables:
 | `ROUTING_DEFAULT_MODE` | Default inference mode | `thinking` |
 
 See `.env.example` for the complete list with descriptions.
+
+### Model Management
+
+Manage LLM models after installation — download new models, remove old ones, and start/stop inference servers independently:
+
+```bash
+molebie-ai model list             # See what's downloaded and active
+molebie-ai model add 9b           # Download the 9B model
+molebie-ai model add 4b           # Download the 4B model
+molebie-ai model remove 9b        # Remove a model from disk
+molebie-ai model start --tier thinking   # Start thinking server (:8080)
+molebie-ai model stop --tier instant     # Stop instant server (:8081)
+```
+
+| Alias | MLX Model | Ollama Model |
+|-------|-----------|-------------|
+| `4b` | `mlx-community/Qwen3.5-4B-4bit` | `qwen3:4b` |
+| `9b` | `mlx-community/Qwen3.5-9B-MLX-4bit` | `qwen3:8b` |
+
+Full model names are also accepted. Aliases resolve automatically based on your configured backend.
 
 ### Optional Features
 
