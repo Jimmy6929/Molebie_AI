@@ -62,9 +62,16 @@ def doctor(
     console.print()
     all_ok = True
 
-    # 1. Prerequisites
+    # 1. Prerequisites — load config early so we can pass feature flags
+    #    (Docker is a hard failure when search/voice is enabled, warning otherwise)
+    _config_path = config_manager.get_config_path()
+    _pre_config = config_manager.load_config() if _config_path.exists() else MolebieConfig()
+
     console.print("[heading]Prerequisites[/heading]")
-    results = prerequisite_checker.check_all()
+    results = prerequisite_checker.check_all(
+        voice_enabled=_pre_config.voice_enabled,
+        search_enabled=_pre_config.search_enabled,
+    )
     for r in results:
         if r.passed:
             print_ok(f"{r.name}: {r.message}")

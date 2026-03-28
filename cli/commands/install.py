@@ -399,12 +399,14 @@ def _setup_features(config: MolebieConfig, root) -> None:
 
 
 def _resolve_prerequisites(config: MolebieConfig, quick: bool = False) -> None:
-    """Check prerequisites. If any are missing, offer to install or let user do it."""
+    """Check and resolve core prerequisites (Python, Node).
+
+    Docker and ffmpeg are NOT checked here — they are resolved at point-of-need
+    by feature setup functions (search needs Docker, voice needs Docker + ffmpeg).
+    This prevents unrelated dependency failures from blocking the entire install.
+    """
     console.print("[heading]Checking prerequisites...[/heading]")
-    results = prerequisite_checker.check_all(
-        voice_enabled=config.voice_enabled,
-        search_enabled=config.search_enabled,
-    )
+    results = prerequisite_checker.check_all(core_only=True)
     _display_check_results(results)
 
     failures = [r for r in results if not r.passed and not r.is_warning]
@@ -427,25 +429,11 @@ def _resolve_prerequisites(config: MolebieConfig, quick: bool = False) -> None:
         )
 
     if "myself" in user_choice:
-        # Show the commands the user needs to run
         console.print()
         console.print("[heading]Run these commands to fix the issues:[/heading]")
         for r in failures:
             name_lower = r.name.lower()
-            if "docker" in name_lower and "daemon" in name_lower:
-                if prerequisite_checker.detect_os() == "darwin":
-                    console.print("  Docker daemon: [bold]open -a Docker[/bold]")
-                else:
-                    console.print("  Docker daemon: [bold]sudo systemctl start docker[/bold]")
-            elif "docker" in name_lower:
-                if pkg_mgr:
-                    cmd = prerequisite_checker.get_install_command_display(
-                        prerequisite_checker.DOCKER_PREREQ, pkg_mgr,
-                    )
-                    console.print(f"  Docker: [bold]{cmd}[/bold]")
-                else:
-                    console.print("  Docker: Install from https://docker.com")
-            elif "node" in name_lower:
+            if "node" in name_lower:
                 if pkg_mgr:
                     cmd = prerequisite_checker.get_install_command_display(
                         prerequisite_checker.NODE_PREREQ, pkg_mgr,
@@ -453,18 +441,10 @@ def _resolve_prerequisites(config: MolebieConfig, quick: bool = False) -> None:
                     console.print(f"  {r.name}: [bold]{cmd}[/bold]")
                 else:
                     console.print(f"  {r.name}: {r.fix_hint}")
-            elif "ffmpeg" in name_lower:
-                if pkg_mgr:
-                    cmd = prerequisite_checker.get_install_command_display(
-                        prerequisite_checker.FFMPEG_PREREQ, pkg_mgr,
-                    )
-                    console.print(f"  {r.name}: [bold]{cmd}[/bold]")
-                else:
-                    console.print(f"  {r.name}: {r.fix_hint}")
             elif "python" in name_lower:
                 console.print(f"  {r.name}: {r.fix_hint}")
         console.print()
-        print_info("After installing, run [bold]molebie-ai install[/bold] again.")
+        print_info("After installing, run [bold]bash install.sh[/bold] again.")
         raise typer.Exit(1)
 
     # User chose "Install for me"
@@ -475,45 +455,20 @@ def _resolve_prerequisites(config: MolebieConfig, quick: bool = False) -> None:
     console.print()
     for r in failures:
         name_lower = r.name.lower()
-        if "docker" in name_lower and ("daemon" in name_lower or "running" in r.message.lower()):
-            print_info("Starting Docker...")
-            if prerequisite_checker.start_docker_daemon():
-                print_ok("Docker daemon started")
-            else:
-                print_warn("Could not start Docker daemon")
-        elif "docker" in name_lower:
-            print_info("Installing Docker...")
-            res = prerequisite_checker.install_prereq(prerequisite_checker.DOCKER_PREREQ, pkg_mgr)
-            if res.success:
-                print_ok("Docker installed")
-                print_info("Starting Docker...")
-                if prerequisite_checker.start_docker_daemon():
-                    print_ok("Docker daemon started")
-                else:
-                    print_warn("Could not start Docker daemon")
-            else:
-                print_warn(f"Docker: {res.message}")
-        elif "node" in name_lower:
+        if "node" in name_lower:
             print_info("Installing Node.js...")
             res = prerequisite_checker.install_prereq(prerequisite_checker.NODE_PREREQ, pkg_mgr)
             print_ok("Node.js installed") if res.success else print_warn(f"Node.js: {res.message}")
-        elif "ffmpeg" in name_lower:
-            print_info("Installing ffmpeg...")
-            res = prerequisite_checker.install_prereq(prerequisite_checker.FFMPEG_PREREQ, pkg_mgr)
-            print_ok("ffmpeg installed") if res.success else print_warn(f"ffmpeg: {res.message}")
         elif "python" in name_lower:
             print_warn(f"Python: {r.message} — please fix manually")
 
     # Re-check after auto-fix
     console.print()
     print_info("Re-checking prerequisites...")
-    results = prerequisite_checker.check_all(
-        voice_enabled=config.voice_enabled,
-        search_enabled=config.search_enabled,
-    )
+    results = prerequisite_checker.check_all(core_only=True)
     if _display_check_results(results):
         console.print()
-        print_fail("Some prerequisites still missing. Fix them and run [bold]molebie-ai install[/bold] again.")
+        print_fail("Some prerequisites still missing. Fix them and run [bold]bash install.sh[/bold] again.")
         raise typer.Exit(1)
 
 

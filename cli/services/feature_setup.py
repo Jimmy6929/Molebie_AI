@@ -38,14 +38,13 @@ def setup_search(project_root: Path) -> FeatureSetupResult:
     """Start SearXNG Docker container and verify health."""
     warnings: list[str] = []
 
-    # Check Docker
-    docker_check = prerequisite_checker.check_docker()
-    if not docker_check.passed:
+    # Resolve Docker — actively fixes intermediate states instead of just checking
+    ok, msg = prerequisite_checker.resolve_docker()
+    if not ok:
         return FeatureSetupResult(
             feature="search",
             success=False,
-            message="Docker is required for web search (SearXNG)",
-            warnings=[docker_check.fix_hint] if docker_check.fix_hint else [],
+            message=f"Docker is required for web search (SearXNG): {msg}",
         )
 
     # Start SearXNG — same command as existing install.py and Makefile
@@ -81,19 +80,26 @@ def setup_voice(project_root: Path) -> FeatureSetupResult:
     """Start Kokoro TTS Docker container, check ffmpeg, verify health."""
     warnings: list[str] = []
 
-    # Check ffmpeg (warn only)
+    # ffmpeg: try to auto-install, warn if still missing
     ffmpeg_check = prerequisite_checker.check_ffmpeg()
     if not ffmpeg_check.passed:
-        warnings.append(f"ffmpeg: {ffmpeg_check.message} — {ffmpeg_check.fix_hint}")
+        pkg_mgr = prerequisite_checker.detect_package_manager()
+        if pkg_mgr:
+            res = prerequisite_checker.install_prereq(
+                prerequisite_checker.FFMPEG_PREREQ, pkg_mgr,
+            )
+            if not res.success:
+                warnings.append(f"ffmpeg: could not auto-install — {ffmpeg_check.fix_hint}")
+        else:
+            warnings.append(f"ffmpeg: {ffmpeg_check.message} — {ffmpeg_check.fix_hint}")
 
-    # Check Docker
-    docker_check = prerequisite_checker.check_docker()
-    if not docker_check.passed:
+    # Resolve Docker — actively fixes intermediate states
+    ok, msg = prerequisite_checker.resolve_docker()
+    if not ok:
         return FeatureSetupResult(
             feature="voice",
             success=False,
-            message="Docker is required for voice (Kokoro TTS)",
-            warnings=[docker_check.fix_hint] if docker_check.fix_hint else [],
+            message=f"Docker is required for voice (Kokoro TTS): {msg}",
         )
 
     # Start Kokoro TTS — same command as existing install.py and Makefile

@@ -8,7 +8,7 @@ import typer
 from rich.table import Table
 
 from cli.models.config import FEATURE_DESCRIPTIONS, VALID_FEATURES
-from cli.services import config_manager, env_generator
+from cli.services import config_manager, env_generator, prerequisite_checker
 from cli.services.config_manager import get_project_root
 from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
 
@@ -105,6 +105,14 @@ def add_feature(feature: str = typer.Argument(help="Feature to enable (voice, se
     if getattr(config, field_name):
         print_ok(f"{feature} is already enabled")
         return
+
+    # Resolve prerequisites before enabling Docker-dependent features
+    if feature in _DOCKER_SERVICES:
+        print_info("Checking Docker...")
+        ok, msg = prerequisite_checker.resolve_docker(log=lambda m: print_info(m))
+        if not ok:
+            print_warn(f"Docker: {msg}")
+            print_warn(f"Enabling {feature} in config, but the service may not start until Docker is available")
 
     setattr(config, field_name, True)
     config_manager.save_config(config)

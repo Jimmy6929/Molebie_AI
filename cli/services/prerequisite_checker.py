@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import enum
 import platform
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -32,6 +34,14 @@ class InstallResult:
     name: str
     success: bool
     message: str
+
+
+class DockerState(enum.Enum):
+    """Possible Docker installation states."""
+    READY = "ready"                       # CLI in PATH + daemon running
+    DAEMON_STOPPED = "daemon_stopped"     # CLI in PATH + daemon not running
+    APP_EXISTS_NO_CLI = "app_no_cli"      # Docker.app exists but CLI not in PATH (macOS)
+    NOT_INSTALLED = "not_installed"        # Nothing found
 
 
 def _run_quiet(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
@@ -108,22 +118,126 @@ FFMPEG_PREREQ = InstallablePrereq(
 
 
 # ──────────────────────────────────────────────────────────────
-# Individual check functions
+# Docker state detection & resolution
 # ──────────────────────────────────────────────────────────────
 
-def check_docker() -> CheckResult:
-    if not shutil.which("docker"):
-        return CheckResult(
-            "Docker", False, "Not installed",
-            fix_hint="Install from https://docker.com or: brew install --cask docker",
+_DOCKER_APP_PATHS = [
+    Path("/Applications/Docker.app"),
+    Path.home() / "Applications" / "Docker.app",
+]
+
+
+def detect_docker_state() -> DockerState:
+    """Detect the current Docker installation state."""
+    if shutil.which("docker"):
+        rc, _ = _run_quiet(["docker", "info"])
+        return DockerState.READY if rc == 0 else DockerState.DAEMON_STOPPED
+    # macOS: Docker Desktop may be installed but CLI not yet symlinked
+    if detect_os() == "darwin":
+        for app_path in _DOCKER_APP_PATHS:
+            if app_path.exists():
+                return DockerState.APP_EXISTS_NO_CLI
+    return DockerState.NOT_INSTALLED
+
+
+def _wait_for_docker_cli(timeout_seconds: int = 30) -> bool:
+    """Wait for the ``docker`` CLI to appear in PATH (e.g. after Docker Desktop launch)."""
+    for _ in range(timeout_seconds // 2):
+        if shutil.which("docker"):
+            return True
+        time.sleep(2)
+    return False
+
+
+def resolve_docker(log: "Callable[[str], None] | None" = None) -> tuple[bool, str]:
+    """Attempt to bring Docker to the READY state.
+
+    Unlike ``check_docker()`` (read-only diagnostic), this function actively
+    fixes each intermediate state: launching the app, starting the daemon, or
+    installing Docker from scratch.
+
+    *log* is an optional callback for progress messages (e.g. ``console.print``).
+
+    Returns ``(success, message)``.
+    """
+    state = detect_docker_state()
+
+    if state == DockerState.READY:
+        return True, "Docker is ready"
+
+    if state == DockerState.APP_EXISTS_NO_CLI:
+        if log:
+            log("Docker Desktop found but CLI not in PATH — launching app...")
+        subprocess.Popen(
+            ["open", "-a", "Docker"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-    rc, _ = _run_quiet(["docker", "info"])
-    if rc != 0:
+        if _wait_for_docker_cli() and wait_for_docker_daemon():
+            return True, "Docker Desktop launched and ready"
+        return (
+            False,
+            "Docker Desktop launched but CLI not available — try opening Docker Desktop manually",
+        )
+
+    if state == DockerState.DAEMON_STOPPED:
+        if log:
+            log("Docker CLI found — starting daemon...")
+        if start_docker_daemon():
+            return True, "Docker daemon started"
+        return False, "Could not start Docker daemon — open Docker Desktop manually"
+
+    # NOT_INSTALLED — attempt auto-install
+    pkg_mgr = detect_package_manager()
+    if not pkg_mgr:
+        return False, "Docker not installed. Install from https://docker.com"
+
+    if log:
+        log("Installing Docker...")
+
+    # On macOS brew, use --adopt to handle a leftover Docker.app from a
+    # direct download that wasn't fully cleaned up.
+    if pkg_mgr == "brew":
+        rc, _ = _run_quiet(
+            ["brew", "install", "--cask", "--adopt", "docker"], timeout=600,
+        )
+        success = rc == 0
+    else:
+        res = install_prereq(DOCKER_PREREQ, pkg_mgr)
+        success = res.success
+
+    if not success:
+        return False, "Docker installation failed — install manually from https://docker.com"
+
+    if start_docker_daemon():
+        return True, "Docker installed and running"
+    return False, "Docker installed but daemon not starting — open Docker Desktop manually"
+
+
+def check_docker() -> CheckResult:
+    """Read-only Docker status check (used by ``doctor`` and display functions)."""
+    state = detect_docker_state()
+    if state == DockerState.READY:
+        return CheckResult("Docker", True, "Installed and running")
+    if state == DockerState.DAEMON_STOPPED:
         return CheckResult(
             "Docker daemon", False, "Not running",
-            fix_hint="Open Docker Desktop first",
+            fix_hint="Open Docker Desktop or run: open -a Docker",
         )
-    return CheckResult("Docker", True, "Installed and running")
+    if state == DockerState.APP_EXISTS_NO_CLI:
+        return CheckResult(
+            "Docker", False, "App installed but CLI not in PATH",
+            fix_hint="Open Docker Desktop once to create CLI symlinks, or run: open -a Docker",
+        )
+    return CheckResult(
+        "Docker", False, "Not installed",
+        fix_hint="Install from https://docker.com or: brew install --cask docker",
+    )
+
+
+# ──────────────────────────────────────────────────────────────
+# Individual check functions
+# ──────────────────────────────────────────────────────────────
 
 
 def check_node() -> CheckResult:
@@ -234,23 +348,37 @@ def check_system_early() -> tuple[list[CheckResult], "SystemInfo"]:
 def check_all(
     voice_enabled: bool = False,
     search_enabled: bool = False,
+    core_only: bool = False,
 ) -> list[CheckResult]:
-    """Run all prerequisite checks."""
+    """Run prerequisite checks.
+
+    When *core_only* is True only Python and Node are checked — Docker and
+    ffmpeg are skipped entirely (they are resolved at point-of-need by feature
+    setup functions).
+    """
+    results: list[CheckResult] = [
+        check_node(),
+        check_python(),
+    ]
+
+    if core_only:
+        return results
+
+    # Docker: hard requirement only when features need it
     docker_required = voice_enabled or search_enabled
     docker_result = check_docker()
     if not docker_required and not docker_result.passed:
         docker_result.is_warning = True
-    results = [
-        docker_result,
-        check_node(),
-        check_python(),
-    ]
+    results.insert(0, docker_result)
+
+    # ffmpeg
     if voice_enabled:
         results.append(check_ffmpeg())
     else:
         ffmpeg_result = check_ffmpeg()
         ffmpeg_result.is_warning = True
         results.append(ffmpeg_result)
+
     return results
 
 
