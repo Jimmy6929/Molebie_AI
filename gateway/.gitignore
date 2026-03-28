@@ -28,3 +28,6 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Install marker
+.deps_installed

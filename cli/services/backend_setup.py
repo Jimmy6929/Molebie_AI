@@ -135,6 +135,21 @@ def install_mlx_vlm() -> bool:
     return result.returncode == 0
 
 
+def is_mlx_model_cached(repo_id: str) -> bool:
+    """Check if an MLX model is already in the huggingface cache."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c",
+             f"from huggingface_hub import scan_cache_dir; "
+             f"repos = [r.repo_id for r in scan_cache_dir().repos]; "
+             f"exit(0 if '{repo_id}' in repos else 1)"],
+            capture_output=True, timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 def download_mlx_model(repo_id: str) -> bool:
     """Pre-download an MLX model via huggingface_hub.snapshot_download."""
     result = subprocess.run(
@@ -167,13 +182,15 @@ def setup_mlx(profile: str, sys_info: SystemInfo) -> SetupResult:
     # 3. Get models for profile
     thinking, instant = get_models_for_profile(profile, InferenceBackend.MLX)
 
-    # 4. Pre-download models
+    # 4. Pre-download models (skip if already cached)
     models_to_download = [thinking]
     if instant != thinking:
         models_to_download.append(instant)
 
     for model in models_to_download:
         short_name = model.split("/")[-1] if "/" in model else model
+        if is_mlx_model_cached(model):
+            continue
         if not download_mlx_model(model):
             warnings.append(f"Could not pre-download {short_name} — it will download on first server start")
 
@@ -218,6 +235,22 @@ def start_ollama_daemon() -> bool:
     return False
 
 
+def is_ollama_model_local(model: str) -> bool:
+    """Check if an Ollama model is already pulled locally."""
+    try:
+        result = subprocess.run(
+            ["ollama", "list"], capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return False
+        # ollama list output: NAME ID SIZE MODIFIED
+        # Match base name (e.g. "qwen3" matches "qwen3:4b")
+        base = model.split(":")[0]
+        return any(base in line for line in result.stdout.splitlines())
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 def pull_ollama_model(model: str) -> bool:
     """Pull an Ollama model. Lets native progress bars show through."""
     result = subprocess.run(
@@ -249,13 +282,15 @@ def setup_ollama(profile: str) -> SetupResult:
     # 3. Get models for profile
     thinking, instant = get_models_for_profile(profile, InferenceBackend.OLLAMA)
 
-    # 4. Pull models (only if Ollama is running)
+    # 4. Pull models (only if Ollama is running, skip if already local)
     if is_ollama_running():
         models_to_pull = [thinking]
         if instant != thinking:
             models_to_pull.append(instant)
 
         for model in models_to_pull:
+            if is_ollama_model_local(model):
+                continue
             if not pull_ollama_model(model):
                 warnings.append(f"Could not pull {model} — pull it manually: ollama pull {model}")
     else:
