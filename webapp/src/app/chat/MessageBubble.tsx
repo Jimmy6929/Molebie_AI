@@ -160,7 +160,7 @@ export default function MessageBubble({
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[80%] text-sm rounded-2xl transition-all ${
+        className={`max-w-[92%] md:max-w-[80%] text-sm rounded-2xl transition-all ${
           isUser
             ? "bg-[#00ff41]/[0.1] text-[#00ff41] px-4 py-3"
             : "glass-surface px-4 py-3 text-[#dddddd]"
@@ -235,7 +235,7 @@ export default function MessageBubble({
             <img
               src={imageUrl}
               alt="Attached"
-              className="max-w-xs max-h-64 rounded-xl border border-white/[0.06] cursor-pointer hover:opacity-90 transition-opacity"
+              className="max-w-full md:max-w-xs max-h-48 md:max-h-64 rounded-xl border border-white/[0.06] cursor-pointer hover:opacity-90 transition-opacity"
               onClick={() => window.open(imageUrl, "_blank")}
             />
           </div>

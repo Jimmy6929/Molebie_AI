@@ -88,7 +88,7 @@ export default function Sidebar({
   const showSearch = sessions.length >= 5;
 
   return (
-    <div className="w-64 flex flex-col min-h-screen bg-[#080808]/80 backdrop-blur-xl">
+    <div className="w-64 flex flex-col h-full bg-[#080808]/80 backdrop-blur-xl">
       {/* Header */}
       <div className="p-4 pb-3">
         <div className="text-[10px] text-[#999]">Local AI v0.1</div>
@@ -122,7 +122,7 @@ export default function Sidebar({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search sessions..."
-              className="w-full bg-white/[0.04] border border-white/[0.06] text-[#ccc] placeholder-[#555] pl-8 pr-7 py-1.5 text-[11px] font-mono rounded-lg focus:outline-none focus:border-[#00ff41]/30 transition-colors"
+              className="w-full bg-white/[0.04] border border-white/[0.06] text-[#ccc] placeholder-[#555] pl-8 pr-7 py-1.5 text-[11px] font-mono rounded-lg focus:outline-none focus-visible:ring-1 focus-visible:ring-[#00ff41]/50 focus:border-[#00ff41]/30 transition-colors"
             />
             {searchQuery && (
               <button
@@ -174,7 +174,7 @@ export default function Sidebar({
                       if (e.key === "Escape") cancelRename();
                     }}
                     onBlur={commitRename}
-                    className="w-full bg-black/40 border border-[#00ff41]/30 text-[#00ff41] px-2 py-1 text-xs font-mono rounded-lg focus:outline-none focus:border-[#00ff41]/60"
+                    className="w-full bg-black/40 border border-[#00ff41]/30 text-[#00ff41] px-2 py-1 text-xs font-mono rounded-lg focus:outline-none focus-visible:ring-1 focus-visible:ring-[#00ff41]/50 focus:border-[#00ff41]/60"
                     maxLength={200}
                   />
                   <div className="text-[10px] text-[#888] mt-1">
@@ -201,17 +201,17 @@ export default function Sidebar({
                 </button>
               )}
               {editingId !== s.id && (
-                <div className="flex opacity-0 group-hover:opacity-100 transition-opacity pr-1">
+                <div className="flex md:opacity-0 md:group-hover:opacity-100 transition-opacity pr-1">
                   {onPinSession && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onPinSession(s.id, !isPinned);
                       }}
-                      className={`p-1 rounded-lg hover:bg-white/[0.06] transition-all ${
+                      className={`p-2 md:p-1 rounded-lg hover:bg-white/[0.06] transition-all ${
                         isPinned ? "text-[#ffcc33] opacity-100" : "text-[#888] hover:text-[#ffcc33]"
                       }`}
-                      title={isPinned ? "Unpin" : "Pin"}
+                      title={isPinned ? "Unpin" : "Pin"} aria-label={isPinned ? "Unpin" : "Pin"}
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill={isPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M16 2L14.5 3.5L18.5 7.5L20 6L16 2M12.5 5.5L8 10L9.5 11.5L5 16V19H8L12.5 14.5L14 16L18.5 11.5L12.5 5.5Z" />
@@ -223,8 +223,8 @@ export default function Sidebar({
                       e.stopPropagation();
                       startRename(s);
                     }}
-                    className="p-1 text-[#888] hover:text-[#00ff41] rounded-lg hover:bg-white/[0.06] transition-all"
-                    title="Rename"
+                    className="p-2 md:p-1 text-[#888] hover:text-[#00ff41] rounded-lg hover:bg-white/[0.06] transition-all"
+                    title="Rename" aria-label="Rename"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
@@ -235,8 +235,8 @@ export default function Sidebar({
                       e.stopPropagation();
                       onDeleteSession(s.id);
                     }}
-                    className="p-1 text-[#888] hover:text-[#ff5555] rounded-lg hover:bg-[#ff5555]/[0.08] transition-all"
-                    title="Delete"
+                    className="p-2 md:p-1 text-[#888] hover:text-[#ff5555] rounded-lg hover:bg-[#ff5555]/[0.08] transition-all"
+                    title="Delete" aria-label="Delete"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M3 6h18" />

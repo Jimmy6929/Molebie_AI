@@ -114,6 +114,15 @@ body {
   animation: fadeIn 0.2s ease-out;
 }
 
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-slide-in-left {
+  animation: slideInLeft 0.25s ease-out;
+}
+
 /* ── Input styling ──────────────────────────────────── */
 
 input, textarea {
@@ -253,4 +262,21 @@ code {
 .markdown-body sup a:hover {
   background: rgba(102, 187, 255, 0.25);
   text-decoration: none;
+}
+
+/* ── iOS safe-area padding ────────────────────────── */
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* ── Accessible focus ring ────────────────────────── */
+
+.focus-ring:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
 }
