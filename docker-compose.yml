@@ -24,3 +24,8 @@ services:
     restart: unless-stopped
     ports:
       - "8880:8880"
+    volumes:
+      - kokoro-models:/app/api/src/voices
+
+volumes:
+  kokoro-models:

@@ -105,7 +105,14 @@ def init_env_local(force: bool = False) -> Path:
     if not template.exists():
         raise FileNotFoundError(f"Template not found: {template}")
 
-    jwt_secret = secrets.token_urlsafe(48)
+    # Preserve existing JWT_SECRET across regeneration
+    _PLACEHOLDER_SECRETS = {"", "CHANGE_ME_TO_A_RANDOM_SECRET"}
+    existing_jwt = get_env_key("JWT_SECRET") if output.exists() else None
+    if existing_jwt and existing_jwt not in _PLACEHOLDER_SECRETS:
+        jwt_secret = existing_jwt
+    else:
+        jwt_secret = secrets.token_urlsafe(48)
+
     lines = template.read_text().splitlines()
     result: list[str] = []
 
@@ -205,14 +212,28 @@ def generate_env_local(config: MolebieConfig, force: bool = False) -> Path:
 
     overrides = _build_overrides(config)
 
-    # Generate a real JWT secret if still using the placeholder
-    overrides.setdefault("JWT_SECRET", secrets.token_urlsafe(48))
+    # Preserve existing .env.local values that aren't explicitly overridden.
+    # This protects manual edits (INFERENCE_API_KEY, CORS_ORIGINS, etc.) and
+    # secrets (JWT_SECRET) across reinstalls.  Config-driven values win;
+    # everything else the user set is kept.
+    _PLACEHOLDER_SECRETS = {"", "CHANGE_ME_TO_A_RANDOM_SECRET"}
+    kv_pattern = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)")
+
+    if output.exists():
+        for line in output.read_text().splitlines():
+            m = kv_pattern.match(line)
+            if m:
+                key, val = m.group(1), m.group(2)
+                if key not in overrides:
+                    overrides[key] = val
+
+    # JWT_SECRET: preserve real secret, only generate if missing or placeholder
+    existing_jwt = overrides.get("JWT_SECRET")
+    if not existing_jwt or existing_jwt in _PLACEHOLDER_SECRETS:
+        overrides["JWT_SECRET"] = secrets.token_urlsafe(48)
 
     lines = template.read_text().splitlines()
     result: list[str] = []
-
-    # Regex to match KEY=VALUE lines (possibly quoted)
-    kv_pattern = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)")
 
     for line in lines:
         m = kv_pattern.match(line)

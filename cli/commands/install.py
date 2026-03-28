@@ -296,8 +296,21 @@ def _display_check_results(results: list) -> bool:
     return has_failure
 
 
+def _gateway_deps_fresh(root: Path) -> bool:
+    """Check if gateway deps are installed and newer than requirements.txt."""
+    marker = root / "gateway" / ".deps_installed"
+    req = root / "gateway" / "requirements.txt"
+    if not marker.exists() or not req.exists():
+        return False
+    return marker.stat().st_mtime >= req.stat().st_mtime
+
+
 def _install_gateway_deps(root) -> None:
     """Install gateway Python dependencies into the project venv."""
+    if _gateway_deps_fresh(root):
+        print_ok("Gateway dependencies already installed — skipping")
+        return
+
     venv_python = str(root / ".venv" / "bin" / "python")
     python_cmd = venv_python if Path(venv_python).exists() else sys.executable
     with console.status("[info]Installing gateway dependencies...[/info]"):
@@ -308,6 +321,8 @@ def _install_gateway_deps(root) -> None:
         )
     if result.returncode == 0:
         print_ok("Gateway dependencies installed")
+        # Write marker so subsequent runs skip this step
+        (root / "gateway" / ".deps_installed").touch()
     else:
         print_warn("Gateway dependency install had issues — check manually")
         if result.stderr:
@@ -316,6 +331,14 @@ def _install_gateway_deps(root) -> None:
 
 def _install_webapp_deps(root) -> None:
     """Install webapp Node.js dependencies."""
+    # Skip if node_modules exists and package-lock.json hasn't changed
+    lock_file = root / "webapp" / "package-lock.json"
+    marker = root / "webapp" / "node_modules" / ".package-lock.json"
+    if lock_file.exists() and marker.exists():
+        if marker.stat().st_mtime >= lock_file.stat().st_mtime:
+            print_ok("Webapp dependencies already installed — skipping")
+            return
+
     with console.status("[info]Installing webapp dependencies...[/info]"):
         result = subprocess.run(
             ["npm", "install", "--silent"],
