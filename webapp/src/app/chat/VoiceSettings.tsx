@@ -22,6 +22,7 @@ interface VoiceSettingsProps {
   onEnrollStart: () => void;
   /** Called after enrollment finishes so the conversation mic can resume */
   onEnrollEnd: () => void;
+  onClose?: () => void;
 }
 
 export default function VoiceSettings({
@@ -35,6 +36,7 @@ export default function VoiceSettings({
   onSpeakerVerifyToggle,
   onEnrollStart,
   onEnrollEnd,
+  onClose,
 }: VoiceSettingsProps) {
   const [profile, setProfile] = useState<VoiceProfileStatus | null>(null);
   const [enrolling, setEnrolling] = useState(false);
@@ -57,6 +59,15 @@ export default function VoiceSettings({
   useEffect(() => {
     if (open && token) loadProfile();
   }, [open, token, loadProfile]);
+
+  useEffect(() => {
+    if (!open || !onClose) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [open, onClose]);
 
   async function handleEnrollSample() {
     if (!token || enrolling) return;
@@ -149,7 +160,7 @@ export default function VoiceSettings({
   })();
 
   return (
-    <div className="absolute bottom-24 right-6 z-30 w-80 glass rounded-2xl p-4 border border-white/[0.08] space-y-4">
+    <div className="fixed inset-x-2 bottom-20 z-30 md:absolute md:inset-auto md:bottom-24 md:right-6 md:w-80 glass rounded-2xl p-4 border border-white/[0.08] space-y-4">
       <div className="text-xs font-medium text-[#ddd]">Chat Voice Settings</div>
 
       {/* Voice select */}

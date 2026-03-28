@@ -77,7 +77,7 @@ export default function LoginPage() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-black/40 border border-white/[0.08] text-[#f0f0f0] px-4 py-2.5 text-sm font-mono rounded-xl focus:outline-none focus:border-[#00ff41]/50 transition-all"
+                  className="w-full bg-black/40 border border-white/[0.08] text-[#f0f0f0] px-4 py-2.5 text-sm font-mono rounded-xl focus:outline-none focus-visible:ring-1 focus-visible:ring-[#00ff41]/50 focus:border-[#00ff41]/50 transition-all"
                   placeholder="user@example.com"
                   required
                   autoFocus
@@ -93,7 +93,7 @@ export default function LoginPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-black/40 border border-white/[0.08] text-[#f0f0f0] px-4 py-2.5 text-sm font-mono rounded-xl focus:outline-none focus:border-[#00ff41]/50 transition-all"
+                className="w-full bg-black/40 border border-white/[0.08] text-[#f0f0f0] px-4 py-2.5 text-sm font-mono rounded-xl focus:outline-none focus-visible:ring-1 focus-visible:ring-[#00ff41]/50 focus:border-[#00ff41]/50 transition-all"
                 placeholder={
                   isSingleUser && !authMode.setup_complete
                     ? "Choose a password"

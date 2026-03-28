@@ -32,6 +32,7 @@ import {
   isStopCommand,
   extractWakeCommand,
 } from "@/lib/voice";
+import { useIsMobile } from "@/lib/useMediaQuery";
 import Sidebar from "./sidebar";
 import MessageBubble from "./MessageBubble";
 import VoiceSettings from "./VoiceSettings";
@@ -59,6 +60,7 @@ interface DisplayMessage {
 
 export default function ChatPage() {
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [token, setToken] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string>("");
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -78,7 +80,9 @@ export default function ChatPage() {
   const [speakerVerifyEnabled, setSpeakerVerifyEnabled] = useState(false);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Open sidebar by default on desktop after hydration
+  useEffect(() => { if (!isMobile) setSidebarOpen(true); }, [isMobile]);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -388,10 +392,10 @@ export default function ChatPage() {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = "auto";
-    const maxH = 200;
+    const maxH = isMobile ? 120 : 200;
     if (el.scrollHeight > maxH) { el.style.height = maxH + "px"; el.style.overflowY = "auto"; }
     else { el.style.height = el.scrollHeight + "px"; el.style.overflowY = "hidden"; }
-  }, []);
+  }, [isMobile]);
 
   useEffect(() => { resizeTextarea(); }, [input, resizeTextarea]);
 
@@ -733,6 +737,7 @@ export default function ChatPage() {
   function handleNewChat() {
     setActiveSessionId(null);
     setMessages([]);
+    if (isMobile) setSidebarOpen(false);
     inputRef.current?.focus();
   }
 
@@ -793,18 +798,40 @@ export default function ChatPage() {
 
   return (
     <div className="min-h-screen flex bg-[#0a0a0a]">
-      {sidebarOpen && (
-        <Sidebar
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          onSelectSession={setActiveSessionId}
-          onNewChat={handleNewChat}
-          onDeleteSession={handleDeleteSession}
-          onRenameSession={handleRenameSession}
-          onPinSession={handlePinSession}
-          onLogout={handleLogout}
-          userEmail={userEmail}
-        />
+      {/* Mobile: overlay drawer with backdrop */}
+      {isMobile && sidebarOpen && (
+        <div className="fixed inset-0 z-40 flex animate-fade-in">
+          <div className="animate-slide-in-left">
+            <Sidebar
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onSelectSession={(id) => { setActiveSessionId(id); setSidebarOpen(false); }}
+              onNewChat={handleNewChat}
+              onDeleteSession={handleDeleteSession}
+              onRenameSession={handleRenameSession}
+              onPinSession={handlePinSession}
+              onLogout={handleLogout}
+              userEmail={userEmail}
+            />
+          </div>
+          <div className="flex-1 bg-black/50" onClick={() => setSidebarOpen(false)} />
+        </div>
+      )}
+      {/* Desktop: inline sidebar with border */}
+      {!isMobile && sidebarOpen && (
+        <div className="border-r border-white/[0.06]">
+          <Sidebar
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onSelectSession={setActiveSessionId}
+            onNewChat={handleNewChat}
+            onDeleteSession={handleDeleteSession}
+            onRenameSession={handleRenameSession}
+            onPinSession={handlePinSession}
+            onLogout={handleLogout}
+            userEmail={userEmail}
+          />
+        </div>
       )}
 
       <div className="flex-1 flex flex-col min-h-screen relative">
@@ -814,6 +841,7 @@ export default function ChatPage() {
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
               className="text-[#00ff41] hover:text-[#33ff66] transition-colors p-2 rounded-xl hover:bg-white/[0.06]"
+              aria-label="Toggle sidebar"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="3" y1="6" x2="21" y2="6" />
@@ -830,6 +858,7 @@ export default function ChatPage() {
               onClick={handleExportMarkdown}
               className="text-[#888] hover:text-[#ccc] transition-colors p-2 rounded-xl hover:bg-white/[0.06]"
               title="Export as Markdown"
+              aria-label="Export as Markdown"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -872,8 +901,8 @@ export default function ChatPage() {
         </div>
 
         {showScrollBtn && (
-          <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-10 animate-fade-in-up">
-            <button onClick={scrollToBottom} className="glass rounded-full p-2.5 text-[#00ff41] hover:text-[#33ff66] transition-all hover:scale-105 shadow-lg shadow-black/40">
+          <div className="absolute bottom-28 md:bottom-32 left-1/2 -translate-x-1/2 z-10 animate-fade-in-up">
+            <button onClick={scrollToBottom} className="glass rounded-full p-2.5 text-[#00ff41] hover:text-[#33ff66] transition-all hover:scale-105 shadow-lg shadow-black/40" aria-label="Scroll to bottom">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="6 9 12 15 18 9" />
               </svg>
@@ -882,7 +911,7 @@ export default function ChatPage() {
         )}
 
         {/* Input Area */}
-        <div className="p-4 pb-5 shrink-0" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+        <div className="p-4 pb-5 shrink-0 safe-bottom" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
           <div className="max-w-3xl mx-auto">
 
             {/* Chat Voice Settings panel */}
@@ -899,6 +928,7 @@ export default function ChatPage() {
               onEnrollEnd={() => {
                 if (chatMode && chatLoopRef.current) void startListening();
               }}
+              onClose={() => setVoiceSettingsOpen(false)}
             />
 
             {/* Brain panel */}
@@ -929,7 +959,7 @@ export default function ChatPage() {
                         </div>
                         <button
                           onClick={() => handleDocDelete(doc.id)}
-                          className="text-[#666] hover:text-[#ff4444] opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                          className="text-[#666] hover:text-[#ff4444] md:opacity-0 md:group-hover:opacity-100 transition-all shrink-0"
                           title="Delete document"
                         >
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -954,7 +984,7 @@ export default function ChatPage() {
               <div className="mb-2 flex items-center gap-2 animate-fade-in">
                 <div className="relative group">
                   <img src={imagePreview} alt="Selected" className="h-16 w-16 object-cover rounded-xl border border-white/[0.06]" />
-                  <button onClick={removeImage} className="absolute -top-1.5 -right-1.5 bg-[#ff3333] text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">×</button>
+                  <button onClick={removeImage} className="absolute -top-1.5 -right-1.5 bg-[#ff3333] text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] md:opacity-0 md:group-hover:opacity-100 transition-opacity" aria-label="Remove image">×</button>
                 </div>
                 <span className="text-[10px] text-[#999]">{imageFile?.name}</span>
               </div>
@@ -993,180 +1023,134 @@ export default function ChatPage() {
               </div>
             )}
 
-            <div className={`glass rounded-2xl p-2 flex items-end gap-2 transition-all ${isDragging ? "border border-[#00ff41]/30" : ""}`}>
-              {/* Image upload */}
-              <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageSelect} className="hidden" />
-              <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06] transition-all shrink-0" title="Add image">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="4" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-                </svg>
-              </button>
-
-              {/* Attach document to chat */}
-              <input
-                ref={attachFileInputRef}
-                type="file"
-                accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleAttach(f);
-                  e.target.value = "";
-                }}
-                className="hidden"
-              />
-              <button
-                onClick={() => attachFileInputRef.current?.click()}
-                disabled={attachUploading}
-                className={`p-2 rounded-xl transition-all shrink-0 ${
-                  attachments.length > 0
-                    ? "text-[#00ff41] hover:bg-[#00ff41]/10"
-                    : "text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06]"
-                } disabled:opacity-40`}
-                title={attachUploading ? "Attaching..." : "Attach file to chat"}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-              </button>
-
-              {/* Document upload for RAG */}
-              <input
-                ref={docFileInputRef}
-                type="file"
-                accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleDocUpload(f);
-                  e.target.value = "";
-                }}
-                className="hidden"
-              />
-              <button
-                onClick={() => setDocPanelOpen((p) => !p)}
-                className={`relative p-2 rounded-xl transition-all shrink-0 ${
-                  docPanelOpen
-                    ? "bg-[#33ccff]/20 text-[#66ddff]"
-                    : documents.length > 0
-                      ? "text-[#66ddff] hover:bg-[#33ccff]/10"
-                      : "text-[#999] hover:text-[#66ddff] hover:bg-white/[0.06]"
-                }`}
-                title={`Brain${documents.length ? ` (${documents.length})` : ""}`}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9.5 2a3.5 3.5 0 0 0-3.2 4.8A3.5 3.5 0 0 0 4 10.5a3.5 3.5 0 0 0 1.3 2.7A3.5 3.5 0 0 0 5 15a3.5 3.5 0 0 0 3.5 3.5h1V22h5v-3.5h1A3.5 3.5 0 0 0 19 15a3.5 3.5 0 0 0-.3-1.8A3.5 3.5 0 0 0 20 10.5a3.5 3.5 0 0 0-2.3-3.2A3.5 3.5 0 0 0 14.5 2h-5z" />
-                  <path d="M12 2v20" />
-                </svg>
-                {documents.length > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-[#33ccff] text-black text-[8px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center">{documents.length}</span>
-                )}
-              </button>
-
-              {/* Think mode toggle */}
-              <button
-                onClick={() => setMode(mode === "instant" ? "thinking" : "instant")}
-                className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                  mode !== "instant"
-                    ? "bg-[#ffbb33]/15 text-[#ffcc33] border border-[#ffbb33]/30"
-                    : "text-[#999] hover:text-[#00ff41] border border-white/[0.08] hover:border-white/[0.15]"
-                }`}
-              >
-                {mode === "instant" ? "Fast" : mode === "thinking_harder" ? "Think+" : "Think"}
-              </button>
-              {mode !== "instant" && (
-                <button
-                  onClick={() => setMode(mode === "thinking_harder" ? "thinking" : "thinking_harder")}
-                  className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                    mode === "thinking_harder"
-                      ? "bg-[#ff8833]/20 text-[#ff9955] border border-[#ff8833]/40"
-                      : "text-[#ffcc33] border border-[#ffbb33]/30 hover:bg-[#ffbb33]/10"
-                  }`}
-                >
-                  {mode === "thinking_harder" ? "Think Harder" : "Normal"}
+            <div className={`glass rounded-2xl p-2 flex flex-col md:flex-row md:items-end gap-2 transition-all ${isDragging ? "border border-[#00ff41]/30" : ""}`}>
+              {/* Tool buttons — wrap on mobile, inline on desktop */}
+              <div className="flex items-center gap-1.5 flex-wrap md:contents">
+                {/* Image upload */}
+                <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageSelect} className="hidden" />
+                <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06] transition-all shrink-0" title="Add image" aria-label="Add image">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="4" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                  </svg>
                 </button>
-              )}
 
-              {/* ── VOICE BUTTON (STT only) ─────────────────────────────── */}
-              <button
-                onClick={() => sttMode ? disableSttMode() : enableSttMode()}
-                className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                  sttMode
-                    ? "bg-[#00ff41]/20 text-[#00ff41] border border-[#00ff41]/40"
-                    : "text-[#999] border border-white/[0.08] hover:text-[#00ff41] hover:border-white/[0.15]"
-                }`}
-                title="Voice input — speech to text"
-              >
-                Voice
-              </button>
-
-              {/* STT mic button — only visible in stt mode */}
-              {sttMode && (
+                {/* Attach document to chat */}
+                <input
+                  ref={attachFileInputRef}
+                  type="file"
+                  accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleAttach(f);
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                />
                 <button
-                  onClick={handleSttMicClick}
-                  disabled={!supportsSpeechRecognition || loading || isTranscribing}
+                  onClick={() => attachFileInputRef.current?.click()}
+                  disabled={attachUploading}
                   className={`p-2 rounded-xl transition-all shrink-0 ${
-                    isListening
-                      ? "bg-[#ff4444]/20 text-[#ff6666] animate-pulse"
-                      : isTranscribing
-                        ? "bg-[#ffbb33]/15 text-[#ffcc33] animate-pulse"
-                        : "text-[#00ff41] hover:bg-[#00ff41]/10"
-                  } disabled:opacity-30 disabled:cursor-not-allowed`}
-                  title={isTranscribing ? "Transcribing..." : isListening ? "Stop recording" : "Record voice"}
+                    attachments.length > 0
+                      ? "text-[#00ff41] hover:bg-[#00ff41]/10"
+                      : "text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06]"
+                  } disabled:opacity-40`}
+                  title={attachUploading ? "Attaching..." : "Attach file to chat"}
+                  aria-label={attachUploading ? "Attaching..." : "Attach file to chat"}
                 >
-                  {isTranscribing ? (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
-                    </svg>
-                  ) : (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                      <line x1="12" y1="19" x2="12" y2="23" />
-                      <line x1="8" y1="23" x2="16" y2="23" />
-                    </svg>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
+
+                {/* Document upload for RAG */}
+                <input
+                  ref={docFileInputRef}
+                  type="file"
+                  accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleDocUpload(f);
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => setDocPanelOpen((p) => !p)}
+                  className={`relative p-2 rounded-xl transition-all shrink-0 ${
+                    docPanelOpen
+                      ? "bg-[#33ccff]/20 text-[#66ddff]"
+                      : documents.length > 0
+                        ? "text-[#66ddff] hover:bg-[#33ccff]/10"
+                        : "text-[#999] hover:text-[#66ddff] hover:bg-white/[0.06]"
+                  }`}
+                  title={`Brain${documents.length ? ` (${documents.length})` : ""}`}
+                  aria-label={`Brain${documents.length ? ` (${documents.length} documents)` : ""}`}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9.5 2a3.5 3.5 0 0 0-3.2 4.8A3.5 3.5 0 0 0 4 10.5a3.5 3.5 0 0 0 1.3 2.7A3.5 3.5 0 0 0 5 15a3.5 3.5 0 0 0 3.5 3.5h1V22h5v-3.5h1A3.5 3.5 0 0 0 19 15a3.5 3.5 0 0 0-.3-1.8A3.5 3.5 0 0 0 20 10.5a3.5 3.5 0 0 0-2.3-3.2A3.5 3.5 0 0 0 14.5 2h-5z" />
+                    <path d="M12 2v20" />
+                  </svg>
+                  {documents.length > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-[#33ccff] text-black text-[8px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center">{documents.length}</span>
                   )}
                 </button>
-              )}
 
-              {/* ── CHAT BUTTON (full conversation) ────────────────────── */}
-              <button
-                onClick={() => chatMode ? disableChatMode() : enableChatMode()}
-                className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                  chatMode
-                    ? "bg-[#33ccff]/20 text-[#66ddff] border border-[#33ccff]/40"
-                    : "text-[#999] border border-white/[0.08] hover:text-[#66ddff] hover:border-white/[0.15]"
-                }`}
-                title="Chat conversation mode — voice chat with TTS"
-              >
-                Chat
-              </button>
-
-              {/* Chat controls — only visible in Chat mode */}
-              {chatMode && (
-                <>
-                  {/* Manual mic button */}
+                {/* Think mode toggle */}
+                <button
+                  onClick={() => setMode(mode === "instant" ? "thinking" : "instant")}
+                  className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
+                    mode !== "instant"
+                      ? "bg-[#ffbb33]/15 text-[#ffcc33] border border-[#ffbb33]/30"
+                      : "text-[#999] hover:text-[#00ff41] border border-white/[0.08] hover:border-white/[0.15]"
+                  }`}
+                >
+                  {mode === "instant" ? "Fast" : mode === "thinking_harder" ? "Think+" : "Think"}
+                </button>
+                {mode !== "instant" && (
                   <button
-                    onClick={handleChatMicClick}
-                    disabled={!supportsSpeechRecognition || loading || isTranscribing || isSpeaking}
+                    onClick={() => setMode(mode === "thinking_harder" ? "thinking" : "thinking_harder")}
+                    className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
+                      mode === "thinking_harder"
+                        ? "bg-[#ff8833]/20 text-[#ff9955] border border-[#ff8833]/40"
+                        : "text-[#ffcc33] border border-[#ffbb33]/30 hover:bg-[#ffbb33]/10"
+                    }`}
+                  >
+                    {mode === "thinking_harder" ? "Think Harder" : "Normal"}
+                  </button>
+                )}
+
+                {/* ── VOICE BUTTON (STT only) ─────────────────────────────── */}
+                <button
+                  onClick={() => sttMode ? disableSttMode() : enableSttMode()}
+                  className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
+                    sttMode
+                      ? "bg-[#00ff41]/20 text-[#00ff41] border border-[#00ff41]/40"
+                      : "text-[#999] border border-white/[0.08] hover:text-[#00ff41] hover:border-white/[0.15]"
+                  }`}
+                  title="Voice input — speech to text"
+                  aria-label="Voice input"
+                >
+                  Voice
+                </button>
+
+                {/* STT mic button — only visible in stt mode */}
+                {sttMode && (
+                  <button
+                    onClick={handleSttMicClick}
+                    disabled={!supportsSpeechRecognition || loading || isTranscribing}
                     className={`p-2 rounded-xl transition-all shrink-0 ${
                       isListening
                         ? "bg-[#ff4444]/20 text-[#ff6666] animate-pulse"
                         : isTranscribing
                           ? "bg-[#ffbb33]/15 text-[#ffcc33] animate-pulse"
-                          : isSpeaking
-                            ? "bg-[#33ccff]/15 text-[#66ddff] animate-pulse"
-                            : "text-[#66ddff] hover:bg-[#33ccff]/10"
+                          : "text-[#00ff41] hover:bg-[#00ff41]/10"
                     } disabled:opacity-30 disabled:cursor-not-allowed`}
-                    title={isSpeaking ? "Chat is speaking" : isTranscribing ? "Transcribing..." : isListening ? "Stop" : "Speak"}
+                    title={isTranscribing ? "Transcribing..." : isListening ? "Stop recording" : "Record voice"}
+                    aria-label={isTranscribing ? "Transcribing..." : isListening ? "Stop recording" : "Record voice"}
                   >
-                    {isSpeaking ? (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                      </svg>
-                    ) : isTranscribing ? (
+                    {isTranscribing ? (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
                       </svg>
@@ -1179,68 +1163,127 @@ export default function ChatPage() {
                       </svg>
                     )}
                   </button>
+                )}
 
-                  {/* Stop conversation button — only when something is happening */}
-                  {chatActive && (
+                {/* ── CHAT BUTTON (full conversation) ────────────────────── */}
+                <button
+                  onClick={() => chatMode ? disableChatMode() : enableChatMode()}
+                  className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
+                    chatMode
+                      ? "bg-[#33ccff]/20 text-[#66ddff] border border-[#33ccff]/40"
+                      : "text-[#999] border border-white/[0.08] hover:text-[#66ddff] hover:border-white/[0.15]"
+                  }`}
+                  title="Chat conversation mode — voice chat with TTS"
+                  aria-label="Chat conversation mode"
+                >
+                  Chat
+                </button>
+
+                {/* Chat controls — only visible in Chat mode */}
+                {chatMode && (
+                  <>
+                    {/* Manual mic button */}
                     <button
-                      onClick={disableChatMode}
-                      className="p-2 rounded-xl bg-[#ff4444]/15 text-[#ff6666] hover:bg-[#ff4444]/25 transition-all shrink-0"
-                      title="End conversation"
+                      onClick={handleChatMicClick}
+                      disabled={!supportsSpeechRecognition || loading || isTranscribing || isSpeaking}
+                      className={`p-2 rounded-xl transition-all shrink-0 ${
+                        isListening
+                          ? "bg-[#ff4444]/20 text-[#ff6666] animate-pulse"
+                          : isTranscribing
+                            ? "bg-[#ffbb33]/15 text-[#ffcc33] animate-pulse"
+                            : isSpeaking
+                              ? "bg-[#33ccff]/15 text-[#66ddff] animate-pulse"
+                              : "text-[#66ddff] hover:bg-[#33ccff]/10"
+                      } disabled:opacity-30 disabled:cursor-not-allowed`}
+                      title={isSpeaking ? "Chat is speaking" : isTranscribing ? "Transcribing..." : isListening ? "Stop" : "Speak"}
+                      aria-label={isSpeaking ? "Chat is speaking" : isTranscribing ? "Transcribing..." : isListening ? "Stop" : "Speak"}
                     >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <rect x="6" y="6" width="12" height="12" rx="2" />
+                      {isSpeaking ? (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                        </svg>
+                      ) : isTranscribing ? (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
+                        </svg>
+                      ) : (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                          <line x1="12" y1="19" x2="12" y2="23" />
+                          <line x1="8" y1="23" x2="16" y2="23" />
+                        </svg>
+                      )}
+                    </button>
+
+                    {/* Stop conversation button — only when something is happening */}
+                    {chatActive && (
+                      <button
+                        onClick={disableChatMode}
+                        className="p-2 rounded-xl bg-[#ff4444]/15 text-[#ff6666] hover:bg-[#ff4444]/25 transition-all shrink-0"
+                        title="End conversation"
+                        aria-label="End conversation"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                          <rect x="6" y="6" width="12" height="12" rx="2" />
+                        </svg>
+                      </button>
+                    )}
+
+                    {/* Voice settings gear */}
+                    <button
+                      onClick={() => setVoiceSettingsOpen((p) => !p)}
+                      className={`p-2 rounded-xl transition-all shrink-0 ${
+                        voiceSettingsOpen
+                          ? "bg-[#33ccff]/20 text-[#66ddff]"
+                          : "text-[#66ddff] hover:bg-[#33ccff]/10"
+                      }`}
+                      title="Chat settings"
+                      aria-label="Chat settings"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
                       </svg>
                     </button>
-                  )}
+                  </>
+                )}
+              </div>
 
-                  {/* Voice settings gear */}
-                  <button
-                    onClick={() => setVoiceSettingsOpen((p) => !p)}
-                    className={`p-2 rounded-xl transition-all shrink-0 ${
-                      voiceSettingsOpen
-                        ? "bg-[#33ccff]/20 text-[#66ddff]"
-                        : "text-[#66ddff] hover:bg-[#33ccff]/10"
-                    }`}
-                    title="Chat settings"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              {/* Text input + send — always full width row */}
+              <div className="flex items-end gap-2 w-full">
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => { setInput(e.target.value); resizeTextarea(); }}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                  placeholder={chatMode ? "Or type a message..." : "Send a message... (paste or drop an image)"}
+                  rows={1}
+                  className="flex-1 bg-transparent text-[#f0f0f0] text-sm resize-none focus:outline-none placeholder-[#888] min-h-[36px] max-h-[200px] py-2 px-1"
+                  style={{ overflowY: "hidden" }}
+                  disabled={loading}
+                  autoFocus
+                />
+
+                {/* Send / Stop button */}
+                {loading ? (
+                  <button onClick={handleStop} className="p-2 rounded-xl bg-[#ff5555]/15 text-[#ff5555] hover:bg-[#ff5555]/25 transition-all shrink-0" aria-label="Stop generating">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="6" width="12" height="12" rx="2" />
                     </svg>
                   </button>
-                </>
-              )}
-
-              {/* Text input */}
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => { setInput(e.target.value); resizeTextarea(); }}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                placeholder={chatMode ? "Or type a message..." : "Send a message... (paste or drop an image)"}
-                rows={1}
-                className="flex-1 bg-transparent text-[#f0f0f0] text-sm resize-none focus:outline-none placeholder-[#888] min-h-[36px] max-h-[200px] py-2 px-1"
-                style={{ overflowY: "hidden" }}
-                disabled={loading}
-                autoFocus
-              />
-
-              {/* Send / Stop button */}
-              {loading ? (
-                <button onClick={handleStop} className="p-2 rounded-xl bg-[#ff5555]/15 text-[#ff5555] hover:bg-[#ff5555]/25 transition-all shrink-0">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="6" y="6" width="12" height="12" rx="2" />
-                  </svg>
-                </button>
-              ) : (
-                <button onClick={handleSend} disabled={!input.trim() && !imageFile} className="p-2 rounded-xl text-[#00ff41] hover:bg-[#00ff41]/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="19" x2="12" y2="5" />
-                    <polyline points="5 12 12 5 19 12" />
-                  </svg>
-                </button>
-              )}
+                ) : (
+                  <button onClick={handleSend} disabled={!input.trim() && !imageFile} className="p-2 rounded-xl text-[#00ff41] hover:bg-[#00ff41]/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0" aria-label="Send message">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="19" x2="12" y2="5" />
+                      <polyline points="5 12 12 5 19 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="text-[10px] text-[#777] mt-2 text-center">{statusText()}</div>
