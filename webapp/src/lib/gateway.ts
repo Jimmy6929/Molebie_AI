@@ -47,6 +47,13 @@ async function apiCall<T>(
   });
 
   if (!res.ok) {
+    // Stale or invalid token — clear it and redirect to login
+    if (res.status === 401) {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("molebie_token");
+        window.location.href = "/login";
+      }
+    }
     const text = await res.text();
     throw new Error(`API error ${res.status}: ${text}`);
   }
@@ -109,6 +116,10 @@ export async function sendMessageStream(
   });
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      localStorage.removeItem("molebie_token");
+      window.location.href = "/login";
+    }
     const text = await res.text();
     throw new Error(`API error ${res.status}: ${text}`);
   }
