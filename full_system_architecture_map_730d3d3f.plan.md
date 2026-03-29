@@ -21,36 +21,28 @@ graph TB
         User["User (Browser)"]
     end
 
-    subgraph machine1 ["Machine 1 — Server (100.99.189.104)"]
+    subgraph machine1 ["Machine 1 — Server (configurable IP)"]
         WebApp["Next.js 16 Web App\n:3000"]
         Gateway["FastAPI Gateway\n:8000"]
-        subgraph dockerSvc [Docker Services]
+        SQLiteDB["SQLite Database\n(sqlite-vec + FTS5)\ndata/molebie.db"]
+        LocalStorage["Local File Storage\ndata/images/ + data/documents/"]
+        subgraph dockerSvc [Docker Services — Optional]
             SearXNG["SearXNG\nWeb Search\n:8888"]
             KokoroTTS["Kokoro TTS\n:8880"]
         end
-        subgraph supabaseSvc [Supabase Docker Stack]
-            SupaAuth["Supabase Auth"]
-            SupaREST["PostgREST API\n:54321"]
-            Postgres["PostgreSQL 17\n:54322\npgvector + pg_trgm"]
-            Studio["Supabase Studio\n:54323"]
-            Storage["Supabase Storage\n(documents, chat-images)"]
-        end
     end
 
-    subgraph machine2 ["Machine 2 — GPU Node (100.104.193.59)"]
+    subgraph machine2 ["Machine 2 — GPU Node (configurable IP)"]
         ThinkingLLM["Inference — Thinking Tier\n(MLX / Ollama / vLLM / OpenAI)\n:8080"]
         InstantLLM["Inference — Instant Tier\n(MLX / Ollama / vLLM / OpenAI)\n:8081"]
     end
 
     User -->|"HTTPS :3000"| WebApp
-    WebApp -->|"Supabase Auth SDK"| SupaAuth
     WebApp -->|"REST + JWT\n:8000"| Gateway
-    Gateway -->|"REST + JWT (RLS)\n:54321"| SupaREST
-    SupaREST --> Postgres
-    SupaAuth --> Postgres
-    Storage --> Postgres
-    Gateway -->|"HTTP /v1/chat/completions\nvia Tailscale :8080"| ThinkingLLM
-    Gateway -->|"HTTP /v1/chat/completions\nvia Tailscale :8081"| InstantLLM
+    Gateway -->|"aiosqlite"| SQLiteDB
+    Gateway -->|"File I/O"| LocalStorage
+    Gateway -->|"HTTP /v1/chat/completions\nvia Tailscale/LAN :8080"| ThinkingLLM
+    Gateway -->|"HTTP /v1/chat/completions\nvia Tailscale/LAN :8081"| InstantLLM
     Gateway -->|"HTTP :8888"| SearXNG
     Gateway -->|"HTTP :8880"| KokoroTTS
 ```
@@ -59,52 +51,58 @@ graph TB
 
 **Key points:**
 
-- Two physical machines connected via **Tailscale VPN** (also supports single-machine deployment)
-- Machine 1 runs the web app, gateway, Supabase stack, SearXNG, and Kokoro TTS (all via Docker)
+- Two physical machines connected via **Tailscale VPN** or LAN (also supports single-machine deployment)
+- Machine 1 runs the web app, gateway, SQLite database, SearXNG, and Kokoro TTS
 - Machine 2 runs GPU inference servers (supports MLX, Ollama, vLLM, llama.cpp, or OpenAI-compatible APIs)
+- **No Supabase dependency** — all data stored locally in SQLite with sqlite-vec for vector search and FTS5 for full-text search
 - All inter-service communication is HTTP; no message queues or gRPC
-- Gateway is the central orchestrator — routes to inference, RAG, web search, TTS, and database
+- Gateway is the central orchestrator — routes to inference, RAG, web search, TTS, memory, summarization, and database
 - `molebie-ai` CLI manages setup, configuration, and service lifecycle
+- Docker is only required for optional services (SearXNG, Kokoro TTS)
 
 ---
 
 ## 2. Request Flow — Chat Completion (Streaming)
 
-The main user-facing flow when sending a chat message, now including web search and RAG context injection:
+The main user-facing flow when sending a chat message, including web search, RAG, memory, and summarization:
 
 ```mermaid
 sequenceDiagram
     participant U as Browser
     participant W as Next.js :3000
     participant G as Gateway :8000
-    participant DB as Supabase/Postgres
+    participant DB as SQLite
     participant S as SearXNG :8888
     participant RAG as RAG Pipeline
+    participant MEM as Memory Service
     participant LLM as Inference Tier
 
     U->>W: Type message, click Send
-    W->>W: Get JWT from Supabase Auth session
+    W->>W: Get JWT from localStorage
     W->>G: POST /chat/stream {message, mode, session_id, images[]}<br/>Authorization: Bearer JWT
 
     G->>G: Decode JWT, extract user_id
-    G->>DB: GET or CREATE chat_session (via REST + RLS)
+    G->>DB: GET or CREATE chat_session
     DB-->>G: session_id
 
     G->>DB: INSERT chat_message (role=user) + store images
-    G->>DB: SELECT last 20 messages for context
+    G->>DB: SELECT last messages for context
 
     par Context Enrichment
         G->>S: Intent classification → search if needed
         S-->>G: Web results + snippets
     and
-        G->>RAG: Hybrid search (vector + BM25 → RRF → rerank)
+        G->>RAG: Hybrid search (sqlite-vec + FTS5 → RRF → rerank)
         RAG-->>G: Relevant document chunks
+    and
+        G->>MEM: Retrieve relevant user memories
+        MEM-->>G: Top 5 memories (by similarity)
     and
         G->>DB: GET session_documents (attached files)
         DB-->>G: Document content
     end
 
-    G->>G: Build system prompt with evidence summary<br/>(web sources + RAG chunks + attached docs)
+    G->>G: Build system prompt with evidence summary<br/>(web sources + RAG chunks + memories + attached docs)
 
     G->>LLM: POST /v1/chat/completions<br/>{model, messages[], stream:true,<br/>enable_thinking, thinking_budget, images[]}
 
@@ -117,6 +115,13 @@ sequenceDiagram
     LLM-->>G: data: [DONE]
     G->>G: Strip think tags, extract reasoning_content
     G->>DB: INSERT chat_message (role=assistant,<br/>content, reasoning_content, mode_used)
+
+    par Background Tasks
+        G->>MEM: Extract memories (every 6 messages)
+    and
+        G->>G: Summarize conversation (if 16+ unsummarized)
+    end
+
     G-->>W: data: [DONE]
     W->>W: Parse think tags, show reasoning toggle
     W-->>U: Final rendered response with source citations
@@ -132,19 +137,31 @@ sequenceDiagram
 sequenceDiagram
     participant U as Browser
     participant W as Next.js :3000
-    participant SA as Supabase Auth
     participant G as Gateway :8000
+    participant DB as SQLite
 
     U->>W: Navigate to /login
-    U->>W: Enter email + password
-    W->>SA: signInWithPassword(email, password)
-    SA-->>W: JWT access_token + refresh_token
-    W->>W: Store tokens in cookie (via @supabase/ssr)
+    W->>G: GET /auth/mode
+    G-->>W: {mode: "single"|"multi", setup_complete}
+
+    alt Single-User Mode
+        U->>W: Enter password only
+        W->>G: POST /auth/login-simple {password}
+        G->>DB: Verify password (bcrypt)
+        G-->>W: JWT access_token
+    else Multi-User Mode
+        U->>W: Enter email + password
+        W->>G: POST /auth/login {email, password}
+        G->>DB: Lookup user, verify password (bcrypt)
+        G-->>W: JWT access_token
+    end
+
+    W->>W: Store JWT in localStorage (molebie_token)
 
     U->>W: Navigate to /chat
-    W->>W: Read JWT from cookie
+    W->>W: Read JWT from localStorage
     W->>G: GET /chat/sessions<br/>Authorization: Bearer JWT
-    G->>G: Decode JWT (HS256)<br/>Extract sub (user_id), email, role
+    G->>G: Decode JWT (HS256)<br/>Extract sub (user_id), email
     G->>G: Attach user_id to request context
     G-->>W: 200 OK + session list
 ```
@@ -153,10 +170,15 @@ sequenceDiagram
 
 **Auth details:**
 
-- Supabase Auth issues JWTs (HS256, shared secret)
-- Gateway decodes JWT locally (no round-trip to Supabase Auth for validation)
-- All Supabase DB queries pass the user JWT for Row-Level Security enforcement
-- In dev mode, signature verification is skipped for convenience
+- **Gateway-managed auth** — no external auth provider (Supabase removed)
+- JWTs signed with HS256 using a configurable secret
+- Gateway decodes JWT locally (no external round-trip)
+- All database queries filter by `user_id` for data isolation
+- **Single-user mode**: password-only login, default user ID `00000000-0000-0000-0000-000000000001`
+- **Multi-user mode**: email + password registration and login
+- Token expiry: 7 days
+- 401 responses trigger automatic logout + redirect to `/login`
+- User registration via `POST /auth/register` (multi-user mode only)
 
 ---
 
@@ -198,6 +220,7 @@ flowchart TD
 - `THINKING_DAILY_REQUEST_LIMIT` caps heavy inference per user per day (default: 100)
 - `THINKING_MAX_CONCURRENT` limits parallel thinking requests (default: 2)
 - Fallback to instant tier is configurable via `ROUTING_THINKING_FALLBACK_TO_INSTANT`
+- Cold-start timeout: 60s (configurable via `ROUTING_COLD_START_TIMEOUT`)
 
 **Supported inference backends:**
 
@@ -220,9 +243,11 @@ flowchart TD
     Classify -->|"no"| Skip["Skip search"]
     Classify -->|"yes"| Query["Generate search query"]
     Query --> SearX["SearXNG :8888\n(self-hosted metasearch)"]
-    SearX --> Results["Top 6 results\n(title, URL, snippet)"]
-    Results --> Fetch["Fetch full content\n(top 3 pages)"]
-    Fetch --> Inject["Inject as evidence\ninto system prompt"]
+    SearX --> Results["Top results\n(title, URL, snippet)"]
+    Results --> Fetch["Fetch full content\n(top pages via trafilatura)"]
+    Fetch --> Dedup["Duplicate detection\n(Jaccard similarity)"]
+    Dedup --> Trust["Source trust classification\n(official, reference, forum, news, web)"]
+    Trust --> Inject["Inject as evidence\ninto system prompt"]
     Inject --> Citations["Source citations\nrendered in UI"]
 ```
 
@@ -230,8 +255,11 @@ flowchart TD
 
 - Powered by **SearXNG** — self-hosted, privacy-respecting, no API keys needed
 - **LLM intent classification** decides whether a query needs web results (configurable via `WEB_SEARCH_LLM_CLASSIFY`)
-- Fetches full page content for top 3 results (up to 2000 chars each)
-- Results injected as evidence blocks in the system prompt with quality labels
+- Fetches full page content for top results via **trafilatura** (up to 2000 chars each)
+- **Source trust classification**: official, reference, forum, news, web
+- **Duplicate detection** via Jaccard similarity on word sets
+- **Smart search triggers**: temporal keywords, news, weather, commerce, explicit intent
+- Skips trivial queries (greetings) and code/creative tasks
 
 ---
 
@@ -241,36 +269,42 @@ flowchart TD
 flowchart TD
     Upload["User uploads PDF/DOCX/TXT/MD"]
     Extract["DocumentProcessor\nextract text"]
-    Chunk["Split into chunks\n(1024 chars, 128 overlap)"]
-    Embed["Generate embeddings\n(sentence-transformers, 1536-dim)"]
-    BM25["Generate tsvector\n(full-text search)"]
-    Store["Store in document_chunks\n(pgvector + GIN index)"]
+    Chunk["Split into chunks\n(1024 chars, 128 overlap)\nMarkdown-aware splitting"]
+    Embed["Generate embeddings\n(sentence-transformers)"]
+    FTS["Generate FTS5 tokens\n(full-text search)"]
+    Context["Contextual retrieval\n(LLM-generated prefixes)"]
+    Store["Store in document_chunks\n+ document_chunks_vec\n+ document_chunks_fts"]
 
     Upload --> Extract --> Chunk --> Embed --> Store
-    Chunk --> BM25 --> Store
+    Chunk --> FTS --> Store
+    Chunk --> Context --> Store
 
     Query["User asks a question"]
-    VecSearch["Vector similarity search\n(pgvector HNSW)"]
-    TextSearch["BM25 full-text search\n(tsvector + GIN)"]
+    Rewrite["LLM query rewriting\n(contextual rewrite)"]
+    VecSearch["Vector similarity search\n(sqlite-vec)"]
+    TextSearch["BM25 full-text search\n(FTS5)"]
     RRF["Reciprocal Rank Fusion\n(weight: 0.7 vector / 0.3 text)"]
     Rerank["Cross-encoder reranking\n(ms-marco-MiniLM-L6-v2)"]
-    Context["Top 5 chunks → system prompt"]
+    TopK["Top 5 chunks → system prompt\n(max 12000 chars)"]
 
-    Query --> VecSearch
-    Query --> TextSearch
+    Query --> Rewrite
+    Rewrite --> VecSearch
+    Rewrite --> TextSearch
     VecSearch --> RRF
     TextSearch --> RRF
-    RRF --> Rerank --> Context
+    RRF --> Rerank --> TopK
 ```
 
 **RAG details:**
 
-- **Hybrid search**: vector similarity (pgvector HNSW) + BM25 full-text (tsvector + GIN) fused via RRF
-- **Cross-encoder reranking** for final relevance scoring
-- **Contextual retrieval**: LLM generates context prefixes for each chunk at ingest time
+- **Hybrid search**: vector similarity (sqlite-vec) + BM25 full-text (FTS5) fused via RRF
+- **Cross-encoder reranking** for final relevance scoring (`cross-encoder/ms-marco-MiniLM-L6-v2`)
+- **Contextual retrieval**: LLM generates context prefixes for each chunk at ingest time (Anthropic technique, +35-49% retrieval quality)
+- **LLM query rewriting**: contextual rewrite to improve retrieval
 - **Session document attachments**: files can be attached to specific sessions and injected directly into the system prompt
-- **Embedding model**: configurable (default: `sentence-transformers/all-MiniLM-L6-v2`, 1536-dim via Orange/orange-nomic)
-- **RAG metrics**: performance logging with quality tracking
+- **Embedding model**: configurable (default: `sentence-transformers/all-MiniLM-L6-v2`, 384-dim; or `Orange/orange-nomic-v1.5-1536`, 1536-dim)
+- **RAG metrics**: performance logging with quality tracking via `rag_query_metrics` table
+- Match count: 20 candidates, threshold: 0.3, max context: 12000 chars
 
 ---
 
@@ -286,12 +320,13 @@ sequenceDiagram
     participant LLM as Inference Tier
 
     Note over U,W: Voice Conversation Mode
-    U->>W: Hold mic / wake-word detected
-    W->>W: Record audio (Web Audio API)
+    U->>W: Hold mic / wake-word detected<br/>("Hey Chat", "Hello Chat", "Hi Chat")
+    W->>W: Record audio (Web Audio API)<br/>+ silence detection (auto-stop)
     W->>G: POST /chat/transcribe (audio file)
     G->>STT: Transcribe audio
+    G->>G: Speaker verification (if enrolled)
     STT-->>G: Transcribed text
-    G-->>W: {text: "..."}
+    G-->>W: {text, speaker_verified, speaker_confidence}
 
     W->>G: POST /chat/stream {message: transcribed text}
     G->>LLM: Generate response (streaming)
@@ -302,15 +337,19 @@ sequenceDiagram
     G->>TTS: Synthesize speech
     TTS-->>G: Audio (WAV)
     G-->>W: Audio response
-    W->>U: Play audio response
+    W->>U: Play audio response<br/>(streaming TTS — sentences play as they arrive)
+    W->>W: Auto-restart microphone for next turn
 ```
 
 **Voice details:**
 
-- **STT**: `faster-whisper` (local Whisper inference) via `POST /chat/transcribe`
+- **STT**: `faster-whisper` (local Whisper inference, "tiny" model ~75MB, CTranslate2 backend) via `POST /chat/transcribe`
 - **TTS**: Kokoro FastAPI (Docker, CPU) with 12 voice options (British/American, male/female)
-- **Speaker verification**: enroll voice profile, verify subsequent speakers match
-- **Wake-word detection**: browser-side voice activity detection
+- **Speaker verification**: MFCC-based voice embeddings, 3-sample enrollment, similarity threshold 0.82, profiles stored in `~/.local-ai/voice-profiles/`
+- **Wake-word detection**: browser-side voice activity detection ("Hey Chat", "Hello Chat", "Hi Chat", "Chat")
+- **Silence detection**: audio threshold-based auto-stop recording
+- **Stop commands**: "stop", "goodbye", "bye", "that's all", etc.
+- **Streaming TTS**: sentences play as the LLM generates them (continuous audio)
 - **Voice settings**: configurable voice, speed (0.5x–2.0x), auto-read toggle
 
 ---
@@ -319,147 +358,183 @@ sequenceDiagram
 
 ```mermaid
 erDiagram
-    auth_users {
-        uuid id PK
+    users {
+        text id PK
         text email
-        jsonb raw_user_meta_data
-    }
-
-    profiles {
-        uuid id PK,FK
-        text email
+        text password_hash
         text name
-        text avatar_url
-        timestamptz created_at
-        timestamptz updated_at
+        text created_at
+        text updated_at
     }
 
     chat_sessions {
-        uuid id PK
-        uuid user_id FK
+        text id PK
+        text user_id FK
         text title
-        boolean is_archived
-        boolean is_pinned
-        timestamptz created_at
-        timestamptz updated_at
+        integer is_archived
+        integer is_pinned
+        text summary
+        text created_at
+        text updated_at
     }
 
     chat_messages {
-        uuid id PK
-        uuid session_id FK
-        uuid user_id FK
+        text id PK
+        text session_id FK
+        text user_id FK
         text role
         text content
         text reasoning_content
         text mode_used
         integer tokens_used
-        timestamptz created_at
+        text created_at
     }
 
     message_images {
-        uuid id PK
-        uuid message_id FK
-        uuid user_id FK
+        text id PK
+        text message_id FK
+        text user_id FK
         text storage_path
         text filename
         text mime_type
         integer file_size
-        timestamptz created_at
+        text created_at
     }
 
     documents {
-        uuid id PK
-        uuid user_id FK
+        text id PK
+        text user_id FK
         text filename
         text storage_path
         text file_type
         integer file_size
         text status
-        timestamptz created_at
-        timestamptz processed_at
+        text created_at
+        text processed_at
     }
 
     document_chunks {
-        uuid id PK
-        uuid document_id FK
-        uuid user_id FK
+        text id PK
+        text document_id FK
+        text user_id FK
         text content
-        vector embedding
-        tsvector content_tsv
+        text content_contextualized
         integer chunk_index
-        timestamptz created_at
+        text metadata
+        text created_at
     }
 
     session_documents {
-        uuid id PK
-        uuid session_id FK
-        uuid user_id FK
+        text id PK
+        text session_id FK
+        text user_id FK
         text filename
         text content
         integer file_size
-        timestamptz created_at
+        text created_at
     }
 
-    auth_users ||--|| profiles : "trigger creates"
-    profiles ||--o{ chat_sessions : "owns"
+    user_memories {
+        text id PK
+        text user_id FK
+        text content
+        text category
+        text source_session_id
+        integer access_count
+        text last_accessed_at
+        text created_at
+        text updated_at
+    }
+
+    rag_query_metrics {
+        integer id PK
+        text user_id
+        text query_text
+        integer num_candidates
+        integer unique_documents
+        real avg_similarity
+        real max_similarity
+        real avg_rerank_score
+        real max_rerank_score
+        real search_time_ms
+        real rerank_time_ms
+        text created_at
+    }
+
+    users ||--o{ chat_sessions : "owns"
     chat_sessions ||--o{ chat_messages : "contains"
-    profiles ||--o{ chat_messages : "authored by"
+    users ||--o{ chat_messages : "authored by"
     chat_messages ||--o{ message_images : "has attachments"
-    profiles ||--o{ message_images : "owns"
-    profiles ||--o{ documents : "uploads"
+    users ||--o{ message_images : "owns"
+    users ||--o{ documents : "uploads"
     documents ||--o{ document_chunks : "split into"
-    profiles ||--o{ document_chunks : "owns"
+    users ||--o{ document_chunks : "owns"
     chat_sessions ||--o{ session_documents : "has attached"
-    profiles ||--o{ session_documents : "owns"
+    users ||--o{ session_documents : "owns"
+    users ||--o{ user_memories : "has memories"
 ```
 
 
 
 **Key schema features:**
 
-- Row-Level Security on every table (users only see their own data)
-- `auth.users` trigger auto-creates a `profiles` row on signup
-- `chat_messages` trigger auto-updates `chat_sessions.updated_at`
-- pgvector extension with **HNSW index** (M=16, ef_construction=64) for RAG similarity search
-- **tsvector + GIN index** on `document_chunks` for BM25 full-text search
-- **RRF hybrid search** function in Postgres for vector + BM25 fusion
+- **SQLite** with WAL mode enabled for concurrent reads
+- Foreign key constraints enforced for referential integrity
+- User data isolation enforced at query level (every query filters by `user_id`)
+- **sqlite-vec** virtual tables (`document_chunks_vec`, `user_memories_vec`) for vector similarity search
+- **FTS5** virtual table (`document_chunks_fts`) for BM25 full-text search
+- **RRF hybrid search** combining vector + BM25 results
 - `mode_used` supports: `instant`, `thinking`, `thinking_harder`
-- `message_images` stored in Supabase Storage (`chat-images` bucket), metadata in table
+- `message_images` stored locally in `data/images/`, metadata in table
 - `session_documents` holds full-text content injected directly into system prompts
 - `chat_sessions.is_pinned` for session pinning/favoriting
-- Storage buckets: `documents` (RAG uploads), `chat-images` (inline image attachments)
+- `chat_sessions.summary` for rolling conversation summaries
+- `user_memories` stores cross-session facts with categories: preference, background, project, instruction
+- `user_memories` has access tracking (count + last_accessed_at) for relevance decay
+- `rag_query_metrics` tracks RAG search performance for analytics
+- Schema auto-initialized on first gateway start via `init_database()`
 
 ---
 
 ## 9. Gateway API Routes
 
 ```
+/auth
+  GET  /mode           — Get auth mode (single/multi) and setup state
+  POST /register       — Register new user (multi-user mode only)
+  POST /login          — Email + password login (multi-user mode)
+  POST /login-simple   — Password-only login (single-user mode)
+  GET  /me             — Get current authenticated user info
+
 /health
-  GET /              — Basic health check
-  GET /auth          — JWT validation + user info
-  GET /inference     — Inference tier status
+  GET /                — Basic health check
+  GET /auth            — JWT validation + user info
+  GET /inference       — Inference tier status + routing info
 
 /chat
-  POST /             — Send message (full response)
-  POST /stream       — Send message (SSE streaming)
-  GET  /sessions     — List user sessions
-  POST /sessions/create  — Create new session
+  POST /               — Send message (full response)
+  POST /stream         — Send message (SSE streaming)
+  GET  /sessions       — List user sessions
+  POST /sessions       — Create new session
   GET  /sessions/{id}/messages — Get session messages
-  PATCH /sessions/{id}   — Rename session
+  PATCH /sessions/{id}     — Rename session
   PATCH /sessions/{id}/pin — Pin/unpin session
-  DELETE /sessions/{id}  — Delete session
-  POST /transcribe   — Whisper STT (audio → text)
-  POST /tts          — Kokoro TTS (text → audio)
-  POST /voice-enroll — Voice profile enrollment
-  GET  /voice-profile — Get voice profile
+  DELETE /sessions/{id}    — Delete session
+  GET  /image/{image_id}   — Download message image
+  POST /transcribe     — Whisper STT (audio → text + speaker verification)
+  POST /tts            — Kokoro TTS (text → audio)
+  POST /voice-enroll   — Voice profile enrollment
+  GET  /voice-profile  — Get voice profile status
   DELETE /voice-profile — Delete voice profile
 
 /documents
-  POST /upload       — Upload file for RAG processing
-  GET  /             — List user documents
-  DELETE /{id}       — Delete document + chunks
-  POST /sessions/{id}/attach  — Attach document to session
-  DELETE /sessions/{id}/attach — Remove attachment
+  POST /upload         — Upload file for RAG processing (PDF/DOCX/TXT/MD, up to 50MB)
+  GET  /               — List user documents
+  DELETE /{id}         — Delete document + chunks
+  POST /sessions/{id}/attach           — Attach document to session
+  GET  /sessions/{id}/attachments      — List session attachments
+  DELETE /sessions/{id}/attachments/{id} — Remove attachment
+  POST /evaluate       — RAG evaluation with test cases
 ```
 
 ---
@@ -468,26 +543,26 @@ erDiagram
 
 ```mermaid
 graph LR
-    subgraph tailnet [Tailscale VPN Mesh]
-        subgraph server ["Server Machine\n100.99.189.104"]
+    subgraph tailnet [Tailscale VPN Mesh / LAN]
+        subgraph server ["Server Machine (configurable IP)"]
             next["Next.js :3000"]
             fastapi["FastAPI :8000"]
-            supa["Supabase Docker\n:54321 / :54322 / :54323"]
+            sqlite["SQLite DB\ndata/molebie.db"]
             searx["SearXNG :8888"]
             kokoro["Kokoro TTS :8880"]
         end
-        subgraph gpu ["GPU Node\n100.104.193.59"]
+        subgraph gpu ["GPU Node (configurable IP)"]
             thinking["Thinking Tier :8080"]
             instant["Instant Tier :8081"]
         end
     end
 
     next --- fastapi
-    fastapi --- supa
+    fastapi --- sqlite
     fastapi --- searx
     fastapi --- kokoro
-    fastapi ---|"Tailscale"| thinking
-    fastapi ---|"Tailscale"| instant
+    fastapi ---|"Tailscale/LAN"| thinking
+    fastapi ---|"Tailscale/LAN"| instant
 ```
 
 **Deployment modes:**
@@ -495,6 +570,7 @@ graph LR
 - **Two-machine**: Gateway/webapp on server, inference on GPU node (Tailscale/LAN)
 - **Single-machine**: Everything on localhost (configured via `molebie-ai install`)
 - **Auto-pull daemon**: macOS LaunchAgent polls git and auto-updates on new commits
+- IPs are configurable via CLI wizard (no hardcoded Tailscale IPs)
 
 ---
 
@@ -506,16 +582,22 @@ flowchart TD
     Root -->|"authenticated?"| Chat["/chat\nMain Chat UI"]
     Root -->|"not authenticated"| Login["/login\nSign In / Sign Up"]
 
-    Chat --> Sidebar["Session Sidebar\n(list, rename, pin, delete)"]
+    Login --> AuthMode{"Auth mode?"}
+    AuthMode -->|"single"| SingleAuth["Password-only login"]
+    AuthMode -->|"multi"| MultiAuth["Email + password\n(login / register toggle)"]
+
+    Chat --> Sidebar["Session Sidebar\n(list, search, rename, pin, delete)"]
     Chat --> ChatArea["Chat Area\n(messages, streaming, images)"]
     Chat --> ModeSelect["Mode Selector\n(instant / thinking / thinking_harder)"]
-    Chat --> VoiceMode["Voice Conversation Mode\n(STT + TTS + wake-word)"]
+    Chat --> VoiceMode["Voice Conversation Mode\n(STT + TTS + wake-word + speaker verification)"]
     Chat --> DocPanel["Document Panel\n(upload, attach, RAG brain)"]
 
     ChatArea --> Markdown["react-markdown\n+ syntax highlighting\n+ KaTeX math"]
     ChatArea --> ThinkBlock["Collapsible Reasoning\n(think tag parser)"]
     ChatArea --> Sources["Web Search Citations\n(source links)"]
     ChatArea --> ImageView["Image Attachments\n(paste/drag-drop/upload)"]
+    ChatArea --> Export["Export as Markdown"]
+    ChatArea --> Regen["Regenerate Last Response"]
 ```
 
 
@@ -524,12 +606,15 @@ flowchart TD
 
 **Key frontend features:**
 
-- Voice conversation mode with wake-word detection and speaker verification
+- Voice conversation mode with wake-word detection, speaker verification, and streaming TTS
 - Document upload/attachment for RAG and per-session context
-- Image upload via paste, drag-and-drop, or file picker (stored in Supabase Storage)
+- Image upload via paste, drag-and-drop, or file picker (stored locally)
 - Web search source citations with clickable links
 - KaTeX math rendering in messages
-- Session pinning/favoriting
+- Session pinning/favoriting and search (when 5+ sessions)
+- Export conversations as Markdown
+- Regenerate last assistant response
+- Responsive mobile design with drawer sidebar
 
 ---
 
@@ -541,28 +626,78 @@ flowchart TD
     Run["molebie-ai run"]
     Doctor["molebie-ai doctor"]
     Status["molebie-ai status"]
-    Config["molebie-ai config show/edit"]
+    Config["molebie-ai config show/set/list-backends"]
     Feature["molebie-ai feature list/add/remove"]
+    Model["molebie-ai model download/remove/start/stop/list"]
 
-    Install --> Prereqs["Check prerequisites\n(Docker, Node, Python, ffmpeg)"]
-    Prereqs --> Backend["Select backend\n(MLX / Ollama / OpenAI)"]
+    Install --> Prereqs["Check prerequisites\n(Docker, Node 18+, Python 3.10+, ffmpeg)"]
+    Prereqs --> Backend["Select backend\n(MLX / Ollama / OpenAI-compatible)"]
     Backend --> Models["Select model profile\n(Light / Balanced / Custom)"]
     Models --> Features["Toggle features\n(voice, search, RAG)"]
     Features --> Deploy["Select deployment\n(single / two-machine)"]
-    Deploy --> Setup["Run setup\n(Supabase, env gen, model downloads)"]
+    Deploy --> Setup["Run setup\n(env gen, model downloads, deps install)"]
 
     Run --> Start["Start all configured services"]
-    Doctor --> Diagnose["Check environment health"]
+    Doctor --> Diagnose["Check environment health\n(with --fix option)"]
+    Model --> ModelMgmt["Download/remove/start/stop LLM models"]
 ```
 
 **CLI details:**
 
 - **Framework**: Python + Typer + Rich
 - **Entry point**: `molebie-ai` (installed via `pip install -e .`)
-- **Config storage**: `.molebie/config.json`
-- **Env generation**: Auto-generates `.env.local` from CLI config
+- **Config storage**: `.molebie/config.json` (version 2)
+- **Env generation**: Auto-generates `.env.local` from CLI config (including random JWT secret)
 - **Prerequisite checker**: Detects and offers to install missing dependencies
 - **Service manager**: Starts/stops all services via subprocess
+- **Model management**: Download, remove, start, and stop LLM models per backend
+- **Feature management**: Enable/disable voice, search, RAG services
+- **Doctor**: Diagnose and optionally fix setup issues
+
+---
+
+## 13. Memory & Summarization Services
+
+```mermaid
+flowchart TD
+    subgraph memory [Cross-Session Memory]
+        Msg6["Every 6 messages"]
+        Extract["LLM extracts structured facts"]
+        Categorize["Categorize:\npreference / background /\nproject / instruction"]
+        Dedup["Deduplicate via cosine similarity\n(threshold: 0.9)"]
+        StoreM["Store in user_memories\n+ user_memories_vec"]
+        Retrieve["Retrieve top 5 memories\n(similarity > 0.5)\nfor system prompt"]
+    end
+
+    subgraph summary [Conversation Summarization]
+        Trigger["16+ unsummarized messages"]
+        Summarize["LLM generates rolling summary\n(max 300 tokens)"]
+        StoreS["Store in chat_sessions.summary"]
+        Inject["Inject summary into context\n(keeps last 10 messages raw)"]
+    end
+
+    Msg6 --> Extract --> Categorize --> Dedup --> StoreM
+    StoreM -.->|"on next query"| Retrieve
+    Trigger --> Summarize --> StoreS --> Inject
+```
+
+**Memory details:**
+
+- **Cross-session memory**: extracts and stores user facts/preferences across conversations
+- Categories: preference, background, project, instruction
+- Deduplication via cosine similarity (threshold: 0.9)
+- Retrieval: top 5 memories by vector similarity (threshold: 0.5)
+- Auto-extraction every 6 messages (configurable via `MEMORY_EXTRACT_INTERVAL`)
+- Max 200 memories per user
+- Access tracking for relevance decay
+
+**Summarization details:**
+
+- Rolling conversation summaries to manage context window
+- Trigger: 16+ unsummarized messages (configurable via `SUMMARY_TRIGGER_THRESHOLD`)
+- Keeps last 10 messages raw (not summarized)
+- Max 300 output tokens per summary
+- Background task runs after each assistant message
 
 ---
 
@@ -571,13 +706,13 @@ flowchart TD
 | Service | Port | Framework | Purpose |
 |---------|------|-----------|---------|
 | **Web App** | 3000 | Next.js 16 | Chat UI, auth, voice, documents, images |
-| **Gateway** | 8000 | FastAPI | Auth, routing, DB proxy, inference proxy, RAG, web search, TTS, SSE streaming |
-| **Supabase** | 54321-54323 | Docker (Postgres 17) | Auth (JWT), PostgreSQL (RLS, pgvector, pg_trgm), Storage |
+| **Gateway** | 8000 | FastAPI | Auth, routing, DB, inference proxy, RAG, web search, TTS, memory, summarization, SSE streaming |
+| **SQLite DB** | — | sqlite-vec + FTS5 | Local database with vector search and full-text search |
 | **Thinking LLM** | 8080 | MLX / Ollama / vLLM / OpenAI | Deep reasoning with chain-of-thought |
 | **Instant LLM** | 8081 | MLX / Ollama / vLLM / OpenAI | Fast responses, no CoT |
 | **SearXNG** | 8888 | Docker | Self-hosted web search (no API keys) |
 | **Kokoro TTS** | 8880 | Docker (FastAPI) | Text-to-speech (12 voices, CPU) |
-| **Tailscale** | — | VPN mesh | Connects server + GPU node |
-| **CLI** | — | Python (Typer) | Setup wizard, service management, diagnostics |
+| **Tailscale** | — | VPN mesh | Connects server + GPU node (optional) |
+| **CLI** | — | Python (Typer) | Setup wizard, service management, model management, diagnostics |
 
-The gateway is the central orchestrator: it authenticates every request, manages sessions/messages in Supabase, routes to the appropriate inference tier, enriches context with web search and RAG results, handles voice transcription and synthesis, manages image attachments, builds evidence-augmented system prompts, handles streaming, extracts reasoning content, and applies cost controls.
+The gateway is the central orchestrator: it authenticates every request (JWT + bcrypt), manages sessions/messages in SQLite, routes to the appropriate inference tier, enriches context with web search and RAG results, retrieves cross-session user memories, manages conversation summarization, handles voice transcription and synthesis with speaker verification, manages image attachments via local storage, builds evidence-augmented system prompts, handles streaming, extracts reasoning content, and applies cost controls.
