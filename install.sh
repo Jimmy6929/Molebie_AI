@@ -7,12 +7,13 @@ set -euo pipefail
 # Ensures Python 3.10+ is available, creates a virtual environment,
 # installs the molebie-ai CLI, then launches the interactive wizard.
 #
-# Usage:  ./install.sh           (interactive)
-#         ./install.sh --quick   (auto-select defaults)
+# Usage:
+#   Local:   ./install.sh                          (interactive)
+#            ./install.sh --quick                   (auto-select defaults)
+#   Remote:  curl -fsSL https://raw.githubusercontent.com/Jimmy6929/Molebie_AI/main/install.sh | bash
+#            curl -fsSL <url> | bash -s -- --quick
+#            curl -fsSL <url> | bash -s -- --install-dir ~/my-molebie
 # ══════════════════════════════════════════════════════════════
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
 
 # Colors
 RED='\033[0;31m'
@@ -26,6 +27,94 @@ info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
 ok()    { echo -e "${GREEN}[OK]${NC}   $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 fail()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
+
+# ──────────────────────────────────────────────────────────────
+# Parse arguments
+# ──────────────────────────────────────────────────────────────
+INSTALL_DIR=""
+PASSTHROUGH_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --install-dir)
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --install-dir=*)
+            INSTALL_DIR="${1#*=}"
+            shift
+            ;;
+        *)
+            PASSTHROUGH_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Restore remaining args for the wizard
+set -- "${PASSTHROUGH_ARGS[@]+"${PASSTHROUGH_ARGS[@]}"}"
+
+# ──────────────────────────────────────────────────────────────
+# Detect execution mode: local (inside repo) vs remote (curl pipe)
+# ──────────────────────────────────────────────────────────────
+REMOTE_MODE=0
+
+if [[ -z "${BASH_SOURCE[0]:-}" ]] \
+   || [[ "${BASH_SOURCE[0]}" == "/dev/stdin" ]] \
+   || [[ "${BASH_SOURCE[0]}" == "bash" ]]; then
+    REMOTE_MODE=1
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ ! -f "$SCRIPT_DIR/pyproject.toml" ]] || [[ ! -d "$SCRIPT_DIR/gateway" ]]; then
+        REMOTE_MODE=1
+    fi
+fi
+
+# ──────────────────────────────────────────────────────────────
+# Remote mode: clone the repo first, then re-exec local script
+# ──────────────────────────────────────────────────────────────
+if [[ "$REMOTE_MODE" -eq 1 ]]; then
+    echo ""
+    echo -e "${BOLD}══════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}  Molebie AI — Remote Installer${NC}"
+    echo -e "${BOLD}══════════════════════════════════════════════════${NC}"
+    echo ""
+
+    # Check git
+    if ! command -v git &>/dev/null; then
+        fail "git is required for remote install. Install it first:\n  macOS:  xcode-select --install\n  Linux:  sudo apt-get install git"
+    fi
+
+    # Determine install directory
+    if [[ -z "$INSTALL_DIR" ]]; then
+        INSTALL_DIR="$HOME/Molebie_AI"
+    fi
+    INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
+
+    if [[ -d "$INSTALL_DIR" ]]; then
+        if [[ -f "$INSTALL_DIR/pyproject.toml" ]] && [[ -d "$INSTALL_DIR/gateway" ]]; then
+            info "Existing installation found at $INSTALL_DIR"
+            info "Updating with git pull..."
+            git -C "$INSTALL_DIR" pull --ff-only || warn "git pull failed — continuing with existing code"
+            ok "Repository updated"
+        else
+            fail "$INSTALL_DIR already exists but is not a Molebie AI installation.\n  Use --install-dir to specify a different path."
+        fi
+    else
+        info "Cloning into $INSTALL_DIR..."
+        git clone --depth 1 https://github.com/Jimmy6929/Molebie_AI.git "$INSTALL_DIR"
+        ok "Repository cloned"
+    fi
+
+    # Re-exec the local install.sh (clean terminal context, no pipe on stdin)
+    info "Handing off to local installer..."
+    exec "$INSTALL_DIR/install.sh" --quick "$@"
+fi
+
+# ──────────────────────────────────────────────────────────────
+# Local mode: we are inside the repo
+# ──────────────────────────────────────────────────────────────
+cd "$SCRIPT_DIR"
 
 echo ""
 echo -e "${BOLD}══════════════════════════════════════════════════${NC}"

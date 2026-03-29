@@ -13,7 +13,38 @@ A self-hosted AI assistant with voice conversation, vision, RAG document memory,
 - **Multi-User** — User isolation from day one, no cloud dependency
 - **Any Backend** — Works with MLX, Ollama, vLLM, llama.cpp, or OpenAI API
 
-## Quick Start
+## Install
+
+### One-Line Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Jimmy6929/Molebie_AI/main/install.sh | bash
+```
+
+This clones the repository to `~/Molebie_AI`, sets up a virtual environment, installs the CLI, and auto-configures your system.
+
+After installation:
+
+```bash
+cd ~/Molebie_AI
+molebie-ai run
+```
+
+**Options:**
+
+```bash
+# Custom install directory
+curl -fsSL https://raw.githubusercontent.com/Jimmy6929/Molebie_AI/main/install.sh | bash -s -- --install-dir ~/Projects/molebie
+```
+
+> **Note:** `bash -s --` is needed to pass flags through the pipe to the script.
+
+Don't have `curl`? Use `wget` instead:
+```bash
+wget -qO- https://raw.githubusercontent.com/Jimmy6929/Molebie_AI/main/install.sh | bash
+```
+
+### Install from Source
 
 ```bash
 git clone https://github.com/Jimmy6929/Molebie_AI.git
@@ -22,8 +53,8 @@ cd Molebie_AI
 molebie-ai run
 ```
 
-That's it. `molebie-ai run` auto-detects your system and configures everything on first launch:
-- Detects Apple Silicon → MLX, or falls back to Ollama
+`molebie-ai run` auto-detects your system and configures everything on first launch:
+- Detects Apple Silicon -> MLX, or falls back to Ollama
 - Picks the best model profile for your RAM
 - Generates `.env.local` with a secure JWT secret
 - Creates the SQLite database on first gateway start
