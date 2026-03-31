@@ -75,7 +75,7 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
         services.append(ServiceDef(
             name="Kokoro TTS",
             port=8880,
-            health_url=f"http://{ip}:8880/",
+            health_url=f"http://{ip}:8880/health",
             start_cmd=["docker", "compose", "up", "-d", "kokoro-tts"],
             cwd=str(root),
             is_docker=True,

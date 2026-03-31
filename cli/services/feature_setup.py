@@ -54,10 +54,11 @@ def setup_search(project_root: Path) -> FeatureSetupResult:
         capture_output=True, text=True, timeout=120,
     )
     if result.returncode != 0:
+        detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown error"
         return FeatureSetupResult(
             feature="search",
             success=False,
-            message="Failed to start SearXNG container",
+            message=f"Failed to start SearXNG container: {detail}",
             warnings=["Try manually: docker compose up -d searxng"],
         )
 
@@ -109,15 +110,16 @@ def setup_voice(project_root: Path) -> FeatureSetupResult:
         capture_output=True, text=True, timeout=120,
     )
     if result.returncode != 0:
+        detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown error"
         return FeatureSetupResult(
             feature="voice",
             success=False,
-            message="Failed to start Kokoro TTS container",
+            message=f"Failed to start Kokoro TTS container: {detail}",
             warnings=warnings + ["Try manually: docker compose up -d kokoro-tts"],
         )
 
     # Wait for health — first run downloads ~1GB model, so long timeout
-    if _wait_healthy("http://localhost:8880/", timeout=120):
+    if _wait_healthy("http://localhost:8880/health", timeout=120):
         msg = "Kokoro TTS running on :8880"
     else:
         msg = "Kokoro TTS container started (may still be downloading model)"

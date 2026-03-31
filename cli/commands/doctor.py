@@ -153,7 +153,7 @@ def doctor(
     if config.search_enabled:
         services.append((f"http://{ip}:8888/", "SearXNG"))
     if config.voice_enabled:
-        services.append((f"http://{ip}:8880/", "Kokoro TTS"))
+        services.append((f"http://{ip}:8880/health", "Kokoro TTS"))
 
     for url, name in services:
         if not _health_check(url, name):

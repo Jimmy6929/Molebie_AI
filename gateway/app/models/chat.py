@@ -26,6 +26,7 @@ class ChatRequest(BaseModel):
     mode: ChatMode = Field(ChatMode.INSTANT, description="Inference mode: instant (fast) or thinking (deeper reasoning)")
     conversation_mode: bool = Field(False, description="When true, use voice conversation system prompt")
     image: Optional[str] = Field(None, description="Base64-encoded image as data URI (data:image/...;base64,...)")
+    web_search: bool = Field(False, description="When true, force web search for this message")
 
 
 class ChatMessage(BaseModel):
@@ -38,6 +39,7 @@ class ChatMessage(BaseModel):
     inference_model: Optional[str] = Field(None, alias="model_used")
     reasoning_content: Optional[str] = None
     image_id: Optional[str] = None
+    sources: Optional[List[Dict[str, str]]] = None
     created_at: datetime
 
 

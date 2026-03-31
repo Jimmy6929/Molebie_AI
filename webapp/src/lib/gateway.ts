@@ -29,6 +29,7 @@ export interface ChatMessage {
   model_used?: string | null;
   reasoning_content?: string | null;
   image_id?: string | null;
+  sources?: { title: string; url: string }[] | null;
   created_at: string;
 }
 
@@ -68,6 +69,7 @@ export async function sendMessage(
   sessionId?: string,
   conversationMode: boolean = false,
   image?: string,
+  webSearch?: boolean,
 ): Promise<ChatResponse> {
   return apiCall<ChatResponse>("/chat", token, {
     method: "POST",
@@ -77,6 +79,7 @@ export async function sendMessage(
       session_id: sessionId || null,
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
+      web_search: webSearch ?? false,
     }),
   });
 }
@@ -98,6 +101,7 @@ export async function sendMessageStream(
   onSearchStart?: () => void,
   onSearchDone?: (sources: SearchSource[]) => void,
   image?: string,
+  webSearch?: boolean,
 ): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/chat/stream`, {
     method: "POST",
@@ -111,6 +115,7 @@ export async function sendMessageStream(
       session_id: sessionId || null,
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
+      web_search: webSearch ?? false,
     }),
     signal,
   });

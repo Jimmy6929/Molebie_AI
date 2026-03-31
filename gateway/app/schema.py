@@ -182,6 +182,19 @@ CREATE INDEX IF NOT EXISTS idx_message_images_message_id ON message_images(messa
 CREATE INDEX IF NOT EXISTS idx_message_images_user_id ON message_images(user_id);
 
 -- ============================================
+-- MESSAGE SOURCES TABLE (Web Search Results)
+-- ============================================
+CREATE TABLE IF NOT EXISTS message_sources (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_sources_message_id ON message_sources(message_id);
+
+-- ============================================
 -- USER MEMORIES TABLE (Cross-Session Facts)
 -- ============================================
 CREATE TABLE IF NOT EXISTS user_memories (
@@ -300,6 +313,22 @@ def init_database_sync(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_version'"
         )
         if cursor.fetchone():
+            # Migrate: add message_sources if it doesn't exist (added in v2)
+            cursor2 = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='message_sources'"
+            )
+            if not cursor2.fetchone():
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS message_sources (
+                        id TEXT PRIMARY KEY,
+                        message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+                        url TEXT NOT NULL,
+                        title TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_message_sources_message_id ON message_sources(message_id);
+                """)
+                print("[schema] Migrated: added message_sources table")
             print(f"[schema] Database already initialized at {db_path}")
             conn.close()
             return db_path

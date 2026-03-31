@@ -69,6 +69,11 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try { return localStorage.getItem("molebie_web_search") === "true"; }
+    catch { return false; }
+  });
   const [mode, setMode] = useState<"instant" | "thinking" | "thinking_harder">("thinking");
 
   // ── Mode flags ────────────────────────────────────────────────────────────
@@ -83,6 +88,11 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Open sidebar by default on desktop after hydration
   useEffect(() => { if (!isMobile) setSidebarOpen(true); }, [isMobile]);
+  // Persist web search toggle to localStorage
+  useEffect(() => {
+    try { localStorage.setItem("molebie_web_search", String(webSearchEnabled)); }
+    catch {}
+  }, [webSearchEnabled]);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -331,6 +341,7 @@ export default function ChatPage() {
             mode_used: m.mode_used,
             model_used: m.model_used ?? null,
             imageId: m.image_id ?? null,
+            sources: m.sources ?? undefined,
           };
         });
         setMessages(displayMsgs);
@@ -469,6 +480,7 @@ export default function ChatPage() {
           );
         },
         imageDataUri,
+        webSearchEnabled,
       );
       setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m));
 
@@ -564,6 +576,8 @@ export default function ChatPage() {
           setIsSearching(false);
           setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, sources } : m)));
         },
+        undefined,
+        webSearchEnabled,
       );
       setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
       loadSessions();
@@ -1120,6 +1134,20 @@ export default function ChatPage() {
                     {mode === "thinking_harder" ? "Think Harder" : "Normal"}
                   </button>
                 )}
+
+                {/* ── WEB SEARCH TOGGLE ──────────────────────────────────── */}
+                <button
+                  onClick={() => setWebSearchEnabled(prev => !prev)}
+                  className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
+                    webSearchEnabled
+                      ? "bg-[#3399ff]/15 text-[#66bbff] border border-[#3399ff]/30"
+                      : "text-[#999] hover:text-[#66bbff] border border-white/[0.08] hover:border-white/[0.15]"
+                  }`}
+                  title="Toggle web search"
+                  aria-label="Toggle web search"
+                >
+                  Search
+                </button>
 
                 {/* ── VOICE BUTTON (STT only) ─────────────────────────────── */}
                 <button

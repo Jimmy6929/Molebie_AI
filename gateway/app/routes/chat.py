@@ -399,7 +399,7 @@ async def send_message(
 
     # Web search: inject real-time results into context
     search_results = []
-    if await web_search.should_search(request.message):
+    if request.web_search:
         search_results = await web_search.search(request.message)
         if search_results:
             search_results = await web_search.enrich_with_full_content(search_results)
@@ -466,6 +466,13 @@ async def send_message(
             detail="Failed to store response"
         )
 
+    # Persist web search source links
+    if search_results:
+        await db.create_message_sources(
+            assistant_msg["id"],
+            [{"title": r["title"], "url": r["url"]} for r in search_results],
+        )
+
     # Log whether the response referenced provided sources
     _validate_response_sources(clean_content, search_results, rag_chunks)
 
@@ -502,6 +509,8 @@ async def send_message(
         rag_metrics=rag_metrics,
     )
     
+    sources_list = [{"title": r["title"], "url": r["url"]} for r in search_results] if search_results else None
+
     return ChatResponse(
         session_id=session_id,
         message=ChatMessage(
@@ -510,6 +519,7 @@ async def send_message(
             content=assistant_msg["content"],
             mode_used=assistant_msg.get("mode_used"),
             inference_model=inference_result.get("model"),
+            sources=sources_list,
             created_at=assistant_msg["created_at"],
         ),
         session_title=session.get("title"),
@@ -559,6 +569,10 @@ async def get_session_messages(
     user_msg_ids = [m["id"] for m in messages if m["role"] == "user"]
     image_map = await db.get_message_images(user_msg_ids, user.user_id) if user_msg_ids else {}
 
+    # Fetch web search sources for assistant messages
+    assistant_msg_ids = [m["id"] for m in messages if m["role"] == "assistant"]
+    sources_map = await db.get_message_sources(assistant_msg_ids) if assistant_msg_ids else {}
+
     return [
         ChatMessage(
             id=m["id"],
@@ -568,6 +582,7 @@ async def get_session_messages(
             inference_model=m.get("model_used"),
             reasoning_content=m.get("reasoning_content"),
             image_id=image_map[m["id"]]["id"] if m["id"] in image_map else None,
+            sources=sources_map.get(m["id"]) or None,
             created_at=m["created_at"],
         )
         for m in messages
@@ -769,8 +784,8 @@ async def send_message_stream(
     if attach_text:
         messages[0]["content"] += f"\n\n{attach_text}"
 
-    # Web search: check intent now (cheap), actual search runs inside the SSE generator
-    will_search = await web_search.should_search(request.message)
+    # Web search: user controls via toggle button
+    will_search = request.web_search
 
     # RAG: inject relevant document chunks (skip in conversation mode to avoid embedding load)
     # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
@@ -880,7 +895,7 @@ async def send_message_stream(
         save_content = content if content else ("(no visible response)" if reasoning else None)
         if save_content:
             try:
-                await db.create_message(
+                assistant_msg = await db.create_message(
                     session_id=session_id,
                     user_id=user_id,
                     role="assistant",
@@ -888,6 +903,14 @@ async def send_message_stream(
                     mode_used=inference_mode,
                     reasoning_content=reasoning,
                 )
+
+                # Persist web search source links
+                if assistant_msg and search_results:
+                    await db.create_message_sources(
+                        assistant_msg["id"],
+                        [{"title": r["title"], "url": r["url"]} for r in search_results],
+                    )
+
                 _validate_response_sources(save_content, search_results, rag_chunks)
 
                 # Background tasks: summarisation and memory extraction (non-blocking)

@@ -236,6 +236,48 @@ class DatabaseService:
         )
         return {r["message_id"]: _row_to_dict(r) for r in rows}
 
+    # ==================== Message Sources (Web Search) ====================
+
+    async def create_message_sources(
+        self,
+        message_id: str,
+        sources: List[Dict[str, str]],
+    ) -> None:
+        """Batch-insert web search source links for a message."""
+        if not sources:
+            return
+        db = await self._get_conn()
+        now = _now()
+        for src in sources:
+            await db.execute(
+                "INSERT INTO message_sources (id, message_id, url, title, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (_uuid(), message_id, src.get("url", ""), src.get("title", ""), now),
+            )
+        await db.commit()
+
+    async def get_message_sources(
+        self,
+        message_ids: List[str],
+    ) -> Dict[str, List[Dict[str, str]]]:
+        """Fetch source links for multiple messages. Returns {message_id: [{title, url}, ...]}."""
+        if not message_ids:
+            return {}
+        db = await self._get_conn()
+        placeholders = ",".join("?" * len(message_ids))
+        rows = await db.execute_fetchall(
+            f"SELECT message_id, url, title FROM message_sources "
+            f"WHERE message_id IN ({placeholders}) ORDER BY created_at ASC",
+            tuple(message_ids),
+        )
+        result: Dict[str, List[Dict[str, str]]] = {}
+        for r in rows:
+            mid = r["message_id"]
+            if mid not in result:
+                result[mid] = []
+            result[mid].append({"title": r["title"], "url": r["url"]})
+        return result
+
     async def get_image_metadata(
         self, image_id: str, user_id: str
     ) -> Optional[Dict[str, Any]]:

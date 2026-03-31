@@ -19,7 +19,7 @@ services:
 
   # Text-to-speech — Kokoro (CPU, ~1GB download on first run)
   kokoro-tts:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.4.3
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4-master
     container_name: kokoro-tts
     restart: unless-stopped
     ports:

@@ -77,7 +77,7 @@ def status() -> None:
     if config.search_enabled:
         services.append(("SearXNG", f"http://{ip}:8888/"))
     if config.voice_enabled:
-        services.append(("Kokoro TTS", f"http://{ip}:8880/"))
+        services.append(("Kokoro TTS", f"http://{ip}:8880/health"))
 
     for name, url in services:
         table.add_row(name, url, _health(url))

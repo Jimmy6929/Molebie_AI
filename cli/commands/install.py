@@ -402,14 +402,24 @@ def _setup_features(config: MolebieConfig, root) -> None:
     if config.search_enabled:
         print_info("Setting up web search...")
         r = feature_setup.setup_search(root)
-        print_ok(r.message) if r.success else print_warn(r.message)
+        if r.success:
+            print_ok(r.message)
+        else:
+            print_warn(r.message)
+            config.search_enabled = False
+            print_info("Search disabled — re-enable later with: molebie-ai feature add search")
         for w in r.warnings:
             print_warn(w)
 
     if config.voice_enabled:
         print_info("Setting up voice...")
         r = feature_setup.setup_voice(root)
-        print_ok(r.message) if r.success else print_warn(r.message)
+        if r.success:
+            print_ok(r.message)
+        else:
+            print_warn(r.message)
+            config.voice_enabled = False
+            print_info("Voice disabled — re-enable later with: molebie-ai feature add voice")
         for w in r.warnings:
             print_warn(w)
 

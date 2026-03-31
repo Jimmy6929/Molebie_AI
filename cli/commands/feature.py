@@ -33,17 +33,22 @@ _DOCKER_SERVICES = {
 }
 
 
-def _docker_up(service: str) -> bool:
-    """Start a Docker Compose service. Returns True on success."""
+def _docker_up(service: str) -> tuple[bool, str]:
+    """Start a Docker Compose service. Returns (success, error_detail)."""
     try:
         result = subprocess.run(
             ["docker", "compose", "up", "-d", service],
             cwd=str(get_project_root()),
             capture_output=True, text=True, timeout=120,
         )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+        if result.returncode == 0:
+            return True, ""
+        detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown error"
+        return False, detail
+    except subprocess.TimeoutExpired:
+        return False, "timed out after 120s"
+    except FileNotFoundError:
+        return False, "docker command not found"
 
 
 def _docker_down(service: str) -> bool:
@@ -111,8 +116,25 @@ def add_feature(feature: str = typer.Argument(help="Feature to enable (voice, se
         print_info("Checking Docker...")
         ok, msg = prerequisite_checker.resolve_docker(log=lambda m: print_info(m))
         if not ok:
-            print_warn(f"Docker: {msg}")
-            print_warn(f"Enabling {feature} in config, but the service may not start until Docker is available")
+            print_fail(f"Docker: {msg}")
+            print_info(f"Install Docker first, then run: molebie-ai feature add {feature}")
+            raise typer.Exit(1)
+
+    # Voice-specific: check ffmpeg (needed for speaker verification)
+    if feature == "voice":
+        ffmpeg_check = prerequisite_checker.check_ffmpeg()
+        if not ffmpeg_check.passed:
+            pkg_mgr = prerequisite_checker.detect_package_manager()
+            if pkg_mgr:
+                res = prerequisite_checker.install_prereq(
+                    prerequisite_checker.FFMPEG_PREREQ, pkg_mgr,
+                )
+                if res.success:
+                    print_ok("ffmpeg installed")
+                else:
+                    print_warn(f"ffmpeg: could not auto-install — {ffmpeg_check.fix_hint}")
+            else:
+                print_warn(f"ffmpeg: {ffmpeg_check.fix_hint}")
 
     setattr(config, field_name, True)
     config_manager.save_config(config)
@@ -129,10 +151,20 @@ def add_feature(feature: str = typer.Argument(help="Feature to enable (voice, se
     if feature in _DOCKER_SERVICES:
         svc_name = _DOCKER_SERVICES[feature]
         print_info(f"Starting {svc_name}...")
-        if _docker_up(svc_name):
+        ok, err = _docker_up(svc_name)
+        if ok:
             print_ok(f"{svc_name} started")
+            if feature == "voice":
+                print_info("Kokoro TTS model (~1GB) may be downloading — first request may take a few minutes")
+                print_info("Whisper STT model (~75MB) will download on first voice request")
         else:
-            print_warn(f"{svc_name} failed to start — run manually: docker compose up -d {svc_name}")
+            print_fail(f"{svc_name} failed to start: {err}")
+            print_info(f"Try manually: docker compose up -d {svc_name}")
+            # Rollback: don't leave broken config
+            setattr(config, field_name, False)
+            config_manager.save_config(config)
+            print_info(f"{feature} disabled due to startup failure")
+            raise typer.Exit(1)
     elif feature == "rag":
         print_info("Embedding model will download automatically on first use")
 

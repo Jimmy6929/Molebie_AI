@@ -149,12 +149,24 @@ def _wait_for_docker_cli(timeout_seconds: int = 30) -> bool:
     return False
 
 
+def _check_compose_plugin() -> tuple[bool, str]:
+    """Verify the Docker Compose plugin is available."""
+    rc, _ = _run_quiet(["docker", "compose", "version"])
+    if rc != 0:
+        return False, (
+            "Docker Compose plugin not found — "
+            "install from https://docs.docker.com/compose/install/"
+        )
+    return True, ""
+
+
 def resolve_docker(log: "Callable[[str], None] | None" = None) -> tuple[bool, str]:
     """Attempt to bring Docker to the READY state.
 
     Unlike ``check_docker()`` (read-only diagnostic), this function actively
     fixes each intermediate state: launching the app, starting the daemon, or
-    installing Docker from scratch.
+    installing Docker from scratch.  Also verifies the Docker Compose plugin
+    is available (required for feature services).
 
     *log* is an optional callback for progress messages (e.g. ``console.print``).
 
@@ -163,6 +175,9 @@ def resolve_docker(log: "Callable[[str], None] | None" = None) -> tuple[bool, st
     state = detect_docker_state()
 
     if state == DockerState.READY:
+        compose_ok, compose_msg = _check_compose_plugin()
+        if not compose_ok:
+            return False, compose_msg
         return True, "Docker is ready"
 
     if state == DockerState.APP_EXISTS_NO_CLI:
@@ -174,6 +189,9 @@ def resolve_docker(log: "Callable[[str], None] | None" = None) -> tuple[bool, st
             stderr=subprocess.DEVNULL,
         )
         if _wait_for_docker_cli() and wait_for_docker_daemon():
+            compose_ok, compose_msg = _check_compose_plugin()
+            if not compose_ok:
+                return False, compose_msg
             return True, "Docker Desktop launched and ready"
         return (
             False,
@@ -184,6 +202,9 @@ def resolve_docker(log: "Callable[[str], None] | None" = None) -> tuple[bool, st
         if log:
             log("Docker CLI found — starting daemon...")
         if start_docker_daemon():
+            compose_ok, compose_msg = _check_compose_plugin()
+            if not compose_ok:
+                return False, compose_msg
             return True, "Docker daemon started"
         return False, "Could not start Docker daemon — open Docker Desktop manually"
 
@@ -210,6 +231,9 @@ def resolve_docker(log: "Callable[[str], None] | None" = None) -> tuple[bool, st
         return False, "Docker installation failed — install manually from https://docker.com"
 
     if start_docker_daemon():
+        compose_ok, compose_msg = _check_compose_plugin()
+        if not compose_ok:
+            return False, compose_msg
         return True, "Docker installed and running"
     return False, "Docker installed but daemon not starting — open Docker Desktop manually"
 

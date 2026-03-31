@@ -227,7 +227,11 @@ class WebSearchService:
             return False
 
     async def should_search(self, message: str) -> bool:
-        """Classify whether a message needs web search (rules + LLM fallback)."""
+        """Classify whether a message needs web search (rules + LLM fallback).
+
+        DEPRECATED: Web search is now triggered by manual toggle (request.web_search).
+        Pattern matching logic preserved for potential future auto-detect option.
+        """
         if not self.enabled:
             return False
         cleaned = message.strip().rstrip("?!., ")
