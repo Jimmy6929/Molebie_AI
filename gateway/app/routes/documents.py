@@ -88,7 +88,6 @@ async def upload_document(
         print(f"[documents] Processing {filename} ({len(data)} bytes, {content_type})")
 
         if settings.rag_contextual_retrieval_enabled:
-            await db.update_document_status(doc_id, "processing_context")
             chunk_triples = await processor.process_async(data, content_type)
         else:
             chunk_triples = processor.process(data, content_type)

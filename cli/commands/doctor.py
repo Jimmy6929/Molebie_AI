@@ -55,6 +55,7 @@ def _health_check(url: str, name: str, timeout: float = 3.0) -> bool:
 
 def doctor(
     fix: bool = typer.Option(False, "--fix", help="Auto-fix missing .env.local and config"),
+    deep: bool = typer.Option(False, "--deep", help="Run deep application-logic checks (DB, embeddings, vector search)"),
 ) -> None:
     """Diagnose environment and setup problems."""
     console.print()
@@ -159,6 +160,28 @@ def doctor(
         if not _health_check(url, name):
             all_ok = False
     console.print()
+
+    # 5. Deep application-logic checks (optional)
+    if deep:
+        console.print("[heading]Deep Application Checks[/heading]")
+        from cli.services.deep_checker import run_deep_checks
+
+        deep_results = run_deep_checks(root)
+        for r in deep_results:
+            if r.skipped:
+                print_warn(f"{r.name}: SKIPPED — {r.message}")
+            elif r.passed:
+                print_ok(f"{r.name}: {r.message}")
+            elif r.is_warning:
+                print_warn(f"{r.name}: {r.message}")
+                if r.fix_hint:
+                    console.print(f"    Fix: {r.fix_hint}")
+            else:
+                print_fail(f"{r.name}: {r.message}")
+                if r.fix_hint:
+                    console.print(f"    Fix: {r.fix_hint}")
+                all_ok = False
+        console.print()
 
     # Summary
     if all_ok:
