@@ -30,7 +30,6 @@ import {
   useKokoroTTS,
   useVoiceSettings,
   isStopCommand,
-  extractWakeCommand,
 } from "@/lib/voice";
 import { useIsMobile } from "@/lib/useMediaQuery";
 import Sidebar from "./sidebar";
@@ -55,7 +54,7 @@ interface DisplayMessage {
 // ---------------------------------------------------------------------------
 // sttMode       — "Voice" button: mic → transcribe → fill input. No auto-send, no TTS.
 // chatMode      — "Chat" button: mic → transcribe → auto-send → TTS → repeat.
-//                 Supports wake word ("Hey Chat") and speaker verification.
+//                 Auto-sends transcribed speech. Say "stop" to end.
 // They are mutually exclusive.
 
 export default function ChatPage() {
@@ -75,14 +74,13 @@ export default function ChatPage() {
     catch { return false; }
   });
   const [mode, setMode] = useState<"instant" | "thinking" | "thinking_harder">("thinking");
+  const [toolsOpen, setToolsOpen] = useState(false);
 
   // ── Mode flags ────────────────────────────────────────────────────────────
   const [sttMode, setSttMode] = useState(false);       // Voice button
   const [chatMode, setChatMode] = useState(false); // Chat button
 
   // ── Chat sub-settings ───────────────────────────────────────────────────
-  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
-  const [speakerVerifyEnabled, setSpeakerVerifyEnabled] = useState(false);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -139,19 +137,7 @@ export default function ChatPage() {
           return;
         }
 
-        // Wake word check (only in Chat mode)
-        if (wakeWordEnabled) {
-          const { isWakeWord, command } = extractWakeCommand(clean);
-          if (!isWakeWord) return; // silently ignore, loop auto-restarts
-          if (command) {
-            setInput(command);
-            sendVoiceMessageRef.current(command);
-          }
-          // Just "Hey Chat" with no command — loop restarts, waits for next utterance
-          return;
-        }
-
-        // Normal Chat mode (no wake word) — auto-send
+        // Chat mode — auto-send transcribed text
         setInput(clean);
         sendVoiceMessageRef.current(clean);
         return;
@@ -162,7 +148,7 @@ export default function ChatPage() {
         setInput(clean);
       }
     },
-    [chatMode, sttMode, wakeWordEnabled]
+    [chatMode, sttMode]
   );
 
   const {
@@ -177,7 +163,6 @@ export default function ChatPage() {
     token,
     onFinalTranscript,
     autoStopOnSilence: chatMode || sttMode,
-    verifySpeaker: chatMode && speakerVerifyEnabled,
   });
 
   // ── Chat auto-restart loop ──────────────────────────────────────────────
@@ -785,12 +770,10 @@ export default function ChatPage() {
     if (chatMode) {
       if (isSpeaking) return "Chat is speaking...";
       if (isTranscribing) return "Transcribing...";
-      if (isListening) return wakeWordEnabled ? 'Listening for "Hey Chat"...' : "Listening...";
+      if (isListening) return "Listening...";
       if (isSearching) return "Searching the web...";
       if (loading) return "Thinking...";
-      return wakeWordEnabled
-        ? 'Say "Hey Chat" to start · "stop" or "goodbye" to end'
-        : 'Listening loop active · say "stop" or "goodbye" to end';
+      return 'Listening loop active · say "stop" or "goodbye" to end';
     }
     if (sttMode) {
       if (isTranscribing) return "Transcribing...";
@@ -931,17 +914,8 @@ export default function ChatPage() {
             {/* Chat Voice Settings panel */}
             <VoiceSettings
               open={voiceSettingsOpen}
-              token={token}
               settings={voiceSettings}
               onChange={setVoiceSettings}
-              wakeWordEnabled={wakeWordEnabled}
-              onWakeWordToggle={setWakeWordEnabled}
-              speakerVerifyEnabled={speakerVerifyEnabled}
-              onSpeakerVerifyToggle={setSpeakerVerifyEnabled}
-              onEnrollStart={() => abortListening()}
-              onEnrollEnd={() => {
-                if (chatMode && chatLoopRef.current) void startListening();
-              }}
               onClose={() => setVoiceSettingsOpen(false)}
             />
 
@@ -1037,20 +1011,11 @@ export default function ChatPage() {
               </div>
             )}
 
-            <div className={`glass rounded-2xl p-2 flex flex-col md:flex-row md:items-end gap-2 transition-all ${isDragging ? "border border-[#00ff41]/30" : ""}`}>
-              {/* Tool buttons — wrap on mobile, inline on desktop */}
-              <div className="flex items-center gap-1.5 flex-wrap md:contents">
-                {/* Image upload */}
+            <div className={`glass rounded-2xl p-2 flex flex-col gap-2 transition-all ${isDragging ? "border border-[#00ff41]/30" : ""}`}>
+              {/* Tool buttons */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {/* Hidden file inputs */}
                 <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageSelect} className="hidden" />
-                <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06] transition-all shrink-0" title="Add image" aria-label="Add image">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="4" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-                  </svg>
-                </button>
-
-                {/* Attach document to chat */}
                 <input
                   ref={attachFileInputRef}
                   type="file"
@@ -1062,23 +1027,6 @@ export default function ChatPage() {
                   }}
                   className="hidden"
                 />
-                <button
-                  onClick={() => attachFileInputRef.current?.click()}
-                  disabled={attachUploading}
-                  className={`p-2 rounded-xl transition-all shrink-0 ${
-                    attachments.length > 0
-                      ? "text-[#00ff41] hover:bg-[#00ff41]/10"
-                      : "text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06]"
-                  } disabled:opacity-40`}
-                  title={attachUploading ? "Attaching..." : "Attach file to chat"}
-                  aria-label={attachUploading ? "Attaching..." : "Attach file to chat"}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                  </svg>
-                </button>
-
-                {/* Document upload for RAG */}
                 <input
                   ref={docFileInputRef}
                   type="file"
@@ -1090,28 +1038,124 @@ export default function ChatPage() {
                   }}
                   className="hidden"
                 />
-                <button
-                  onClick={() => setDocPanelOpen((p) => !p)}
-                  className={`relative p-2 rounded-xl transition-all shrink-0 ${
-                    docPanelOpen
-                      ? "bg-[#33ccff]/20 text-[#66ddff]"
-                      : documents.length > 0
-                        ? "text-[#66ddff] hover:bg-[#33ccff]/10"
-                        : "text-[#999] hover:text-[#66ddff] hover:bg-white/[0.06]"
-                  }`}
-                  title={`Brain${documents.length ? ` (${documents.length})` : ""}`}
-                  aria-label={`Brain${documents.length ? ` (${documents.length} documents)` : ""}`}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9.5 2a3.5 3.5 0 0 0-3.2 4.8A3.5 3.5 0 0 0 4 10.5a3.5 3.5 0 0 0 1.3 2.7A3.5 3.5 0 0 0 5 15a3.5 3.5 0 0 0 3.5 3.5h1V22h5v-3.5h1A3.5 3.5 0 0 0 19 15a3.5 3.5 0 0 0-.3-1.8A3.5 3.5 0 0 0 20 10.5a3.5 3.5 0 0 0-2.3-3.2A3.5 3.5 0 0 0 14.5 2h-5z" />
-                    <path d="M12 2v20" />
-                  </svg>
-                  {documents.length > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-[#33ccff] text-black text-[8px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center">{documents.length}</span>
-                  )}
-                </button>
 
-                {/* Think mode toggle */}
+                {/* ── EXPANDABLE TOOLS MENU ──────────────────────────────── */}
+                <div className="flex items-center gap-1.5">
+                  {/* "+" toggle button */}
+                  <button
+                    onClick={() => setToolsOpen(prev => !prev)}
+                    className={`p-2 rounded-xl transition-all duration-200 shrink-0 ${
+                      toolsOpen
+                        ? "bg-white/[0.08] text-[#f0f0f0] rotate-45"
+                        : "text-[#999] hover:text-[#f0f0f0] hover:bg-white/[0.06]"
+                    }`}
+                    title={toolsOpen ? "Close tools" : "Open tools"}
+                    aria-label={toolsOpen ? "Close tools" : "Open tools"}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                  </button>
+
+                  {/* Expandable tool icons */}
+                  <div className={`flex items-center gap-1.5 overflow-hidden transition-all duration-300 ease-out ${
+                    toolsOpen ? "max-w-[300px] opacity-100" : "max-w-0 opacity-0"
+                  }`}>
+                    {/* Image upload */}
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={mode === "instant"}
+                      className={`p-2 rounded-xl transition-all shrink-0 ${
+                        mode === "instant"
+                          ? "text-[#555] cursor-not-allowed opacity-40"
+                          : "text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06]"
+                      }`}
+                      title={mode === "instant" ? "Image not supported in Fast mode" : "Add image"}
+                      aria-label={mode === "instant" ? "Image not supported in Fast mode" : "Add image"}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="4" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                      </svg>
+                    </button>
+
+                    {/* Attach file to chat */}
+                    <button
+                      onClick={() => attachFileInputRef.current?.click()}
+                      disabled={attachUploading}
+                      className={`p-2 rounded-xl transition-all shrink-0 ${
+                        attachments.length > 0
+                          ? "text-[#00ff41] hover:bg-[#00ff41]/10"
+                          : "text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06]"
+                      } disabled:opacity-40`}
+                      title={attachUploading ? "Attaching..." : "Attach file to chat"}
+                      aria-label={attachUploading ? "Attaching..." : "Attach file to chat"}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                      </svg>
+                    </button>
+
+                    {/* Brain / Documents */}
+                    <button
+                      onClick={() => setDocPanelOpen((p) => !p)}
+                      className={`relative p-2 rounded-xl transition-all shrink-0 ${
+                        docPanelOpen
+                          ? "bg-[#33ccff]/20 text-[#66ddff]"
+                          : documents.length > 0
+                            ? "text-[#66ddff] hover:bg-[#33ccff]/10"
+                            : "text-[#999] hover:text-[#66ddff] hover:bg-white/[0.06]"
+                      }`}
+                      title={`Brain${documents.length ? ` (${documents.length})` : ""}`}
+                      aria-label={`Brain${documents.length ? ` (${documents.length} documents)` : ""}`}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9.5 2a3.5 3.5 0 0 0-3.2 4.8A3.5 3.5 0 0 0 4 10.5a3.5 3.5 0 0 0 1.3 2.7A3.5 3.5 0 0 0 5 15a3.5 3.5 0 0 0 3.5 3.5h1V22h5v-3.5h1A3.5 3.5 0 0 0 19 15a3.5 3.5 0 0 0-.3-1.8A3.5 3.5 0 0 0 20 10.5a3.5 3.5 0 0 0-2.3-3.2A3.5 3.5 0 0 0 14.5 2h-5z" />
+                        <path d="M12 2v20" />
+                      </svg>
+                      {documents.length > 0 && (
+                        <span className="absolute -top-1 -right-1 bg-[#33ccff] text-black text-[8px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center">{documents.length}</span>
+                      )}
+                    </button>
+
+                    {/* Web Search */}
+                    <button
+                      onClick={() => setWebSearchEnabled(prev => !prev)}
+                      className={`p-2 rounded-xl transition-all shrink-0 ${
+                        webSearchEnabled
+                          ? "bg-[#3399ff]/15 text-[#66bbff]"
+                          : "text-[#999] hover:text-[#66bbff] hover:bg-white/[0.06]"
+                      }`}
+                      title={webSearchEnabled ? "Web search on" : "Web search off"}
+                      aria-label="Toggle web search"
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="2" y1="12" x2="22" y2="12" />
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                      </svg>
+                    </button>
+
+                    {/* Chat conversation mode */}
+                    <button
+                      onClick={() => chatMode ? disableChatMode() : enableChatMode()}
+                      className={`p-2 rounded-xl transition-all shrink-0 ${
+                        chatMode
+                          ? "bg-[#33ccff]/20 text-[#66ddff]"
+                          : "text-[#999] hover:text-[#66ddff] hover:bg-white/[0.06]"
+                      }`}
+                      title="Chat conversation mode — voice chat with TTS"
+                      aria-label="Chat conversation mode"
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                {/* ── THINK MODE TOGGLE ──────────────────────────────────── */}
                 <button
                   onClick={() => setMode(mode === "instant" ? "thinking" : "instant")}
                   className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
@@ -1135,32 +1179,23 @@ export default function ChatPage() {
                   </button>
                 )}
 
-                {/* ── WEB SEARCH TOGGLE ──────────────────────────────────── */}
-                <button
-                  onClick={() => setWebSearchEnabled(prev => !prev)}
-                  className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                    webSearchEnabled
-                      ? "bg-[#3399ff]/15 text-[#66bbff] border border-[#3399ff]/30"
-                      : "text-[#999] hover:text-[#66bbff] border border-white/[0.08] hover:border-white/[0.15]"
-                  }`}
-                  title="Toggle web search"
-                  aria-label="Toggle web search"
-                >
-                  Search
-                </button>
-
                 {/* ── VOICE BUTTON (STT only) ─────────────────────────────── */}
                 <button
                   onClick={() => sttMode ? disableSttMode() : enableSttMode()}
-                  className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
+                  className={`p-2 rounded-xl transition-all shrink-0 ${
                     sttMode
-                      ? "bg-[#00ff41]/20 text-[#00ff41] border border-[#00ff41]/40"
-                      : "text-[#999] border border-white/[0.08] hover:text-[#00ff41] hover:border-white/[0.15]"
+                      ? "bg-[#00ff41]/20 text-[#00ff41]"
+                      : "text-[#999] hover:text-[#00ff41] hover:bg-white/[0.06]"
                   }`}
                   title="Voice input — speech to text"
                   aria-label="Voice input"
                 >
-                  Voice
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="23" />
+                    <line x1="8" y1="23" x2="16" y2="23" />
+                  </svg>
                 </button>
 
                 {/* STT mic button — only visible in stt mode */}
@@ -1192,20 +1227,6 @@ export default function ChatPage() {
                     )}
                   </button>
                 )}
-
-                {/* ── CHAT BUTTON (full conversation) ────────────────────── */}
-                <button
-                  onClick={() => chatMode ? disableChatMode() : enableChatMode()}
-                  className={`text-[11px] px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                    chatMode
-                      ? "bg-[#33ccff]/20 text-[#66ddff] border border-[#33ccff]/40"
-                      : "text-[#999] border border-white/[0.08] hover:text-[#66ddff] hover:border-white/[0.15]"
-                  }`}
-                  title="Chat conversation mode — voice chat with TTS"
-                  aria-label="Chat conversation mode"
-                >
-                  Chat
-                </button>
 
                 {/* Chat controls — only visible in Chat mode */}
                 {chatMode && (
@@ -1288,7 +1309,7 @@ export default function ChatPage() {
                   onChange={(e) => { setInput(e.target.value); resizeTextarea(); }}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  placeholder={chatMode ? "Or type a message..." : "Send a message... (paste or drop an image)"}
+                  placeholder="Type anything..."
                   rows={1}
                   className="flex-1 bg-transparent text-[#f0f0f0] text-sm resize-none focus:outline-none placeholder-[#888] min-h-[36px] max-h-[200px] py-2 px-1"
                   style={{ overflowY: "hidden" }}

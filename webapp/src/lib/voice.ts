@@ -35,7 +35,7 @@ export const KOKORO_VOICES = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// Stop / Wake-word detection
+// Stop detection
 // ---------------------------------------------------------------------------
 
 const STOP_PHRASES = [
@@ -54,25 +54,6 @@ const STOP_PHRASES = [
 export function isStopCommand(text: string): boolean {
   const normalized = text.toLowerCase().trim().replace(/[.,!?]/g, "");
   return STOP_PHRASES.includes(normalized);
-}
-
-const WAKE_PHRASES = ["hey chat", "hello chat", "hi chat", "chat"];
-
-export function extractWakeCommand(transcript: string): {
-  isWakeWord: boolean;
-  command: string;
-} {
-  const lower = transcript.toLowerCase().trim();
-  for (const phrase of WAKE_PHRASES) {
-    if (lower === phrase || lower.startsWith(phrase + " ") || lower.startsWith(phrase + ",")) {
-      const command = transcript
-        .slice(phrase.length)
-        .replace(/^[,.\s]+/, "")
-        .trim();
-      return { isWakeWord: true, command };
-    }
-  }
-  return { isWakeWord: false, command: "" };
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +180,6 @@ export function useSpeechRecognition(options?: {
   token?: string | null;
   onFinalTranscript?: (text: string) => void;
   autoStopOnSilence?: boolean;
-  verifySpeaker?: boolean;
 }) {
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -218,9 +198,6 @@ export function useSpeechRecognition(options?: {
   tokenRef.current = options?.token;
   const autoStopRef = useRef(options?.autoStopOnSilence ?? false);
   autoStopRef.current = options?.autoStopOnSilence ?? false;
-  const verifySpeakerRef = useRef(options?.verifySpeaker ?? false);
-  verifySpeakerRef.current = options?.verifySpeaker ?? false;
-
   const supportsVoiceInput =
     typeof navigator !== "undefined" &&
     typeof navigator.mediaDevices?.getUserMedia === "function";
@@ -288,15 +265,7 @@ export function useSpeechRecognition(options?: {
 
         setIsTranscribing(true);
         try {
-          const result = await transcribeAudio(
-            token,
-            blob,
-            verifySpeakerRef.current
-          );
-          if (verifySpeakerRef.current && result.speaker_verified === false) {
-            // Not the enrolled speaker — silently discard
-            return;
-          }
+          const result = await transcribeAudio(token, blob);
           const text = result.text;
           setTranscript(text);
           if (text.trim() && onFinalTranscriptRef.current) {
