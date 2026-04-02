@@ -271,7 +271,10 @@ class WebSearchService:
         """
         limit = num_results or self.max_results
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # Short connect timeout (1s) so we fail fast when offline;
+            # the read timeout stays at the configured value for slow searches.
+            timeout = httpx.Timeout(self.timeout, connect=1.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.get(
                     f"{self.base_url}/search",
                     params={

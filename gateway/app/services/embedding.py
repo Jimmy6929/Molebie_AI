@@ -32,11 +32,19 @@ class EmbeddingService:
             )
 
         print(f"[embedding] Loading model: {self.model_name} (local_files_only={self.local_files_only})")
-        self._model = SentenceTransformer(
-            self.model_name,
-            trust_remote_code=True,
-            local_files_only=self.local_files_only,
-        )
+        try:
+            self._model = SentenceTransformer(
+                self.model_name,
+                trust_remote_code=True,
+                local_files_only=self.local_files_only,
+            )
+        except OSError as exc:
+            if self.local_files_only:
+                raise RuntimeError(
+                    f"Embedding model '{self.model_name}' not found in local cache. "
+                    "Run once with internet to download, then offline use will work."
+                ) from exc
+            raise
         self._dimension = self._model.get_sentence_embedding_dimension()
         print(f"[embedding] Model loaded — dim={self._dimension}")
 

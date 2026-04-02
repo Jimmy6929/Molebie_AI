@@ -190,10 +190,12 @@ class MemoryService:
         self,
         user_id: str,
         query: str,
+        timeout: float = 5.0,
     ) -> List[Dict[str, Any]]:
         """Retrieve memories relevant to the current query.
 
         Called at query time (inline, not background) to inject context.
+        Times out after *timeout* seconds so chat is never blocked (offline-safe).
         """
         if not self.enabled:
             return []
@@ -201,9 +203,14 @@ class MemoryService:
         from app.services.embedding import get_embedding_service
         embedding_service = get_embedding_service()
 
-        query_embedding = await asyncio.to_thread(
-            embedding_service.embed, query
-        )
+        try:
+            query_embedding = await asyncio.wait_for(
+                asyncio.to_thread(embedding_service.embed, query),
+                timeout=timeout,
+            )
+        except (asyncio.TimeoutError, Exception) as exc:
+            print(f"[memory] Embedding timed out or failed ({exc}), skipping memory retrieval")
+            return []
 
         memories = await self._search_similar(
             user_id, query_embedding,

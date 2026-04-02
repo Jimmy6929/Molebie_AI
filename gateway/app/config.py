@@ -112,7 +112,7 @@ class Settings(BaseSettings):
     # ── RAG / Embeddings ─────────────────────────────────────
     rag_enabled: bool = True
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"  # default; override via EMBEDDING_MODEL in .env
-    embedding_local_only: bool = False  # Use cached model only (6–7x faster load); set True after first run
+    embedding_local_only: bool = True  # Use cached model only; avoids HuggingFace Hub check (offline-safe)
     embedding_preload: bool = False  # Load embedding model at startup (trade startup time for faster first chat)
     rag_match_count: int = 20  # over-fetch for reranking
     rag_match_threshold: float = 0.3
