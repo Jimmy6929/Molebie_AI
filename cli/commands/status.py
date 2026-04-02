@@ -39,9 +39,17 @@ def status() -> None:
         f"Setup type:  [cyan]{config.setup_type.value}[/cyan]",
         f"Backend:     [cyan]{config.inference_backend.value}[/cyan]",
     ]
-    if config.setup_type == SetupType.TWO_MACHINE:
-        lines.append(f"GPU IP:      [cyan]{config.gpu_ip}[/cyan]")
-        lines.append(f"Server IP:   [cyan]{config.server_ip}[/cyan]")
+    if config.setup_type == SetupType.DISTRIBUTED:
+        local_svcs = [n for n, r in [("LLM Server", config.run_inference),
+                                      ("Gateway", config.run_gateway),
+                                      ("Webapp", config.run_webapp)] if r]
+        lines.append(f"Local:       [cyan]{', '.join(local_svcs)}[/cyan]")
+        if not config.run_inference:
+            lines.append(f"LLM host:    [cyan]{config.inference_host}[/cyan]")
+        if not config.run_gateway:
+            lines.append(f"Gateway host:[cyan]{config.gateway_host}[/cyan]")
+        if not config.run_webapp:
+            lines.append(f"Webapp host: [cyan]{config.webapp_host}[/cyan]")
     lines.append(f"Search:      {'[green]enabled[/green]' if config.search_enabled else '[dim]disabled[/dim]'}")
     lines.append(f"RAG:         {'[green]enabled[/green]' if config.rag_enabled else '[dim]disabled[/dim]'}")
     lines.append(f"Voice:       {'[green]enabled[/green]' if config.voice_enabled else '[dim]disabled[/dim]'}")
@@ -51,9 +59,10 @@ def status() -> None:
     console.print(Panel("\n".join(lines), title="Configuration", expand=False))
     console.print()
 
-    # Service status table
-    ip = config.server_ip if config.setup_type == SetupType.TWO_MACHINE else "localhost"
-    gpu_ip = config.gpu_ip if config.setup_type == SetupType.TWO_MACHINE else "localhost"
+    # Service status table — derive per-service hosts
+    inference_host = "localhost" if config.run_inference else config.inference_host
+    gateway_host = "localhost" if config.run_gateway else config.gateway_host
+    webapp_host = "localhost" if config.run_webapp else config.webapp_host
 
     table = Table(show_header=True, header_style="bold", expand=False)
     table.add_column("Service", style="cyan", min_width=16)
@@ -61,23 +70,23 @@ def status() -> None:
     table.add_column("Status", min_width=10)
 
     services: list[tuple[str, str]] = [
-        ("Gateway", f"http://{ip}:8000/health"),
-        ("Webapp", f"http://{ip}:3000"),
+        ("Gateway", f"http://{gateway_host}:8000/health"),
+        ("Webapp", f"http://{webapp_host}:3000"),
     ]
 
     if config.inference_backend == InferenceBackend.MLX:
-        services.append(("MLX Thinking", f"http://{gpu_ip}:8080/v1/models"))
-        services.append(("MLX Instant", f"http://{gpu_ip}:8081/v1/models"))
+        services.append(("MLX Thinking", f"http://{inference_host}:8080/v1/models"))
+        services.append(("MLX Instant", f"http://{inference_host}:8081/v1/models"))
     elif config.inference_backend == InferenceBackend.OLLAMA:
-        services.append(("Ollama", f"http://{gpu_ip}:11434/v1/models"))
+        services.append(("Ollama", f"http://{inference_host}:11434/v1/models"))
     elif config.inference_backend == InferenceBackend.OPENAI_COMPATIBLE:
         if config.inference_url:
             services.append(("Inference", f"{config.inference_url}/v1/models"))
 
     if config.search_enabled:
-        services.append(("SearXNG", f"http://{ip}:8888/"))
+        services.append(("SearXNG", f"http://{gateway_host}:8888/"))
     if config.voice_enabled:
-        services.append(("Kokoro TTS", f"http://{ip}:8880/health"))
+        services.append(("Kokoro TTS", f"http://{gateway_host}:8880/health"))
 
     for name, url in services:
         table.add_row(name, url, _health(url))

@@ -17,6 +17,7 @@ from cli.models.config import (
     ModelProfile,
     SetupType,
 )
+
 from cli.services import (
     backend_setup,
     config_manager,
@@ -52,7 +53,7 @@ def _auto_configure(config: MolebieConfig, sys_info: SystemInfo) -> None:
     """Set sensible defaults without prompting."""
     config.setup_type = SetupType.SINGLE
 
-    rec = backend_setup.detect_recommended_backend(sys_info, config.setup_type)
+    rec = backend_setup.detect_recommended_backend(sys_info, config.run_inference)
     config.inference_backend = rec.backend
     print_ok(f"Backend: {rec.backend.value} — {rec.reason}")
 
@@ -132,30 +133,78 @@ def _check_system(quick: bool = False) -> SystemInfo:
 # ──────────────────────────────────────────────────────────────
 
 def _ask_setup_type(config: MolebieConfig) -> None:
-    print_step_header(2, 8, "Setup Type")
+    print_step_header(2, 8, "Deployment Layout")
     choice = ask_choice(
         "How will you run Molebie AI?",
         [
-            "Single machine — everything on this Mac",
-            "Two machines — GPU on a separate Mac (Tailscale/LAN)",
+            "All-in-one — everything on this Mac",
+            "Distributed — choose what this machine runs",
         ],
-        default="Single machine — everything on this Mac",
+        default="All-in-one — everything on this Mac",
     )
 
-    if "Two" in choice:
-        config.setup_type = SetupType.TWO_MACHINE
+    if "Distributed" in choice:
+        config.setup_type = SetupType.DISTRIBUTED
         console.print()
-        console.print("  Enter the IP addresses of your two machines.")
-        console.print("  [dim](Use Tailscale IPs for reliable connectivity)[/dim]")
-        config.gpu_ip = ask_text("  IP of GPU machine (runs inference)", default="")
-        config.server_ip = ask_text("  IP of THIS machine (runs gateway/webapp)", default="")
-        if not config.gpu_ip or not config.server_ip:
-            print_fail("Both IPs are required for two-machine setup.")
+        console.print("  [heading]What will THIS machine run?[/heading]")
+        console.print("  [dim](Services not selected here must already be running elsewhere)[/dim]")
+        console.print()
+
+        config.run_inference = ask_confirm(
+            "  Run LLM Server on this machine? (MLX/Ollama, needs GPU)", default=True,
+        )
+        config.run_gateway = ask_confirm(
+            "  Run Gateway on this machine? (API + database)", default=True,
+        )
+        config.run_webapp = ask_confirm(
+            "  Run Webapp on this machine? (Next.js frontend)", default=True,
+        )
+
+        if not any([config.run_inference, config.run_gateway, config.run_webapp]):
+            print_fail("At least one service must run on this machine.")
             raise typer.Exit(1)
-        print_ok(f"Two-machine mode: GPU={config.gpu_ip}, Server={config.server_ip}")
+
+        # Ask for remote service addresses
+        remote_services = []
+        if not config.run_inference:
+            remote_services.append(("inference_host", "LLM Server host"))
+        if not config.run_gateway:
+            remote_services.append(("gateway_host", "Gateway host"))
+        if not config.run_webapp:
+            remote_services.append(("webapp_host", "Webapp host"))
+
+        if remote_services:
+            console.print()
+            console.print("  [heading]Remote service addresses[/heading]")
+            console.print("  [dim](Tip: use Tailscale IPs for reliable connectivity)[/dim]")
+            console.print()
+            for field_name, label in remote_services:
+                host = ask_text(f"  {label}", default="")
+                if not host:
+                    print_fail(f"{label} is required when the service runs remotely.")
+                    raise typer.Exit(1)
+                setattr(config, field_name, host)
+
+        # Summary
+        local = [name for name, runs in [
+            ("LLM Server", config.run_inference),
+            ("Gateway", config.run_gateway),
+            ("Webapp", config.run_webapp),
+        ] if runs]
+        remote = []
+        if not config.run_inference:
+            remote.append(f"LLM Server \u2192 {config.inference_host}")
+        if not config.run_gateway:
+            remote.append(f"Gateway \u2192 {config.gateway_host}")
+        if not config.run_webapp:
+            remote.append(f"Webapp \u2192 {config.webapp_host}")
+
+        print_ok(f"This machine: {', '.join(local)}")
+        for r in remote:
+            print_ok(f"Remote: {r}")
     else:
         config.setup_type = SetupType.SINGLE
-        print_ok("Single-machine mode: all services on localhost")
+        print_ok("All-in-one mode: all services on localhost")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -165,7 +214,7 @@ def _ask_setup_type(config: MolebieConfig) -> None:
 def _ask_backend(config: MolebieConfig, sys_info: SystemInfo) -> None:
     print_step_header(3, 8, "Inference Backend")
 
-    rec = backend_setup.detect_recommended_backend(sys_info, config.setup_type)
+    rec = backend_setup.detect_recommended_backend(sys_info, config.run_inference)
     print_info(f"Recommendation: {rec.backend.value} — {rec.reason}")
     console.print()
 
@@ -254,9 +303,17 @@ def _show_review(config: MolebieConfig) -> None:
     table.add_column("Value")
 
     table.add_row("Setup type", config.setup_type.value)
-    if config.setup_type == SetupType.TWO_MACHINE:
-        table.add_row("GPU IP", config.gpu_ip)
-        table.add_row("Server IP", config.server_ip)
+    if config.setup_type == SetupType.DISTRIBUTED:
+        local_svcs = [n for n, r in [("LLM Server", config.run_inference),
+                                      ("Gateway", config.run_gateway),
+                                      ("Webapp", config.run_webapp)] if r]
+        table.add_row("Local services", ", ".join(local_svcs))
+        if not config.run_inference:
+            table.add_row("LLM Server host", config.inference_host)
+        if not config.run_gateway:
+            table.add_row("Gateway host", config.gateway_host)
+        if not config.run_webapp:
+            table.add_row("Webapp host", config.webapp_host)
     table.add_row("Backend", config.inference_backend.value)
     table.add_row("Model profile", config.model_profile.value)
     if config.thinking_model:
@@ -389,26 +446,24 @@ def _install_webapp_deps(root) -> None:
 
 def _setup_backend(config: MolebieConfig, sys_info: SystemInfo) -> None:
     """Run real backend setup: install packages, download models."""
-    is_two_machine = config.setup_type == SetupType.TWO_MACHINE
-
-    if is_two_machine:
-        print_info(f"Two-machine mode: inference runs on {config.gpu_ip}")
-        print_info("Backend setup is skipped — you need to set up the GPU machine yourself.")
+    if not config.run_inference:
+        print_info(f"Inference is remote ({config.inference_host})")
+        print_info("Backend setup is skipped — set up the LLM server on that machine.")
         console.print()
         if config.inference_backend == InferenceBackend.MLX:
-            console.print(f"    On the GPU machine ({config.gpu_ip}), run:")
+            console.print(f"    On the LLM machine ({config.inference_host}), run:")
             console.print("      [bold]python -m pip install -U mlx-vlm[/bold]")
             console.print("      [bold]make mlx-thinking[/bold]    # port 8080")
             console.print("      [bold]make mlx-instant[/bold]     # port 8081 (optional)")
         elif config.inference_backend == InferenceBackend.OLLAMA:
-            console.print(f"    On the GPU machine ({config.gpu_ip}), run:")
+            console.print(f"    On the LLM machine ({config.inference_host}), run:")
             console.print("      [bold]ollama serve[/bold]")
             if config.thinking_model:
                 console.print(f"      [bold]ollama pull {config.thinking_model}[/bold]")
             if config.instant_model and config.instant_model != config.thinking_model:
                 console.print(f"      [bold]ollama pull {config.instant_model}[/bold]")
         else:
-            console.print(f"    Ensure your inference server is running on {config.gpu_ip}")
+            console.print(f"    Ensure your inference server is running on {config.inference_host}")
         console.print()
         return
 
@@ -587,41 +642,44 @@ def _execute_install(
         print_ok(".env.local created")
     console.print()
 
-    # 7c. Install gateway dependencies
-    console.print("[heading]Installing dependencies...[/heading]")
-    _install_gateway_deps(root)
+    # 7c. Install gateway dependencies (only if gateway runs here)
+    if config.run_gateway:
+        console.print("[heading]Installing dependencies...[/heading]")
+        _install_gateway_deps(root)
 
-    # 7d. Install webapp dependencies
-    _install_webapp_deps(root)
-    console.print()
+    # 7d. Install webapp dependencies (only if webapp runs here)
+    if config.run_webapp:
+        _install_webapp_deps(root)
+
+    if config.run_gateway or config.run_webapp:
+        console.print()
 
     # 7e. Data directory (already created at top of _execute_install)
-    print_ok("Data directory ready (SQLite DB will initialize on first start)")
-    console.print()
+    if config.run_gateway:
+        print_ok("Data directory ready (SQLite DB will initialize on first start)")
+        console.print()
 
     # 7f. Backend auto-setup
     console.print("[heading]Setting up inference backend...[/heading]")
     _setup_backend(config, sys_info)
     console.print()
 
-    # 7g. Embedding model — shared infrastructure for memory + RAG.
-    # Memory is always on (no installer toggle), so this always runs.
-    # Must be outside the feature gate so it runs even if all features are disabled.
-    # Read the actual configured model from .env.local (not hardcoded default).
-    console.print("[heading]Caching embedding model...[/heading]")
-    embedding_model = config_manager.read_embedding_model()
-    r = feature_setup.ensure_embedding_model(model=embedding_model)
-    if r.success:
-        print_ok(r.message)
-    else:
-        print_warn(r.message)
-        print_info("Core chat still works — memory and RAG need this model.")
-    for w in r.warnings:
-        print_warn(w)
-    console.print()
+    # 7g. Embedding model — only needed if gateway runs here (memory + RAG).
+    if config.run_gateway:
+        console.print("[heading]Caching embedding model...[/heading]")
+        embedding_model = config_manager.read_embedding_model()
+        r = feature_setup.ensure_embedding_model(model=embedding_model)
+        if r.success:
+            print_ok(r.message)
+        else:
+            print_warn(r.message)
+            print_info("Core chat still works — memory and RAG need this model.")
+        for w in r.warnings:
+            print_warn(w)
+        console.print()
 
-    # 7h. Feature auto-setup
-    if config.search_enabled or config.voice_enabled or config.rag_enabled:
+    # 7h. Feature auto-setup (features are gateway-side)
+    if config.run_gateway and (config.search_enabled or config.voice_enabled or config.rag_enabled):
         console.print("[heading]Setting up features...[/heading]")
         try:
             _setup_features(config, root)
@@ -649,9 +707,17 @@ def _show_summary(config: MolebieConfig) -> None:
     table.add_column("Value")
 
     table.add_row("Setup", config.setup_type.value)
-    if config.setup_type == SetupType.TWO_MACHINE:
-        table.add_row("GPU machine", config.gpu_ip)
-        table.add_row("Server machine", config.server_ip)
+    if config.setup_type == SetupType.DISTRIBUTED:
+        local_svcs = [n for n, r in [("LLM Server", config.run_inference),
+                                      ("Gateway", config.run_gateway),
+                                      ("Webapp", config.run_webapp)] if r]
+        table.add_row("Local services", ", ".join(local_svcs))
+        if not config.run_inference:
+            table.add_row("LLM Server host", config.inference_host)
+        if not config.run_gateway:
+            table.add_row("Gateway host", config.gateway_host)
+        if not config.run_webapp:
+            table.add_row("Webapp host", config.webapp_host)
     table.add_row("Backend", config.inference_backend.value)
     table.add_row("Model profile", config.model_profile.value)
     if config.thinking_model:

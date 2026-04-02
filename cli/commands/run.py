@@ -34,7 +34,7 @@ def _ensure_ready() -> MolebieConfig:
         sys_info = get_system_info(root)
 
         # Detect best backend
-        rec = backend_setup.detect_recommended_backend(sys_info, config.setup_type)
+        rec = backend_setup.detect_recommended_backend(sys_info, config.run_inference)
         config.inference_backend = rec.backend
         print_ok(f"Backend: {rec.backend.value} ({rec.reason})")
 
@@ -103,26 +103,36 @@ def _ensure_ready() -> MolebieConfig:
     return config
 
 
-def _check_remote_inference(config) -> None:
-    """For two-machine setups, verify the remote GPU is reachable before starting local services."""
-    if config.setup_type != SetupType.TWO_MACHINE:
+def _check_remote_services(config) -> None:
+    """For distributed setups, verify remote services are reachable before starting."""
+    if config.setup_type != SetupType.DISTRIBUTED:
         return
 
-    gpu_ip = config.gpu_ip
+    endpoints: list[tuple[str, str]] = []
 
-    if config.inference_backend == InferenceBackend.MLX:
-        endpoints = [
-            ("MLX Thinking", f"http://{gpu_ip}:8080/v1/models"),
-            ("MLX Instant", f"http://{gpu_ip}:8081/v1/models"),
-        ]
-    elif config.inference_backend == InferenceBackend.OLLAMA:
-        endpoints = [("Ollama", f"http://{gpu_ip}:11434/v1/models")]
-    elif config.inference_backend == InferenceBackend.OPENAI_COMPATIBLE and config.inference_url:
-        endpoints = [("Inference", f"{config.inference_url}/v1/models")]
-    else:
+    # Check remote inference
+    if not config.run_inference:
+        host = config.inference_host
+        if config.inference_backend == InferenceBackend.MLX:
+            endpoints.append(("MLX Thinking", f"http://{host}:8080/v1/models"))
+            endpoints.append(("MLX Instant", f"http://{host}:8081/v1/models"))
+        elif config.inference_backend == InferenceBackend.OLLAMA:
+            endpoints.append(("Ollama", f"http://{host}:11434/v1/models"))
+        elif config.inference_backend == InferenceBackend.OPENAI_COMPATIBLE and config.inference_url:
+            endpoints.append(("Inference", f"{config.inference_url}/v1/models"))
+
+    # Check remote gateway
+    if not config.run_gateway:
+        endpoints.append(("Gateway", f"http://{config.gateway_host}:8000/health"))
+
+    # Check remote webapp
+    if not config.run_webapp:
+        endpoints.append(("Webapp", f"http://{config.webapp_host}:3000"))
+
+    if not endpoints:
         return
 
-    console.print(f"[heading]Checking remote inference ({gpu_ip})...[/heading]")
+    console.print("[heading]Checking remote services...[/heading]")
     all_ok = True
     for name, url in endpoints:
         try:
@@ -141,8 +151,8 @@ def _check_remote_inference(config) -> None:
 
     if not all_ok:
         console.print()
-        console.print(f"[warn]Inference on GPU machine ({gpu_ip}) is not fully reachable.[/warn]")
-        console.print(f"  Make sure the LLM servers are running on {gpu_ip}.")
+        console.print("[warn]Some remote services are not reachable.[/warn]")
+        console.print("  Make sure the services are running on their respective machines.")
         console.print()
     else:
         console.print()
@@ -163,7 +173,7 @@ def run(
 
     config = _ensure_ready()
 
-    _check_remote_inference(config)
+    _check_remote_services(config)
 
     runner = ServiceRunner()
     runner.start_services(config, service_filter=service, skip_inference=no_inference)

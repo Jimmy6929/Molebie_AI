@@ -6,7 +6,7 @@ import re
 import secrets
 from pathlib import Path
 
-from cli.models.config import InferenceBackend, MolebieConfig, SetupType
+from cli.models.config import InferenceBackend, MolebieConfig
 from cli.services.config_manager import get_project_root
 
 
@@ -130,24 +130,27 @@ def init_env_local(force: bool = False) -> Path:
 def _build_overrides(config: MolebieConfig) -> dict[str, str]:
     """Build a key→value override map from the config."""
     overrides: dict[str, str] = {}
-    gpu = config.gpu_ip
-    server = config.server_ip
 
-    # --- Setup type: IP replacements ---
-    if config.setup_type == SetupType.TWO_MACHINE:
-        # Inference URLs point to GPU machine
-        overrides["INFERENCE_THINKING_URL"] = f"http://{gpu}:8080"
-        overrides["INFERENCE_INSTANT_URL"] = f"http://{gpu}:8081"
-        # Gateway/Webapp URLs point to server machine
-        overrides["NEXT_PUBLIC_GATEWAY_URL"] = f"http://{server}:8000"
+    # Derive effective hosts for each service
+    inference_host = "localhost" if config.run_inference else config.inference_host
+    gateway_host = "localhost" if config.run_gateway else config.gateway_host
+    webapp_host = "localhost" if config.run_webapp else config.webapp_host
+
+    # --- Distributed: set remote URLs ---
+    if not config.run_inference:
+        overrides["INFERENCE_THINKING_URL"] = f"http://{inference_host}:8080"
+        overrides["INFERENCE_INSTANT_URL"] = f"http://{inference_host}:8081"
+    if not config.run_gateway:
+        overrides["NEXT_PUBLIC_GATEWAY_URL"] = f"http://{gateway_host}:8000"
+    if not config.run_webapp and webapp_host != "localhost":
         overrides["CORS_ORIGINS"] = (
-            f"http://localhost:3000,http://127.0.0.1:3000,http://{server}:3000"
+            f"http://localhost:3000,http://127.0.0.1:3000,http://{webapp_host}:3000"
         )
 
     # --- Inference backend ---
     if config.inference_backend == InferenceBackend.OLLAMA:
-        overrides["INFERENCE_THINKING_URL"] = f"http://{gpu}:11434"
-        overrides["INFERENCE_INSTANT_URL"] = f"http://{gpu}:11434"
+        overrides["INFERENCE_THINKING_URL"] = f"http://{inference_host}:11434"
+        overrides["INFERENCE_INSTANT_URL"] = f"http://{inference_host}:11434"
         overrides["INFERENCE_THINKING_API_PREFIX"] = "/v1"
         overrides["INFERENCE_INSTANT_API_PREFIX"] = "/v1"
         overrides["INFERENCE_THINKING_MODEL"] = (
@@ -173,9 +176,9 @@ def _build_overrides(config: MolebieConfig) -> dict[str, str]:
             overrides["INFERENCE_INSTANT_MODEL"] = config.instant_model
 
     elif config.inference_backend == InferenceBackend.MLX:
-        if config.setup_type == SetupType.TWO_MACHINE:
-            overrides["INFERENCE_THINKING_URL"] = f"http://{gpu}:8080"
-            overrides["INFERENCE_INSTANT_URL"] = f"http://{gpu}:8081"
+        if not config.run_inference:
+            overrides["INFERENCE_THINKING_URL"] = f"http://{inference_host}:8080"
+            overrides["INFERENCE_INSTANT_URL"] = f"http://{inference_host}:8081"
         overrides["INFERENCE_THINKING_API_PREFIX"] = ""
         overrides["INFERENCE_INSTANT_API_PREFIX"] = ""
         overrides["INFERENCE_THINKING_MODEL"] = (

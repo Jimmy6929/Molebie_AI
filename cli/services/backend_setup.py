@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from cli.models.config import InferenceBackend, SetupType
+from cli.models.config import InferenceBackend
 from cli.services.system_info import SystemInfo
 
 # ──────────────────────────────────────────────────────────────
@@ -68,13 +68,13 @@ class SetupResult:
 # ──────────────────────────────────────────────────────────────
 
 def detect_recommended_backend(
-    sys_info: SystemInfo, setup_type: SetupType
+    sys_info: SystemInfo, inference_is_local: bool = True
 ) -> BackendRecommendation:
     """Auto-detect the best backend for this system."""
-    if setup_type == SetupType.TWO_MACHINE and not sys_info.is_apple_silicon:
+    if not inference_is_local:
         return BackendRecommendation(
             InferenceBackend.OPENAI_COMPATIBLE,
-            "Two-machine setup — configure the remote endpoint URL",
+            "Inference is remote — configure the endpoint URL",
         )
     if sys_info.is_apple_silicon:
         return BackendRecommendation(

@@ -135,26 +135,27 @@ def doctor(
 
     # 4. Service health
     console.print("[heading]Services[/heading]")
-    ip = config.server_ip if config.setup_type.value == "two-machine" else "localhost"
-    gpu_ip = config.gpu_ip if config.setup_type.value == "two-machine" else "localhost"
+    inference_host = "localhost" if config.run_inference else config.inference_host
+    gateway_host = "localhost" if config.run_gateway else config.gateway_host
+    webapp_host = "localhost" if config.run_webapp else config.webapp_host
 
     services = [
-        (f"http://{ip}:8000/health", "Gateway"),
-        (f"http://{ip}:3000", "Webapp"),
+        (f"http://{gateway_host}:8000/health", "Gateway"),
+        (f"http://{webapp_host}:3000", "Webapp"),
     ]
 
     # Inference endpoints
     if config.inference_backend == InferenceBackend.MLX:
-        services.append((f"http://{gpu_ip}:8080/v1/models", "MLX Thinking"))
-        services.append((f"http://{gpu_ip}:8081/v1/models", "MLX Instant"))
+        services.append((f"http://{inference_host}:8080/v1/models", "MLX Thinking"))
+        services.append((f"http://{inference_host}:8081/v1/models", "MLX Instant"))
     elif config.inference_backend == InferenceBackend.OLLAMA:
-        services.append((f"http://{gpu_ip}:11434/v1/models", "Ollama"))
+        services.append((f"http://{inference_host}:11434/v1/models", "Ollama"))
 
-    # Optional services
+    # Optional services (co-located with gateway)
     if config.search_enabled:
-        services.append((f"http://{ip}:8888/", "SearXNG"))
+        services.append((f"http://{gateway_host}:8888/", "SearXNG"))
     if config.voice_enabled:
-        services.append((f"http://{ip}:8880/health", "Kokoro TTS"))
+        services.append((f"http://{gateway_host}:8880/health", "Kokoro TTS"))
 
     for url, name in services:
         if not _health_check(url, name):

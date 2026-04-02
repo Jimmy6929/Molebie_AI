@@ -14,7 +14,7 @@ import httpx
 
 from pathlib import Path
 
-from cli.models.config import InferenceBackend, MolebieConfig, SetupType
+from cli.models.config import InferenceBackend, MolebieConfig
 from cli.services.config_manager import get_project_root
 from cli.services.prerequisite_checker import check_docker, start_docker_daemon
 from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
@@ -53,43 +53,41 @@ def _wait_healthy(url: str, name: str, max_wait: int = 60) -> bool:
 def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
     """Build list of services to run based on config."""
     root = get_project_root()
-    ip = config.server_ip if config.setup_type == SetupType.TWO_MACHINE else "localhost"
-    gpu_ip = config.gpu_ip if config.setup_type == SetupType.TWO_MACHINE else "localhost"
-
     services: list[ServiceDef] = []
 
-    # 1. Docker services (optional)
-    if config.search_enabled:
-        services.append(ServiceDef(
-            name="SearXNG",
-            port=8888,
-            health_url=f"http://{ip}:8888/",
-            start_cmd=["docker", "compose", "up", "-d", "searxng"],
-            cwd=str(root),
-            is_docker=True,
-            is_optional=True,
-            start_order=1,
-        ))
+    # 1. Docker services (optional, co-located with gateway)
+    if config.run_gateway:
+        if config.search_enabled:
+            services.append(ServiceDef(
+                name="SearXNG",
+                port=8888,
+                health_url="http://localhost:8888/",
+                start_cmd=["docker", "compose", "up", "-d", "searxng"],
+                cwd=str(root),
+                is_docker=True,
+                is_optional=True,
+                start_order=1,
+            ))
 
-    if config.voice_enabled:
-        services.append(ServiceDef(
-            name="Kokoro TTS",
-            port=8880,
-            health_url=f"http://{ip}:8880/health",
-            start_cmd=["docker", "compose", "up", "-d", "kokoro-tts"],
-            cwd=str(root),
-            is_docker=True,
-            is_optional=True,
-            start_order=1,
-        ))
+        if config.voice_enabled:
+            services.append(ServiceDef(
+                name="Kokoro TTS",
+                port=8880,
+                health_url="http://localhost:8880/health",
+                start_cmd=["docker", "compose", "up", "-d", "kokoro-tts"],
+                cwd=str(root),
+                is_docker=True,
+                is_optional=True,
+                start_order=1,
+            ))
 
-    # 2. Inference (only on single-machine or if we're the GPU machine)
-    if config.setup_type == SetupType.SINGLE:
+    # 2. Inference (only if this machine runs inference)
+    if config.run_inference:
         if config.inference_backend == InferenceBackend.MLX:
             services.append(ServiceDef(
                 name="MLX Thinking",
                 port=8080,
-                health_url=f"http://localhost:8080/v1/models",
+                health_url="http://localhost:8080/v1/models",
                 start_cmd=["python3", str(root / "scripts" / "mlx_server.py"),
                             "--host", "0.0.0.0", "--port", "8080"],
                 start_order=2,
@@ -97,37 +95,39 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
             services.append(ServiceDef(
                 name="MLX Instant",
                 port=8081,
-                health_url=f"http://localhost:8081/v1/models",
+                health_url="http://localhost:8081/v1/models",
                 start_cmd=["python3", str(root / "scripts" / "mlx_server.py"),
                             "--host", "0.0.0.0", "--port", "8081"],
                 is_optional=True,
                 start_order=2,
             ))
 
-    # 3. Gateway (use venv Python so gateway deps are available)
-    venv_python = str(root / ".venv" / "bin" / "python")
-    services.append(ServiceDef(
-        name="Gateway",
-        port=8000,
-        health_url=f"http://{ip}:8000/health",
-        start_cmd=[
-            venv_python, "-m", "uvicorn", "app.main:app",
-            "--host", "0.0.0.0", "--port", "8000",
-        ],
-        cwd=str(root / "gateway"),
-        env_extra={"KMP_DUPLICATE_LIB_OK": "TRUE"},
-        start_order=3,
-    ))
+    # 3. Gateway (only if this machine runs gateway)
+    if config.run_gateway:
+        venv_python = str(root / ".venv" / "bin" / "python")
+        services.append(ServiceDef(
+            name="Gateway",
+            port=8000,
+            health_url="http://localhost:8000/health",
+            start_cmd=[
+                venv_python, "-m", "uvicorn", "app.main:app",
+                "--host", "0.0.0.0", "--port", "8000",
+            ],
+            cwd=str(root / "gateway"),
+            env_extra={"KMP_DUPLICATE_LIB_OK": "TRUE"},
+            start_order=3,
+        ))
 
-    # 4. Webapp
-    services.append(ServiceDef(
-        name="Webapp",
-        port=3000,
-        health_url=f"http://{ip}:3000",
-        start_cmd=["npm", "run", "dev"],
-        cwd=str(root / "webapp"),
-        start_order=4,
-    ))
+    # 4. Webapp (only if this machine runs webapp)
+    if config.run_webapp:
+        services.append(ServiceDef(
+            name="Webapp",
+            port=3000,
+            health_url="http://localhost:3000",
+            start_cmd=["npm", "run", "dev"],
+            cwd=str(root / "webapp"),
+            start_order=4,
+        ))
 
     services.sort(key=lambda s: s.start_order)
     return services
@@ -138,9 +138,6 @@ def _print_startup_summary(
     definitions: list[ServiceDef],
 ) -> None:
     """Print a detailed summary panel after all services start."""
-    root = get_project_root()
-    ip = config.server_ip if config.setup_type == SetupType.TWO_MACHINE else "localhost"
-
     console.print()
     console.rule("[bold]Molebie AI Running[/bold]", style="green")
     console.print()
@@ -150,15 +147,22 @@ def _print_startup_summary(
     webapp_svc = next((s for s in definitions if s.name == "Webapp"), None)
     gateway_svc = next((s for s in definitions if s.name == "Gateway"), None)
     if webapp_svc:
-        console.print(f"    App:        http://{ip}:{webapp_svc.port}")
+        console.print(f"    App:        http://localhost:{webapp_svc.port}")
+    elif not config.run_webapp:
+        console.print(f"    App:        http://{config.webapp_host}:3000 (remote)")
     if gateway_svc:
-        console.print(f"    API:        http://{ip}:{gateway_svc.port}")
-    console.print(f"    Database:   data/molebie.db (SQLite)")
+        console.print(f"    API:        http://localhost:{gateway_svc.port}")
+    elif not config.run_gateway:
+        console.print(f"    API:        http://{config.gateway_host}:8000 (remote)")
+    if config.run_gateway:
+        console.print(f"    Database:   data/molebie.db (SQLite)")
+    if not config.run_inference:
+        console.print(f"    Inference:  {config.inference_host} (remote)")
     for svc in definitions:
         if svc.name in ("Webapp", "Gateway") or svc.name.startswith("MLX"):
             continue
         if _check_health(svc.health_url, timeout=2.0):
-            console.print(f"    {svc.name + ':':12s}http://{ip}:{svc.port}")
+            console.print(f"    {svc.name + ':':12s}http://localhost:{svc.port}")
     console.print()
 
     # ── Inference ──

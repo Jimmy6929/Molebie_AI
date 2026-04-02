@@ -38,13 +38,44 @@ def ensure_config_dir() -> Path:
     return config_dir
 
 
+def _migrate_v2_to_v3(data: dict) -> dict:
+    """Migrate old two-machine config to per-service distributed format."""
+    if data.get("version", 2) >= 3:
+        return data
+
+    data["version"] = 3
+    old_setup = data.get("setup_type", "single")
+
+    if old_setup == "two-machine":
+        data["setup_type"] = "distributed"
+        gpu_ip = data.pop("gpu_ip", "localhost")
+        data.pop("server_ip", None)
+        # Old model: inference on remote GPU machine, gateway+webapp on this machine
+        data["run_inference"] = False
+        data["run_gateway"] = True
+        data["run_webapp"] = True
+        data["inference_host"] = gpu_ip
+        data["gateway_host"] = "localhost"
+        data["webapp_host"] = "localhost"
+    else:
+        data.pop("gpu_ip", None)
+        data.pop("server_ip", None)
+
+    return data
+
+
 def load_config() -> MolebieConfig:
     """Load config from disk, returning defaults if file doesn't exist."""
     path = get_config_path()
     if not path.exists():
         return MolebieConfig()
     data = json.loads(path.read_text())
-    return MolebieConfig.model_validate(data)
+    data = _migrate_v2_to_v3(data)
+    config = MolebieConfig.model_validate(data)
+    # Persist migration so it doesn't re-run
+    if data.get("version") == 3:
+        save_config(config)
+    return config
 
 
 def save_config(config: MolebieConfig) -> None:

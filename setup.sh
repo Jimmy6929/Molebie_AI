@@ -11,6 +11,9 @@ set -euo pipefail
 # Docker is only needed for optional services (SearXNG, Kokoro TTS).
 #
 # Usage:  bash setup.sh
+#
+# NOTE: For full configuration (distributed/multi-machine setups,
+# per-service deployment, etc.), use: molebie-ai install
 # ══════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
