@@ -212,7 +212,7 @@ def is_ollama_running() -> bool:
     try:
         resp = httpx.get("http://localhost:11434/api/version", timeout=3)
         return resp.status_code < 400
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except httpx.TransportError:
         return False
 
 
@@ -302,7 +302,7 @@ def setup_ollama(profile: str) -> SetupResult:
     if is_ollama_running():
         try:
             httpx.get("http://localhost:11434/v1/models", timeout=3)
-        except (httpx.ConnectError, httpx.TimeoutException):
+        except httpx.TransportError:
             warnings.append("Ollama is running but /v1/models endpoint not responding")
 
     return SetupResult(
@@ -339,7 +339,13 @@ def validate_openai_endpoint(
             message=f"Endpoint returned {resp.status_code} at {models_url}",
             warnings=["Check that the server is running and the URL is correct"],
         )
-    except httpx.ConnectError:
+    except httpx.TimeoutException:
+        return SetupResult(
+            success=False,
+            message=f"Connection to {url} timed out",
+            warnings=["The server may be starting up — try again shortly"],
+        )
+    except httpx.TransportError:
         return SetupResult(
             success=False,
             message=f"Could not connect to {url}",
@@ -347,10 +353,4 @@ def validate_openai_endpoint(
                 "The endpoint may not be running yet — you can start it later",
                 "Configuration has been saved and will work once the endpoint is available",
             ],
-        )
-    except httpx.TimeoutException:
-        return SetupResult(
-            success=False,
-            message=f"Connection to {url} timed out",
-            warnings=["The server may be starting up — try again shortly"],
         )

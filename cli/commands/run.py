@@ -117,11 +117,11 @@ def _check_remote_inference(config) -> None:
             else:
                 print_warn(f"{name} returned {resp.status_code} at {url}")
                 all_ok = False
-        except httpx.ConnectError:
-            print_fail(f"{name} not reachable at {url}")
-            all_ok = False
         except httpx.TimeoutException:
             print_warn(f"{name} timed out at {url}")
+            all_ok = False
+        except httpx.TransportError:
+            print_fail(f"{name} not reachable at {url}")
             all_ok = False
 
     if not all_ok:

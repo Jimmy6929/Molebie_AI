@@ -606,7 +606,11 @@ def _execute_install(
     # 7g. Feature auto-setup
     if config.search_enabled or config.voice_enabled or config.rag_enabled:
         console.print("[heading]Setting up features...[/heading]")
-        _setup_features(config, root)
+        try:
+            _setup_features(config, root)
+        except Exception as exc:
+            print_warn(f"Feature setup encountered an error: {exc}")
+            print_info("Features can be set up later with: molebie-ai feature add <name>")
         console.print()
 
     # 7h. Final save

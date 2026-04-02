@@ -28,7 +28,7 @@ def _wait_healthy(url: str, timeout: int = 30) -> bool:
             resp = httpx.get(url, timeout=3, follow_redirects=True)
             if resp.status_code < 400:
                 return True
-        except (httpx.ConnectError, httpx.TimeoutException):
+        except httpx.TransportError:
             pass
         time.sleep(1)
     return False
