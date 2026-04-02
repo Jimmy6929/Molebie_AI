@@ -32,6 +32,14 @@ class EmbeddingService:
             )
 
         print(f"[embedding] Loading model: {self.model_name} (local_files_only={self.local_files_only})")
+        # When running in offline mode, tell ALL HuggingFace libraries
+        # (including custom model code loaded via trust_remote_code) to
+        # never make network requests. Without this, custom model code
+        # can still try httpx calls even with local_files_only=True.
+        if self.local_files_only:
+            import os
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         try:
             self._model = SentenceTransformer(
                 self.model_name,

@@ -13,22 +13,6 @@ from cli.services.service_manager import ServiceRunner
 from cli.ui.console import console, print_banner, print_fail, print_info, print_ok, print_warn
 
 
-_DEFAULT_EMBEDDING_MODEL = "Orange/orange-nomic-v1.5-1536"
-
-
-def _read_embedding_model_from_env(env_path) -> str:
-    """Read EMBEDDING_MODEL from .env.local, fall back to default."""
-    from pathlib import Path
-    p = Path(env_path)
-    if not p.exists():
-        return _DEFAULT_EMBEDDING_MODEL
-    for line in p.read_text().splitlines():
-        line = line.strip()
-        if line.startswith("EMBEDDING_MODEL=") and not line.startswith("#"):
-            return line.split("=", 1)[1].strip() or _DEFAULT_EMBEDDING_MODEL
-    return _DEFAULT_EMBEDDING_MODEL
-
-
 def _ensure_ready() -> MolebieConfig:
     """Ensure config, .env.local, and data/ exist. Auto-create if missing.
 
@@ -103,7 +87,7 @@ def _ensure_ready() -> MolebieConfig:
     # Provision it here so `molebie-ai run` works even without prior install.
     if needs_save:
         from cli.services import feature_setup
-        model = _read_embedding_model_from_env(root / ".env.local")
+        model = config_manager.read_embedding_model()
         r = feature_setup.ensure_embedding_model(model=model)
         if r.success:
             print_ok(r.message)

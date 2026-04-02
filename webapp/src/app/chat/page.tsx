@@ -100,14 +100,14 @@ export default function ChatPage() {
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
   const [docPanelOpen, setDocPanelOpen] = useState(false);
   const [docUploading, setDocUploading] = useState(false);
-  const [docUploadProgress, setDocUploadProgress] = useState<number | null>(null);
+  const [docUploadStep, setDocUploadStep] = useState<"upload" | "extract" | "chunk" | "embed" | "done" | "error">("upload");
   const [docUploadFilename, setDocUploadFilename] = useState("");
   const [docToast, setDocToast] = useState<string | null>(null);
 
   // ── Session Attachments ("Attach to Chat") ────────────────────────────
   const [attachments, setAttachments] = useState<SessionAttachmentInfo[]>([]);
   const [attachUploading, setAttachUploading] = useState(false);
-  const [attachUploadProgress, setAttachUploadProgress] = useState<number | null>(null);
+  const [attachUploadStep, setAttachUploadStep] = useState<"upload" | "process" | "done" | "error">("upload");
   const [attachUploadFilename, setAttachUploadFilename] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -231,24 +231,26 @@ export default function ChatPage() {
   async function handleDocUpload(file: File) {
     if (!token) return;
     setDocUploading(true);
-    setDocUploadProgress(0);
+    setDocUploadStep("upload");
     setDocUploadFilename(file.name);
     setDocToast(null);
     try {
       const result = await uploadDocument(token, file, (pct) => {
-        setDocUploadProgress(pct);
-        // Once upload reaches 100%, switch to indeterminate (server processing)
-        if (pct >= 100) setDocUploadProgress(null);
+        if (pct >= 100) setDocUploadStep("extract");
       });
+      setDocUploadStep("done");
       setDocToast(`${result.filename} — ${result.chunks} chunks created`);
     } catch (err) {
+      setDocUploadStep("error");
       setDocToast(`Upload failed: ${err instanceof Error ? err.message : "unknown error"}`);
     } finally {
-      setDocUploading(false);
-      setDocUploadProgress(null);
-      setDocUploadFilename("");
       loadDocuments();
-      setTimeout(() => setDocToast(null), 5000);
+      setTimeout(() => {
+        setDocUploading(false);
+        setDocUploadStep("upload");
+        setDocUploadFilename("");
+        setDocToast(null);
+      }, 4000);
     }
   }
 
@@ -299,23 +301,26 @@ export default function ChatPage() {
     }
 
     setAttachUploading(true);
-    setAttachUploadProgress(0);
+    setAttachUploadStep("upload");
     setAttachUploadFilename(file.name);
     setDocToast(null);
     try {
       const result = await attachDocumentToSession(token, sessionId, file, (pct) => {
-        setAttachUploadProgress(pct);
-        if (pct >= 100) setAttachUploadProgress(null);
+        if (pct >= 100) setAttachUploadStep("process");
       });
+      setAttachUploadStep("done");
       setDocToast(result.truncated ? result.message : `${result.filename} attached`);
     } catch (err) {
+      setAttachUploadStep("error");
       setDocToast(`Attach failed: ${err instanceof Error ? err.message : "unknown error"}`);
     } finally {
-      setAttachUploading(false);
-      setAttachUploadProgress(null);
-      setAttachUploadFilename("");
       loadAttachments(sessionId);
-      setTimeout(() => setDocToast(null), 5000);
+      setTimeout(() => {
+        setAttachUploading(false);
+        setAttachUploadStep("upload");
+        setAttachUploadFilename("");
+        setDocToast(null);
+      }, 4000);
     }
   }
 
@@ -952,22 +957,30 @@ export default function ChatPage() {
                   </button>
                 </div>
                 {docUploading && (
-                  <div className="mb-2 animate-fade-in">
+                  <div className="mb-2 animate-fade-in space-y-1">
+                    <p className="text-[10px] text-[#ccc] font-medium truncate">{docUploadFilename}</p>
+                    <div className="flex items-center gap-2 text-[10px]">
+                      <span className={docUploadStep === "upload" ? "text-[#ffcc33] animate-pulse" : "text-[#00ff41]"}>
+                        {docUploadStep === "upload" ? "● Upload" : "✓ Upload"}
+                      </span>
+                      <span className={docUploadStep === "extract" ? "text-[#ffcc33] animate-pulse" : docUploadStep === "upload" ? "text-[#555]" : "text-[#00ff41]"}>
+                        {["extract", "chunk", "embed", "done"].includes(docUploadStep) && docUploadStep !== "extract" ? "✓ Extract" : docUploadStep === "extract" ? "● Extract" : "○ Extract"}
+                      </span>
+                      <span className={docUploadStep === "chunk" || docUploadStep === "embed" ? "text-[#ffcc33] animate-pulse" : ["done"].includes(docUploadStep) ? "text-[#00ff41]" : "text-[#555]"}>
+                        {docUploadStep === "done" ? "✓ Embed" : ["chunk", "embed"].includes(docUploadStep) ? "● Process" : "○ Process"}
+                      </span>
+                      {docUploadStep === "done" && <span className="text-[#00ff41]">✓ Done</span>}
+                      {docUploadStep === "error" && <span className="text-[#ff4444]">✗ Failed</span>}
+                    </div>
                     <div className="w-full h-1 rounded-full overflow-hidden bg-white/[0.06]">
-                      {docUploadProgress !== null && docUploadProgress < 100 ? (
-                        <div
-                          className="h-full bg-[#00ff41] rounded-full transition-all duration-300"
-                          style={{ width: `${docUploadProgress}%` }}
-                        />
+                      {docUploadStep === "done" ? (
+                        <div className="h-full w-full bg-[#00ff41] rounded-full" />
+                      ) : docUploadStep === "error" ? (
+                        <div className="h-full w-full bg-[#ff4444] rounded-full" />
                       ) : (
                         <div className="h-full w-1/4 bg-[#00ff41] rounded-full animate-indeterminate" />
                       )}
                     </div>
-                    <p className="text-[10px] text-[#888] mt-1">
-                      {docUploadProgress !== null && docUploadProgress < 100
-                        ? `Uploading ${docUploadFilename}... ${docUploadProgress}%`
-                        : `Processing ${docUploadFilename}...`}
-                    </p>
                   </div>
                 )}
                 {documents.length === 0 && !docUploading ? (
@@ -999,24 +1012,29 @@ export default function ChatPage() {
               </div>
             )}
 
-            {/* Attachment progress bar */}
+            {/* Attachment progress */}
             {attachUploading && (
-              <div className="mb-2 glass rounded-xl px-3 py-2 animate-fade-in">
+              <div className="mb-2 glass rounded-xl px-3 py-2 animate-fade-in space-y-1">
+                <p className="text-[10px] text-[#ccc] font-medium truncate">{attachUploadFilename}</p>
+                <div className="flex items-center gap-2 text-[10px]">
+                  <span className={attachUploadStep === "upload" ? "text-[#ffcc33] animate-pulse" : "text-[#00ff41]"}>
+                    {attachUploadStep === "upload" ? "● Upload" : "✓ Upload"}
+                  </span>
+                  <span className={attachUploadStep === "process" ? "text-[#ffcc33] animate-pulse" : attachUploadStep === "upload" ? "text-[#555]" : "text-[#00ff41]"}>
+                    {attachUploadStep === "process" ? "● Extract" : attachUploadStep === "upload" ? "○ Extract" : "✓ Extract"}
+                  </span>
+                  {attachUploadStep === "done" && <span className="text-[#00ff41]">✓ Done</span>}
+                  {attachUploadStep === "error" && <span className="text-[#ff4444]">✗ Failed</span>}
+                </div>
                 <div className="w-full h-1 rounded-full overflow-hidden bg-white/[0.06]">
-                  {attachUploadProgress !== null && attachUploadProgress < 100 ? (
-                    <div
-                      className="h-full bg-[#00ff41] rounded-full transition-all duration-300"
-                      style={{ width: `${attachUploadProgress}%` }}
-                    />
+                  {attachUploadStep === "done" ? (
+                    <div className="h-full w-full bg-[#00ff41] rounded-full" />
+                  ) : attachUploadStep === "error" ? (
+                    <div className="h-full w-full bg-[#ff4444] rounded-full" />
                   ) : (
                     <div className="h-full w-1/4 bg-[#00ff41] rounded-full animate-indeterminate" />
                   )}
                 </div>
-                <p className="text-[10px] text-[#888] mt-1">
-                  {attachUploadProgress !== null && attachUploadProgress < 100
-                    ? `Uploading ${attachUploadFilename}... ${attachUploadProgress}%`
-                    : `Attaching ${attachUploadFilename}...`}
-                </p>
               </div>
             )}
 

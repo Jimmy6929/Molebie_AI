@@ -410,7 +410,9 @@ async def send_message(
     # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
     rag_chunks = []
     if not request.conversation_mode:
-        if await rag.user_has_documents(user_id):
+        if not rag.enabled:
+            print("[chat] RAG disabled — skipping document retrieval")
+        elif await rag.user_has_documents(user_id):
             rag_chunks = await rag.retrieve_context(
                 user_id, request.message, conversation_context=hist_messages,
             )
@@ -791,7 +793,9 @@ async def send_message_stream(
     # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
     rag_chunks = []
     if not request.conversation_mode:
-        if await rag.user_has_documents(user_id):
+        if not rag.enabled:
+            print("[chat] RAG disabled — skipping document retrieval")
+        elif await rag.user_has_documents(user_id):
             rag_chunks = await rag.retrieve_context(
                 user_id, request.message, conversation_context=hist_messages,
             )

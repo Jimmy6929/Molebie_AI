@@ -34,8 +34,6 @@ ALLOWED_TYPES: Dict[str, str] = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
 }
 
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
-
 
 # ── Endpoints ────────────────────────────────────────────────────────────
 
@@ -53,6 +51,11 @@ async def upload_document(
     document_chunks for vector search.
     """
     settings = get_settings()
+    if not settings.rag_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document upload requires RAG to be enabled. Set RAG_ENABLED=true in .env.local and restart.",
+        )
     storage = get_storage_service()
     db = get_database_service()
     user_id = user.user_id
@@ -65,10 +68,11 @@ async def upload_document(
         )
 
     data = await file.read()
-    if len(data) > MAX_FILE_SIZE:
+    max_size = settings.document_max_file_size
+    if len(data) > max_size:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large ({len(data)} bytes). Max: {MAX_FILE_SIZE} bytes",
+            detail=f"File too large ({len(data)} bytes). Max: {max_size} bytes",
         )
     if not data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
@@ -226,10 +230,11 @@ async def attach_document_to_session(
         )
 
     data = await file.read()
-    if len(data) > MAX_FILE_SIZE:
+    max_size = settings.document_max_file_size
+    if len(data) > max_size:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large ({len(data)} bytes). Max: {MAX_FILE_SIZE} bytes",
+            detail=f"File too large ({len(data)} bytes). Max: {max_size} bytes",
         )
     if not data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")

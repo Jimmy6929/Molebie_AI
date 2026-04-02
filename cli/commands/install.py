@@ -43,19 +43,6 @@ from cli.ui.prompts import (
 )
 
 
-_DEFAULT_EMBEDDING_MODEL = "Orange/orange-nomic-v1.5-1536"
-
-
-def _read_embedding_model_from_env(env_path: Path) -> str:
-    """Read EMBEDDING_MODEL from .env.local, fall back to default."""
-    if not env_path.exists():
-        return _DEFAULT_EMBEDDING_MODEL
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if line.startswith("EMBEDDING_MODEL=") and not line.startswith("#"):
-            return line.split("=", 1)[1].strip() or _DEFAULT_EMBEDDING_MODEL
-    return _DEFAULT_EMBEDDING_MODEL
-
 
 # ──────────────────────────────────────────────────────────────
 # Auto-configure defaults for --quick mode
@@ -622,7 +609,7 @@ def _execute_install(
     # Must be outside the feature gate so it runs even if all features are disabled.
     # Read the actual configured model from .env.local (not hardcoded default).
     console.print("[heading]Caching embedding model...[/heading]")
-    embedding_model = _read_embedding_model_from_env(env_path)
+    embedding_model = config_manager.read_embedding_model()
     r = feature_setup.ensure_embedding_model(model=embedding_model)
     if r.success:
         print_ok(r.message)

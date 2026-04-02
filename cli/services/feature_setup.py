@@ -158,7 +158,7 @@ def _is_model_cached(model: str) -> bool:
     return snapshots.is_dir() and any(snapshots.iterdir())
 
 
-def ensure_embedding_model(model: str = "Orange/orange-nomic-v1.5-1536") -> FeatureSetupResult:
+def ensure_embedding_model(model: str) -> FeatureSetupResult:
     """Ensure the shared embedding model is downloaded and cached.
 
     This is a shared dependency used by both the memory service and RAG.

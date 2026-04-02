@@ -56,3 +56,24 @@ def save_config(config: MolebieConfig) -> None:
 
 def config_exists() -> bool:
     return get_config_path().exists()
+
+
+# Default matches gateway/app/config.py → Settings.embedding_model
+_DEFAULT_EMBEDDING_MODEL = "Orange/orange-nomic-v1.5-1536"
+
+
+def read_embedding_model() -> str:
+    """Read EMBEDDING_MODEL from .env.local, fall back to project default.
+
+    Single source of truth for the embedding model name across CLI commands.
+    The default here must match gateway/app/config.py → Settings.embedding_model.
+    """
+    env_path = get_project_root() / ".env.local"
+    if not env_path.exists():
+        return _DEFAULT_EMBEDDING_MODEL
+    for line in env_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("EMBEDDING_MODEL=") and not stripped.startswith("#"):
+            value = stripped.split("=", 1)[1].strip()
+            return value or _DEFAULT_EMBEDDING_MODEL
+    return _DEFAULT_EMBEDDING_MODEL

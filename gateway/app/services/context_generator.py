@@ -85,9 +85,6 @@ async def _generate_context(
             if "</think>" in content:
                 content = content.split("</think>", 1)[-1].strip()
             return content if content else None
-    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-        # Re-raise connection errors so generate_batch() can bail out early
-        raise
     except Exception as exc:
         print(f"[context_gen] LLM call failed: {type(exc).__name__}: {exc}")
         return None
@@ -105,28 +102,22 @@ async def generate_batch(
     to the input chunks list.
     """
     results: List[Optional[str]] = []
-    llm_reachable = True
 
     for i, chunk in enumerate(chunks):
-        # If a previous chunk failed due to connection error, skip the rest
-        # rather than waiting for each one to timeout individually.
-        if not llm_reachable:
-            results.append(None)
-            continue
+        context = await _generate_context(doc_text, chunk, settings)
+        results.append(context)
+        if context:
+            print(f"[context_gen] Chunk {i+1}/{len(chunks)}: {len(context)} chars")
+        else:
+            print(f"[context_gen] Chunk {i+1}/{len(chunks)}: (no context)")
 
-        try:
-            context = await _generate_context(doc_text, chunk, settings)
-            results.append(context)
-            if context:
-                print(f"[context_gen] Chunk {i+1}/{len(chunks)}: {len(context)} chars")
-            else:
-                print(f"[context_gen] Chunk {i+1}/{len(chunks)}: (no context)")
-        except Exception as exc:
-            print(f"[context_gen] Chunk {i+1}/{len(chunks)} failed: {type(exc).__name__}: {exc}")
-            results.append(None)
-            # If we can't connect at all, don't waste time on remaining chunks
-            if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
-                print(f"[context_gen] LLM unreachable — skipping remaining {len(chunks) - i - 1} chunks")
-                llm_reachable = False
+        # If the first chunk failed, the LLM is likely unreachable.
+        # Skip remaining chunks rather than waiting for each to timeout.
+        if i == 0 and context is None:
+            remaining = len(chunks) - 1
+            if remaining > 0:
+                print(f"[context_gen] First chunk failed — skipping remaining {remaining} chunks")
+                results.extend([None] * remaining)
+                break
 
     return results

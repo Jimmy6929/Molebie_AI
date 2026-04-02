@@ -111,7 +111,7 @@ class Settings(BaseSettings):
 
     # ── RAG / Embeddings ─────────────────────────────────────
     rag_enabled: bool = True
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"  # default; override via EMBEDDING_MODEL in .env
+    embedding_model: str = "Orange/orange-nomic-v1.5-1536"  # override via EMBEDDING_MODEL in .env
     embedding_local_only: bool = True  # Use cached model only; avoids HuggingFace Hub check (offline-safe)
     embedding_preload: bool = False  # Load embedding model at startup (trade startup time for faster first chat)
     rag_match_count: int = 20  # over-fetch for reranking
@@ -142,7 +142,8 @@ class Settings(BaseSettings):
     rag_metrics_enabled: bool = True
     rag_metrics_log_console: bool = True
 
-    # ── Session Document Attachments ──────────────────────────────
+    # ── Documents ─────────────────────────────────────────────────
+    document_max_file_size: int = 50 * 1024 * 1024  # 50 MB; override via DOCUMENT_MAX_FILE_SIZE
     session_doc_max_chars: int = 12000  # max extracted text per attachment
 
     # ── Conversation Summarisation (8a) ─────────────────────────
