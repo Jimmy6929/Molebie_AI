@@ -123,6 +123,15 @@ body {
   animation: slideInLeft 0.25s ease-out;
 }
 
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.animate-indeterminate {
+  animation: indeterminate 1.5s ease-in-out infinite;
+}
+
 /* ── Input styling ──────────────────────────────────── */
 
 input, textarea {

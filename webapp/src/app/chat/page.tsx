@@ -100,11 +100,15 @@ export default function ChatPage() {
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
   const [docPanelOpen, setDocPanelOpen] = useState(false);
   const [docUploading, setDocUploading] = useState(false);
+  const [docUploadProgress, setDocUploadProgress] = useState<number | null>(null);
+  const [docUploadFilename, setDocUploadFilename] = useState("");
   const [docToast, setDocToast] = useState<string | null>(null);
 
   // ── Session Attachments ("Attach to Chat") ────────────────────────────
   const [attachments, setAttachments] = useState<SessionAttachmentInfo[]>([]);
   const [attachUploading, setAttachUploading] = useState(false);
+  const [attachUploadProgress, setAttachUploadProgress] = useState<number | null>(null);
+  const [attachUploadFilename, setAttachUploadFilename] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -227,15 +231,23 @@ export default function ChatPage() {
   async function handleDocUpload(file: File) {
     if (!token) return;
     setDocUploading(true);
-    setDocToast(`Uploading ${file.name}...`);
+    setDocUploadProgress(0);
+    setDocUploadFilename(file.name);
+    setDocToast(null);
     try {
-      const result = await uploadDocument(token, file);
-      setDocToast(`${result.filename}: ${result.chunks} chunks created`);
-      loadDocuments();
+      const result = await uploadDocument(token, file, (pct) => {
+        setDocUploadProgress(pct);
+        // Once upload reaches 100%, switch to indeterminate (server processing)
+        if (pct >= 100) setDocUploadProgress(null);
+      });
+      setDocToast(`${result.filename} — ${result.chunks} chunks created`);
     } catch (err) {
       setDocToast(`Upload failed: ${err instanceof Error ? err.message : "unknown error"}`);
     } finally {
       setDocUploading(false);
+      setDocUploadProgress(null);
+      setDocUploadFilename("");
+      loadDocuments();
       setTimeout(() => setDocToast(null), 5000);
     }
   }
@@ -287,15 +299,22 @@ export default function ChatPage() {
     }
 
     setAttachUploading(true);
-    setDocToast(`Attaching ${file.name}...`);
+    setAttachUploadProgress(0);
+    setAttachUploadFilename(file.name);
+    setDocToast(null);
     try {
-      const result = await attachDocumentToSession(token, sessionId, file);
+      const result = await attachDocumentToSession(token, sessionId, file, (pct) => {
+        setAttachUploadProgress(pct);
+        if (pct >= 100) setAttachUploadProgress(null);
+      });
       setDocToast(result.truncated ? result.message : `${result.filename} attached`);
-      loadAttachments(sessionId);
     } catch (err) {
       setDocToast(`Attach failed: ${err instanceof Error ? err.message : "unknown error"}`);
     } finally {
       setAttachUploading(false);
+      setAttachUploadProgress(null);
+      setAttachUploadFilename("");
+      loadAttachments(sessionId);
       setTimeout(() => setDocToast(null), 5000);
     }
   }
@@ -929,10 +948,29 @@ export default function ChatPage() {
                     disabled={docUploading}
                     className="text-[10px] px-2 py-1 rounded-lg bg-[#33ccff]/15 text-[#66ddff] hover:bg-[#33ccff]/25 transition-all disabled:opacity-40"
                   >
-                    {docUploading ? "Uploading..." : "+ Upload"}
+                    {docUploading ? "Processing..." : "+ Upload"}
                   </button>
                 </div>
-                {documents.length === 0 ? (
+                {docUploading && (
+                  <div className="mb-2 animate-fade-in">
+                    <div className="w-full h-1 rounded-full overflow-hidden bg-white/[0.06]">
+                      {docUploadProgress !== null && docUploadProgress < 100 ? (
+                        <div
+                          className="h-full bg-[#00ff41] rounded-full transition-all duration-300"
+                          style={{ width: `${docUploadProgress}%` }}
+                        />
+                      ) : (
+                        <div className="h-full w-1/4 bg-[#00ff41] rounded-full animate-indeterminate" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-[#888] mt-1">
+                      {docUploadProgress !== null && docUploadProgress < 100
+                        ? `Uploading ${docUploadFilename}... ${docUploadProgress}%`
+                        : `Processing ${docUploadFilename}...`}
+                    </p>
+                  </div>
+                )}
+                {documents.length === 0 && !docUploading ? (
                   <p className="text-[11px] text-[#777]">No documents uploaded. Upload TXT, MD, PDF, or DOCX files to give Chat long-term memory.</p>
                 ) : (
                   <div className="space-y-1.5">
@@ -958,6 +996,27 @@ export default function ChatPage() {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Attachment progress bar */}
+            {attachUploading && (
+              <div className="mb-2 glass rounded-xl px-3 py-2 animate-fade-in">
+                <div className="w-full h-1 rounded-full overflow-hidden bg-white/[0.06]">
+                  {attachUploadProgress !== null && attachUploadProgress < 100 ? (
+                    <div
+                      className="h-full bg-[#00ff41] rounded-full transition-all duration-300"
+                      style={{ width: `${attachUploadProgress}%` }}
+                    />
+                  ) : (
+                    <div className="h-full w-1/4 bg-[#00ff41] rounded-full animate-indeterminate" />
+                  )}
+                </div>
+                <p className="text-[10px] text-[#888] mt-1">
+                  {attachUploadProgress !== null && attachUploadProgress < 100
+                    ? `Uploading ${attachUploadFilename}... ${attachUploadProgress}%`
+                    : `Attaching ${attachUploadFilename}...`}
+                </p>
               </div>
             )}
 

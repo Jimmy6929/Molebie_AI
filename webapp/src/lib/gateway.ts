@@ -455,25 +455,33 @@ export interface UploadResponse {
 
 export async function uploadDocument(
   token: string,
-  file: File
+  file: File,
+  onProgress?: (pct: number) => void,
 ): Promise<UploadResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append("file", file);
 
-  const res = await fetch(`${GATEWAY_URL}/documents/upload`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    body: formData,
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    });
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        reject(new Error(`Upload error ${xhr.status}: ${xhr.responseText}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Upload failed — connection error"));
+
+    xhr.open("POST", `${GATEWAY_URL}/documents/upload`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.send(formData);
   });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Upload error ${res.status}: ${errText}`);
-  }
-
-  return res.json();
 }
 
 export async function listDocuments(
@@ -518,26 +526,33 @@ export interface AttachResponse {
 export async function attachDocumentToSession(
   token: string,
   sessionId: string,
-  file: File
+  file: File,
+  onProgress?: (pct: number) => void,
 ): Promise<AttachResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append("file", file);
 
-  const res = await fetch(
-    `${GATEWAY_URL}/documents/sessions/${sessionId}/attach`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: formData,
-    }
-  );
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Attach error ${res.status}: ${errText}`);
-  }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        reject(new Error(`Attach error ${xhr.status}: ${xhr.responseText}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Attach failed — connection error"));
 
-  return res.json();
+    xhr.open("POST", `${GATEWAY_URL}/documents/sessions/${sessionId}/attach`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.send(formData);
+  });
 }
 
 export async function listSessionAttachments(

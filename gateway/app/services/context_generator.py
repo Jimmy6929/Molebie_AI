@@ -73,7 +73,10 @@ async def _generate_context(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Short connect timeout (2s) so we fail fast when the LLM is offline.
+        # Read timeout stays at 30s for slow inference on large chunks.
+        timeout = httpx.Timeout(30.0, connect=2.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
@@ -82,6 +85,9 @@ async def _generate_context(
             if "</think>" in content:
                 content = content.split("</think>", 1)[-1].strip()
             return content if content else None
+    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        # Re-raise connection errors so generate_batch() can bail out early
+        raise
     except Exception as exc:
         print(f"[context_gen] LLM call failed: {type(exc).__name__}: {exc}")
         return None
@@ -99,8 +105,15 @@ async def generate_batch(
     to the input chunks list.
     """
     results: List[Optional[str]] = []
+    llm_reachable = True
 
     for i, chunk in enumerate(chunks):
+        # If a previous chunk failed due to connection error, skip the rest
+        # rather than waiting for each one to timeout individually.
+        if not llm_reachable:
+            results.append(None)
+            continue
+
         try:
             context = await _generate_context(doc_text, chunk, settings)
             results.append(context)
@@ -111,5 +124,9 @@ async def generate_batch(
         except Exception as exc:
             print(f"[context_gen] Chunk {i+1}/{len(chunks)} failed: {type(exc).__name__}: {exc}")
             results.append(None)
+            # If we can't connect at all, don't waste time on remaining chunks
+            if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+                print(f"[context_gen] LLM unreachable — skipping remaining {len(chunks) - i - 1} chunks")
+                llm_reachable = False
 
     return results
