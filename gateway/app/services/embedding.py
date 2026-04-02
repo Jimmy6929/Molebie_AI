@@ -22,6 +22,16 @@ class EmbeddingService:
     def _load_model(self):
         if self._model is not None:
             return
+
+        # Set offline env vars BEFORE importing sentence_transformers.
+        # huggingface_hub reads HF_HUB_OFFLINE at import time — if we set
+        # it after the import, the library already decided it's online and
+        # custom model code (trust_remote_code) will try network calls.
+        if self.local_files_only:
+            import os
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError:
@@ -32,14 +42,6 @@ class EmbeddingService:
             )
 
         print(f"[embedding] Loading model: {self.model_name} (local_files_only={self.local_files_only})")
-        # When running in offline mode, tell ALL HuggingFace libraries
-        # (including custom model code loaded via trust_remote_code) to
-        # never make network requests. Without this, custom model code
-        # can still try httpx calls even with local_files_only=True.
-        if self.local_files_only:
-            import os
-            os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         try:
             self._model = SentenceTransformer(
                 self.model_name,

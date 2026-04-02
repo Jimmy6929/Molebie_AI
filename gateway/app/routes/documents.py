@@ -331,6 +331,78 @@ async def remove_session_attachment(
     await db.delete_session_document(attachment_id, session_id, user.user_id)
 
 
+# ── Reindex Endpoint ────────────────────────────────────────────────────
+
+
+@router.post("/reindex", tags=["Documents"])
+async def reindex_documents(
+    user: JWTPayload = Depends(get_current_user),
+):
+    """
+    Reindex all document chunks: re-embed and insert missing vectors.
+
+    Use when vectors are missing from the vec table (e.g., after a failed
+    upload or schema migration). Safe to run multiple times.
+    """
+    import struct
+
+    db = get_database_service()
+    processor = get_document_processor()
+    conn = await db._get_conn()
+    user_id = user.user_id
+
+    # Get all chunks for this user
+    chunks = await conn.execute_fetchall(
+        "SELECT rowid, id, content FROM document_chunks WHERE user_id = ?",
+        (user_id,),
+    )
+    if not chunks:
+        return {"reindexed": 0, "message": "No chunks to reindex"}
+
+    # Check which rowids already have vectors
+    existing_vec_rowids: set = set()
+    for chunk in chunks:
+        rowid = chunk[0]
+        try:
+            rows = await conn.execute_fetchall(
+                "SELECT rowid FROM document_chunks_vec WHERE rowid = ?", (rowid,)
+            )
+            if rows:
+                existing_vec_rowids.add(rowid)
+        except Exception:
+            pass
+
+    missing = [(c[0], c[2]) for c in chunks if c[0] not in existing_vec_rowids]
+    if not missing:
+        return {"reindexed": 0, "message": "All vectors already present"}
+
+    # Embed missing chunks and insert vectors
+    texts = [m[1] for m in missing]
+    from app.services.embedding import get_embedding_service
+    emb_svc = get_embedding_service()
+    embeddings = emb_svc.embed_batch(texts)
+
+    inserted = 0
+    for (rowid, _text), embedding in zip(missing, embeddings):
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        try:
+            await conn.execute(
+                "INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)",
+                (rowid, blob),
+            )
+            inserted += 1
+        except Exception as exc:
+            print(f"[reindex] Failed rowid {rowid}: {exc}")
+    await conn.commit()
+
+    return {
+        "reindexed": inserted,
+        "total_chunks": len(chunks),
+        "already_indexed": len(existing_vec_rowids),
+        "message": f"Reindexed {inserted} chunks",
+    }
+
+
 # ── RAG Evaluation Endpoint ──────────────────────────────────────────────
 
 from pydantic import BaseModel, Field

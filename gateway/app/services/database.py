@@ -542,7 +542,10 @@ class DatabaseService:
         results = []
         for r in rows:
             d = _row_to_dict(r)
-            similarity = 1.0 - d.pop("distance", 0.0)
+            # sqlite-vec returns L2 distance; convert to cosine similarity
+            # for unit-normalized vectors: cos_sim = 1 - (L2² / 2)
+            l2_dist = d.pop("distance", 0.0)
+            similarity = 1.0 - (l2_dist ** 2) / 2.0
             if similarity < threshold:
                 continue
             d["similarity"] = similarity
@@ -562,8 +565,11 @@ class DatabaseService:
     ) -> List[Dict[str, Any]]:
         """Search document chunks by full-text (BM25) using FTS5."""
         db = await self._get_conn()
-        # Escape FTS5 special chars in query
-        safe_query = query_text.replace('"', '""')
+        # Escape FTS5 special chars — wrap each token in double quotes
+        # so characters like ?, *, (, ), :, +, -, ^, ~ are treated as literals
+        import re
+        tokens = re.findall(r'\w+', query_text)
+        safe_query = " ".join(f'"{t}"' for t in tokens) if tokens else query_text
         rows = await db.execute_fetchall(
             """
             SELECT
@@ -688,7 +694,10 @@ class DatabaseService:
         results = []
         for r in rows:
             d = _row_to_dict(r)
-            similarity = 1.0 - d.pop("distance", 0.0)
+            # sqlite-vec returns L2 distance; convert to cosine similarity
+            # for unit-normalized vectors: cos_sim = 1 - (L2² / 2)
+            l2_dist = d.pop("distance", 0.0)
+            similarity = 1.0 - (l2_dist ** 2) / 2.0
             if similarity < threshold:
                 continue
             d["similarity"] = similarity

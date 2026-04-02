@@ -4,6 +4,7 @@ Includes dual-tier inference health with model info per mode,
 and deep application-logic checks for the CLI doctor command.
 """
 
+import asyncio
 import struct
 from typing import Optional, Dict, Any, List
 
@@ -112,8 +113,8 @@ async def deep_health_check(
     """
     results: Dict[str, Any] = {}
 
-    # 1. Embedding model check
-    results["embedding"] = _check_embedding(settings)
+    # 1. Embedding model check (run in thread — model loading is CPU-heavy and blocks the async loop)
+    results["embedding"] = await asyncio.to_thread(_check_embedding, settings)
 
     # 2. Vector round-trip check (only if embedding passed)
     if results["embedding"]["status"] == "pass":
