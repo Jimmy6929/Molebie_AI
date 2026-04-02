@@ -302,7 +302,7 @@ flowchart TD
 - **Contextual retrieval**: LLM generates context prefixes for each chunk at ingest time (Anthropic technique, +35-49% retrieval quality)
 - **LLM query rewriting**: contextual rewrite to improve retrieval
 - **Session document attachments**: files can be attached to specific sessions and injected directly into the system prompt
-- **Embedding model**: configurable (default: `sentence-transformers/all-MiniLM-L6-v2`, 384-dim; or `Orange/orange-nomic-v1.5-1536`, 1536-dim)
+- **Embedding model**: configurable (default: `Orange/orange-nomic-v1.5-1536`, 1536-dim)
 - **RAG metrics**: performance logging with quality tracking via `rag_query_metrics` table
 - Match count: 20 candidates, threshold: 0.3, max context: 12000 chars
 
@@ -320,13 +320,12 @@ sequenceDiagram
     participant LLM as Inference Tier
 
     Note over U,W: Voice Conversation Mode
-    U->>W: Hold mic / wake-word detected<br/>("Hey Chat", "Hello Chat", "Hi Chat")
+    U->>W: Press mic button (STT or Chat mode)
     W->>W: Record audio (Web Audio API)<br/>+ silence detection (auto-stop)
     W->>G: POST /chat/transcribe (audio file)
     G->>STT: Transcribe audio
-    G->>G: Speaker verification (if enrolled)
     STT-->>G: Transcribed text
-    G-->>W: {text, speaker_verified, speaker_confidence}
+    G-->>W: {text}
 
     W->>G: POST /chat/stream {message: transcribed text}
     G->>LLM: Generate response (streaming)
@@ -345,12 +344,12 @@ sequenceDiagram
 
 - **STT**: `faster-whisper` (local Whisper inference, "tiny" model ~75MB, CTranslate2 backend) via `POST /chat/transcribe`
 - **TTS**: Kokoro FastAPI (Docker, CPU) with 12 voice options (British/American, male/female)
-- **Speaker verification**: MFCC-based voice embeddings, 3-sample enrollment, similarity threshold 0.82, profiles stored in `~/.local-ai/voice-profiles/`
-- **Wake-word detection**: browser-side voice activity detection ("Hey Chat", "Hello Chat", "Hi Chat", "Chat")
+- **Two voice modes**: STT-only mode (transcribe without auto-send) and Chat mode (auto-send + streaming TTS response)
 - **Silence detection**: audio threshold-based auto-stop recording
 - **Stop commands**: "stop", "goodbye", "bye", "that's all", etc.
 - **Streaming TTS**: sentences play as the LLM generates them (continuous audio)
 - **Voice settings**: configurable voice, speed (0.5x–2.0x), auto-read toggle
+- **Speaker verification** (optional): MFCC-based voice embeddings, 3-sample enrollment via `/chat/voice-enroll`
 
 ---
 
@@ -447,17 +446,30 @@ erDiagram
     }
 
     rag_query_metrics {
-        integer id PK
-        text user_id
+        text id PK
+        text user_id FK
         text query_text
         integer num_candidates
         integer unique_documents
+        real top_similarity
         real avg_similarity
-        real max_similarity
-        real avg_rerank_score
-        real max_rerank_score
-        real search_time_ms
-        real rerank_time_ms
+        real top_rrf_score
+        real top_rerank_score
+        real score_spread
+        integer hybrid_enabled
+        integer reranker_enabled
+        real t_embed_ms
+        real t_search_ms
+        real t_rerank_ms
+        real t_total_ms
+        text created_at
+    }
+
+    message_sources {
+        text id PK
+        text message_id FK
+        text url
+        text title
         text created_at
     }
 
@@ -472,6 +484,7 @@ erDiagram
     chat_sessions ||--o{ session_documents : "has attached"
     users ||--o{ session_documents : "owns"
     users ||--o{ user_memories : "has memories"
+    chat_messages ||--o{ message_sources : "has sources"
 ```
 
 
@@ -491,7 +504,8 @@ erDiagram
 - `chat_sessions.summary` for rolling conversation summaries
 - `user_memories` stores cross-session facts with categories: preference, background, project, instruction
 - `user_memories` has access tracking (count + last_accessed_at) for relevance decay
-- `rag_query_metrics` tracks RAG search performance for analytics
+- `message_sources` stores web search source URLs/titles per assistant message
+- `rag_query_metrics` tracks RAG search performance with detailed timing breakdown
 - Schema auto-initialized on first gateway start via `init_database()`
 
 ---
@@ -510,6 +524,7 @@ erDiagram
   GET /                — Basic health check
   GET /auth            — JWT validation + user info
   GET /inference       — Inference tier status + routing info
+  GET /deep            — Deep health checks (embedding, vector roundtrip)
 
 /chat
   POST /               — Send message (full response)
@@ -521,7 +536,8 @@ erDiagram
   PATCH /sessions/{id}/pin — Pin/unpin session
   DELETE /sessions/{id}    — Delete session
   GET  /image/{image_id}   — Download message image
-  POST /transcribe     — Whisper STT (audio → text + speaker verification)
+  GET  /sessions/{id}/images — List images in session
+  POST /transcribe     — Whisper STT (audio → text)
   POST /tts            — Kokoro TTS (text → audio)
   POST /voice-enroll   — Voice profile enrollment
   GET  /voice-profile  — Get voice profile status
@@ -531,6 +547,7 @@ erDiagram
   POST /upload         — Upload file for RAG processing (PDF/DOCX/TXT/MD, up to 50MB)
   GET  /               — List user documents
   DELETE /{id}         — Delete document + chunks
+  POST /reindex        — Re-embed missing document chunk vectors
   POST /sessions/{id}/attach           — Attach document to session
   GET  /sessions/{id}/attachments      — List session attachments
   DELETE /sessions/{id}/attachments/{id} — Remove attachment
@@ -640,7 +657,7 @@ flowchart TD
     Chat --> Sidebar["Session Sidebar\n(list, search, rename, pin, delete)"]
     Chat --> ChatArea["Chat Area\n(messages, streaming, images)"]
     Chat --> ModeSelect["Mode Selector\n(instant / thinking / thinking_harder)"]
-    Chat --> VoiceMode["Voice Conversation Mode\n(STT + TTS + wake-word + speaker verification)"]
+    Chat --> VoiceMode["Voice Conversation Mode\n(STT mode + Chat mode with streaming TTS)"]
     Chat --> DocPanel["Document Panel\n(upload, attach, RAG brain)"]
 
     ChatArea --> Markdown["react-markdown\n+ syntax highlighting\n+ KaTeX math"]
@@ -657,7 +674,7 @@ flowchart TD
 
 **Key frontend features:**
 
-- Voice conversation mode with wake-word detection, speaker verification, and streaming TTS
+- Voice conversation mode with STT-only and Chat (auto-send + streaming TTS) modes
 - Document upload/attachment for RAG and per-session context
 - Image upload via paste, drag-and-drop, or file picker (stored locally)
 - Web search source citations with clickable links
@@ -665,6 +682,7 @@ flowchart TD
 - Session pinning/favoriting and search (when 5+ sessions)
 - Export conversations as Markdown
 - Regenerate last assistant response
+- Upload progress tracking (upload → extract → chunk → embed → done)
 - Responsive mobile design with drawer sidebar
 
 ---
@@ -684,8 +702,8 @@ flowchart TD
     Model["molebie-ai model download/remove/start/stop/list"]
 
     Install --> Wizard["8-step interactive setup wizard"]
-    Run --> Start["Start locally-configured services\n+ health-check remote services"]
-    Doctor --> Diagnose["Check environment health\n(with --fix option)"]
+    Run --> Start["Start locally-configured services\n+ health-check remote services\n(--service, --no-inference)"]
+    Doctor --> Diagnose["Check environment health\n(--fix, --deep)"]
     Status --> Show["Show config + service health"]
     Model --> ModelMgmt["Download/remove/start/stop LLM models"]
 ```
@@ -907,4 +925,4 @@ flowchart TD
 | **Tailscale** | — | VPN mesh | Connects server + GPU node (optional) |
 | **CLI** | — | Python (Typer) | Setup wizard, service management, model management, diagnostics |
 
-The gateway is the central orchestrator: it authenticates every request (JWT + bcrypt), manages sessions/messages in SQLite, routes to the appropriate inference tier, enriches context with web search and RAG results, retrieves cross-session user memories, manages conversation summarization, handles voice transcription and synthesis with speaker verification, manages image attachments via local storage, builds evidence-augmented system prompts, handles streaming, extracts reasoning content, and applies cost controls.
+The gateway is the central orchestrator: it authenticates every request (JWT + bcrypt), manages sessions/messages in SQLite, routes to the appropriate inference tier, enriches context with web search and RAG results, retrieves cross-session user memories, manages conversation summarization, handles voice transcription and synthesis, manages image attachments via local storage, builds evidence-augmented system prompts, handles streaming, extracts reasoning content, and applies cost controls.
