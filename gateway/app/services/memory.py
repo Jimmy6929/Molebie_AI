@@ -208,7 +208,7 @@ class MemoryService:
                 asyncio.to_thread(embedding_service.embed, query),
                 timeout=timeout,
             )
-        except (asyncio.TimeoutError, Exception) as exc:
+        except Exception as exc:
             print(f"[memory] Embedding timed out or failed ({exc}), skipping memory retrieval")
             return []
 

@@ -145,8 +145,81 @@ def setup_voice(project_root: Path) -> FeatureSetupResult:
     )
 
 
+def _is_model_cached(model: str) -> bool:
+    """Check if a HuggingFace model is already in the local cache."""
+    cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+    # HuggingFace cache uses models--{org}--{name} directory format
+    model_dir_name = f"models--{model.replace('/', '--')}"
+    model_path = cache_dir / model_dir_name
+    if not model_path.is_dir():
+        return False
+    # Verify it has actual snapshot data (not just a partial download)
+    snapshots = model_path / "snapshots"
+    return snapshots.is_dir() and any(snapshots.iterdir())
+
+
+def ensure_embedding_model(model: str = "Orange/orange-nomic-v1.5-1536") -> FeatureSetupResult:
+    """Ensure the shared embedding model is downloaded and cached.
+
+    This is a shared dependency used by both the memory service and RAG.
+    It should run during install whenever *either* feature is enabled.
+
+    Strategy:
+      1. Check local cache first (instant, no network).
+      2. If cached → done. Offline install works fine.
+      3. If not cached → try to download. If offline, fail clearly.
+    """
+    # Step 1: Check local cache (no network, no ML imports needed)
+    if _is_model_cached(model):
+        return FeatureSetupResult(
+            feature="embedding", success=True,
+            message=f"Embedding model already cached ({model})",
+        )
+
+    # Not cached — need ML deps + internet to download
+    check = subprocess.run(
+        [sys.executable, "-c", "import torch; import sentence_transformers"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if check.returncode != 0:
+        return FeatureSetupResult(
+            feature="embedding",
+            success=False,
+            message="ML dependencies (torch, sentence-transformers) not installed",
+            warnings=[
+                "Memory and RAG features need these to work.",
+                "Install with: pip install -r requirements-ml.txt",
+            ],
+        )
+
+    # Try to download (timeout=120s is plenty for the initial connection;
+    # if we're offline, SentenceTransformer fails within ~10s on connect)
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "from sentence_transformers import SentenceTransformer; "
+         f"SentenceTransformer('{model}')"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode == 0:
+        return FeatureSetupResult(
+            feature="embedding", success=True,
+            message=f"Embedding model downloaded and cached ({model})",
+        )
+
+    # Download failed — likely offline
+    return FeatureSetupResult(
+        feature="embedding",
+        success=False,
+        message="Embedding model not cached and download failed (no internet?)",
+        warnings=[
+            "Memory and RAG will be unavailable until the model is cached.",
+            "Connect to internet and run: molebie-ai install --quick",
+        ],
+    )
+
+
 def setup_rag() -> FeatureSetupResult:
-    """Prepare RAG prerequisites and optionally pre-download the embedding model."""
+    """Prepare RAG prerequisites (embedding model is handled separately)."""
     warnings: list[str] = []
 
     # Quick check: are ML dependencies (torch + sentence-transformers) available?
@@ -165,26 +238,12 @@ def setup_rag() -> FeatureSetupResult:
             ],
         )
 
-    # Attempt to pre-download embedding model
-    result = subprocess.run(
-        [sys.executable, "-c",
-         "from sentence_transformers import SentenceTransformer; "
-         "SentenceTransformer('Orange/orange-nomic-v1.5-1536')"],
-        capture_output=True, text=True, timeout=600,
-    )
-    if result.returncode == 0:
-        msg = "RAG prerequisites ready (embedding model cached)"
-    else:
-        msg = "RAG configuration saved"
-        warnings.append(
-            "Embedding model (~500MB) will download on first use"
-        )
-
     # Note: full RAG readiness depends on gateway running
     warnings.append(
         "Document upload and retrieval are gateway services — start with: molebie-ai run"
     )
 
     return FeatureSetupResult(
-        feature="rag", success=True, message=msg, warnings=warnings,
+        feature="rag", success=True, message="RAG prerequisites ready",
+        warnings=warnings,
     )

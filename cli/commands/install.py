@@ -43,6 +43,20 @@ from cli.ui.prompts import (
 )
 
 
+_DEFAULT_EMBEDDING_MODEL = "Orange/orange-nomic-v1.5-1536"
+
+
+def _read_embedding_model_from_env(env_path: Path) -> str:
+    """Read EMBEDDING_MODEL from .env.local, fall back to default."""
+    if not env_path.exists():
+        return _DEFAULT_EMBEDDING_MODEL
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("EMBEDDING_MODEL=") and not line.startswith("#"):
+            return line.split("=", 1)[1].strip() or _DEFAULT_EMBEDDING_MODEL
+    return _DEFAULT_EMBEDDING_MODEL
+
+
 # ──────────────────────────────────────────────────────────────
 # Auto-configure defaults for --quick mode
 # ──────────────────────────────────────────────────────────────
@@ -603,7 +617,23 @@ def _execute_install(
     _setup_backend(config, sys_info)
     console.print()
 
-    # 7g. Feature auto-setup
+    # 7g. Embedding model — shared infrastructure for memory + RAG.
+    # Memory is always on (no installer toggle), so this always runs.
+    # Must be outside the feature gate so it runs even if all features are disabled.
+    # Read the actual configured model from .env.local (not hardcoded default).
+    console.print("[heading]Caching embedding model...[/heading]")
+    embedding_model = _read_embedding_model_from_env(env_path)
+    r = feature_setup.ensure_embedding_model(model=embedding_model)
+    if r.success:
+        print_ok(r.message)
+    else:
+        print_warn(r.message)
+        print_info("Core chat still works — memory and RAG need this model.")
+    for w in r.warnings:
+        print_warn(w)
+    console.print()
+
+    # 7h. Feature auto-setup
     if config.search_enabled or config.voice_enabled or config.rag_enabled:
         console.print("[heading]Setting up features...[/heading]")
         try:
@@ -613,7 +643,7 @@ def _execute_install(
             print_info("Features can be set up later with: molebie-ai feature add <name>")
         console.print()
 
-    # 7h. Final save
+    # 7i. Final save
     config.installed = True
     config.last_install_at = datetime.now(timezone.utc).isoformat()
     config_manager.save_config(config)
