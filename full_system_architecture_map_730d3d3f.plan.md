@@ -21,7 +21,7 @@ graph TB
         User["User (Browser)"]
     end
 
-    subgraph machine1 ["Machine 1 — Server (configurable IP)"]
+    subgraph appServices ["App Services (Gateway + Webapp)"]
         WebApp["Next.js 16 Web App\n:3000"]
         Gateway["FastAPI Gateway\n:8000"]
         SQLiteDB["SQLite Database\n(sqlite-vec + FTS5)\ndata/molebie.db"]
@@ -32,7 +32,7 @@ graph TB
         end
     end
 
-    subgraph machine2 ["Machine 2 — GPU Node (configurable IP)"]
+    subgraph llmServices ["LLM Server (GPU / Apple Silicon)"]
         ThinkingLLM["Inference — Thinking Tier\n(MLX / Ollama / vLLM / OpenAI)\n:8080"]
         InstantLLM["Inference — Instant Tier\n(MLX / Ollama / vLLM / OpenAI)\n:8081"]
     end
@@ -51,9 +51,9 @@ graph TB
 
 **Key points:**
 
-- Two physical machines connected via **Tailscale VPN** or LAN (also supports single-machine deployment)
-- Machine 1 runs the web app, gateway, SQLite database, SearXNG, and Kokoro TTS
-- Machine 2 runs GPU inference servers (supports MLX, Ollama, vLLM, llama.cpp, or OpenAI-compatible APIs)
+- **Flexible deployment**: services can all run on one machine or be distributed freely across machines (see Section 10 & 12)
+- 3 core services: **Webapp** (Next.js), **Gateway** (FastAPI + SQLite), **LLM Server** (MLX/Ollama/vLLM)
+- Optional Docker services (SearXNG, Kokoro TTS) are co-located with Gateway
 - **No Supabase dependency** — all data stored locally in SQLite with sqlite-vec for vector search and FTS5 for full-text search
 - All inter-service communication is HTTP; no message queues or gRPC
 - Gateway is the central orchestrator — routes to inference, RAG, web search, TTS, memory, summarization, and database
@@ -541,19 +541,45 @@ erDiagram
 
 ## 10. Physical Deployment / Network Topology
 
+The CLI installer (`molebie-ai install`) lets users choose how to distribute services across machines. Each service can run locally or remotely.
+
+### All-in-one (single machine)
+
+```mermaid
+graph LR
+    subgraph single ["Single Machine (localhost)"]
+        next["Next.js :3000"]
+        fastapi["FastAPI :8000"]
+        sqlite["SQLite DB"]
+        searx["SearXNG :8888"]
+        kokoro["Kokoro TTS :8880"]
+        thinking["Thinking LLM :8080"]
+        instant["Instant LLM :8081"]
+    end
+
+    next --- fastapi
+    fastapi --- sqlite
+    fastapi --- searx
+    fastapi --- kokoro
+    fastapi --- thinking
+    fastapi --- instant
+```
+
+### Frontend + API (LLM on another machine)
+
 ```mermaid
 graph LR
     subgraph tailnet [Tailscale VPN Mesh / LAN]
-        subgraph server ["Server Machine (configurable IP)"]
+        subgraph server ["This Machine (App Server)"]
             next["Next.js :3000"]
             fastapi["FastAPI :8000"]
-            sqlite["SQLite DB\ndata/molebie.db"]
+            sqlite["SQLite DB"]
             searx["SearXNG :8888"]
             kokoro["Kokoro TTS :8880"]
         end
-        subgraph gpu ["GPU Node (configurable IP)"]
-            thinking["Thinking Tier :8080"]
-            instant["Instant Tier :8081"]
+        subgraph gpu ["Remote LLM Server"]
+            thinking["Thinking LLM :8080"]
+            instant["Instant LLM :8081"]
         end
     end
 
@@ -565,12 +591,37 @@ graph LR
     fastapi ---|"Tailscale/LAN"| instant
 ```
 
-**Deployment modes:**
+### LLM Server (dedicated GPU node)
 
-- **Two-machine**: Gateway/webapp on server, inference on GPU node (Tailscale/LAN)
-- **Single-machine**: Everything on localhost (configured via `molebie-ai install`)
+```mermaid
+graph LR
+    subgraph tailnet [Tailscale VPN Mesh / LAN]
+        subgraph gpu ["This Machine (GPU Node)"]
+            thinking["Thinking LLM :8080"]
+            instant["Instant LLM :8081"]
+        end
+        subgraph server ["Remote App Server"]
+            next["Next.js :3000"]
+            fastapi["FastAPI :8000"]
+            sqlite["SQLite DB"]
+        end
+    end
+
+    fastapi ---|"Tailscale/LAN"| thinking
+    fastapi ---|"Tailscale/LAN"| instant
+    next --- fastapi
+    fastapi --- sqlite
+```
+
+**Deployment details:**
+
+- **All-in-one**: Everything on localhost — the default, zero configuration
+- **Frontend + API**: Webapp + Gateway on this machine, LLM on a remote GPU machine (e.g. Mac with Apple Silicon)
+- **LLM server**: This machine only runs inference — app + API run elsewhere
+- **Custom**: Any combination of services per machine (via CLI "Custom" option)
+- Machines connect via **Tailscale VPN** or LAN — IPs configured during setup
+- Optional services (SearXNG, Kokoro TTS) always co-located with Gateway
 - **Auto-pull daemon**: macOS LaunchAgent polls git and auto-updates on new commits
-- IPs are configurable via CLI wizard (no hardcoded Tailscale IPs)
 
 ---
 
@@ -620,6 +671,8 @@ flowchart TD
 
 ## 12. CLI Tool (molebie-ai)
 
+### Commands Overview
+
 ```mermaid
 flowchart TD
     Install["molebie-ai install"]
@@ -630,29 +683,168 @@ flowchart TD
     Feature["molebie-ai feature list/add/remove"]
     Model["molebie-ai model download/remove/start/stop/list"]
 
-    Install --> Prereqs["Check prerequisites\n(Docker, Node 18+, Python 3.10+, ffmpeg)"]
-    Prereqs --> Backend["Select backend\n(MLX / Ollama / OpenAI-compatible)"]
-    Backend --> Models["Select model profile\n(Light / Balanced / Custom)"]
-    Models --> Features["Toggle features\n(voice, search, RAG)"]
-    Features --> Deploy["Select deployment\n(single / two-machine)"]
-    Deploy --> Setup["Run setup\n(env gen, model downloads, deps install)"]
-
-    Run --> Start["Start all configured services"]
+    Install --> Wizard["8-step interactive setup wizard"]
+    Run --> Start["Start locally-configured services\n+ health-check remote services"]
     Doctor --> Diagnose["Check environment health\n(with --fix option)"]
+    Status --> Show["Show config + service health"]
     Model --> ModelMgmt["Download/remove/start/stop LLM models"]
+```
+
+### Install Wizard — Full Flow (8 Steps)
+
+```
+┌─────────────────────────────────────┐
+│         Step 1: System Check        │
+│  Check RAM, disk, Apple Silicon     │
+└──────────────────┬──────────────────┘
+                   │
+┌──────────────────▼──────────────────┐
+│     Step 2: Deployment Layout       │
+│                                     │
+│  [1] All-in-one                     │
+│  [2] Frontend + API                 │
+│  [3] LLM server                    │
+│  [4] Custom                         │
+└──┬───────┬───────┬───────┬──────────┘
+   │       │       │       │
+   ▼       ▼       ▼       ▼
+┌──────┐ ┌──────┐ ┌──────┐ ┌──────────────────────┐
+│  1   │ │  2   │ │  3   │ │         4            │
+│      │ │      │ │      │ │                      │
+│ All  │ │ Ask: │ │ LLM  │ │  Run LLM?    [Y/n]   │
+│local │ │ LLM  │ │ only │ │  Run Gateway?[Y/n]   │
+│      │ │ host?│ │      │ │  Run Webapp? [Y/n]   │
+│ No   │ │      │ │ No   │ │                      │
+│ Qs   │ │ 1 Q  │ │ Qs   │ │  Then ask hosts for  │
+│      │ │      │ │      │ │  needed connections   │
+└──┬───┘ └──┬───┘ └──┬───┘ └────────┬─────────────┘
+   │        │        │              │
+   │    Shows:   Shows:         Shows:
+   │    "On the  "On the        summary +
+   │    other    other          "On the other
+   │    machine: machine:       machine(s)..."
+   │    LLM      Frontend+API
+   │    server"  → set LLM
+   │             host to
+   │             this IP"
+   │        │        │              │
+   ▼        ▼        ▼              ▼
+┌──────────────────────────────────────────┐
+│  Config result:                          │
+│                                          │
+│  run_inference = true/false              │
+│  run_gateway   = true/false              │
+│  run_webapp    = true/false              │
+│  inference_host / gateway_host /         │
+│  webapp_host   (if remote)               │
+└──────────────────┬───────────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────────┐
+│  Step 3: Inference Backend               │
+│                                          │
+│  if run_inference=false → auto-select    │
+│    OpenAI-compatible, ask endpoint URL   │
+│  if run_inference=true  → detect best:   │
+│    MLX / Ollama / OpenAI-compatible      │
+└──────────────────┬───────────────────────┘
+                   │
+┌──────────────────▼──────────────────┐
+│     Step 4: Model Profile           │
+│  light / balanced / custom          │
+│  (skipped if OpenAI-compatible)     │
+└──────────────────┬──────────────────┘
+                   │
+┌──────────────────▼──────────────────┐
+│     Step 5: Optional Features       │
+│  Search [Y/n]  RAG [Y/n]  Voice    │
+│  (skipped if gateway is remote)     │
+└──────────────────┬──────────────────┘
+                   │
+┌──────────────────▼──────────────────┐
+│     Step 6: Review                  │
+│  Show all settings in table         │
+│  Proceed? [Y/n]                     │
+└──────────────────┬──────────────────┘
+                   │
+┌──────────────────▼──────────────────────────────┐
+│     Step 7: Installing                          │
+│                                                 │
+│  ├─ Prerequisites (Python, Node)                │
+│  ├─ Generate .env.local                         │
+│  ├─ Gateway deps    (skip if !run_gateway)      │
+│  ├─ Webapp deps     (skip if !run_webapp)       │
+│  ├─ Backend setup   (skip if !run_inference)    │
+│  ├─ Embedding model (skip if !run_gateway)      │
+│  └─ Features setup  (skip if !run_gateway)      │
+└──────────────────┬──────────────────────────────┘
+                   │
+┌──────────────────▼──────────────────┐
+│     Step 8: Complete                │
+│  Summary table                      │
+│  Start Molebie AI now? [Y/n]        │
+└─────────────────────────────────────┘
+```
+
+### Step 2 Presets — What Runs Where
+
+| Preset | This machine runs | Remote | Follow-up Qs | Other machine instructions |
+|--------|-------------------|--------|-------------|---------------------------|
+| **All-in-one** | LLM + Gateway + Webapp | — | None | — |
+| **Frontend + API** | Gateway + Webapp | LLM | "LLM host?" (1 Q) | Run `molebie-ai install` → choose "LLM server" |
+| **LLM server** | LLM only | Gateway + Webapp | None | Run `molebie-ai install` → choose "Frontend + API", set LLM host to this machine's IP |
+| **Custom** | User picks individually | User picks | Per-service Y/n + host prompts | Shown based on selection |
+
+### Service Dependency Chain
+
+```
+Browser → Webapp (:3000) → Gateway (:8000) → LLM Server (:8080/:8081)
+                                 │
+                                 ├── SQLite DB (local file)
+                                 ├── SearXNG (:8888, optional)
+                                 └── Kokoro TTS (:8880, optional)
+```
+
+Only ask for remote hosts that local services need to connect to:
+- **Gateway** needs → LLM Server address (if LLM is remote)
+- **Webapp** needs → Gateway address (if Gateway is remote)
+- **Gateway** needs → Webapp address for CORS (if Webapp is remote)
+- **LLM Server** needs → nothing (it just listens)
+
+### Config Schema (v3)
+
+```json
+{
+  "version": 3,
+  "setup_type": "single | distributed",
+  "run_inference": true,
+  "run_gateway": true,
+  "run_webapp": true,
+  "inference_host": "localhost",
+  "gateway_host": "localhost",
+  "webapp_host": "localhost",
+  "inference_backend": "mlx | ollama | openai-compatible",
+  "model_profile": "light | balanced | custom",
+  "thinking_model": "...",
+  "instant_model": "...",
+  "search_enabled": true,
+  "rag_enabled": true,
+  "voice_enabled": false
+}
 ```
 
 **CLI details:**
 
 - **Framework**: Python + Typer + Rich
 - **Entry point**: `molebie-ai` (installed via `pip install -e .`)
-- **Config storage**: `.molebie/config.json` (version 2)
+- **Config storage**: `.molebie/config.json` (version 3, auto-migrates from v2)
 - **Env generation**: Auto-generates `.env.local` from CLI config (including random JWT secret)
 - **Prerequisite checker**: Detects and offers to install missing dependencies
-- **Service manager**: Starts/stops all services via subprocess
+- **Service manager**: Starts/stops only locally-configured services, health-checks remote ones
 - **Model management**: Download, remove, start, and stop LLM models per backend
 - **Feature management**: Enable/disable voice, search, RAG services
 - **Doctor**: Diagnose and optionally fix setup issues
+- **Smart install**: Only installs dependencies for services running on this machine
 
 ---
 

@@ -132,18 +132,85 @@ def _check_system(quick: bool = False) -> SystemInfo:
 # Phase 2: Setup type
 # ──────────────────────────────────────────────────────────────
 
+def _show_other_machine_instructions(config: MolebieConfig) -> None:
+    """Show what needs to be set up on other machines."""
+    console.print()
+    console.print("  [bold cyan]On the other machine(s):[/bold cyan]")
+
+    if not config.run_inference:
+        console.print(
+            f"  [dim]LLM machine[/dim] — run [bold]molebie-ai install[/bold] "
+            f"\u2192 choose [bold]LLM server[/bold]"
+        )
+        console.print(
+            "    Or manually start MLX/Ollama on ports 8080/8081"
+        )
+
+    if not config.run_gateway or not config.run_webapp:
+        this_ip = "<this-machine-ip>"
+        if not config.run_gateway and not config.run_webapp:
+            console.print(
+                f"  [dim]App machine[/dim]  — run [bold]molebie-ai install[/bold] "
+                f"\u2192 choose [bold]Frontend + API[/bold]"
+            )
+            console.print(
+                f"    Set LLM Server host to this machine\u2019s IP"
+            )
+        elif not config.run_gateway:
+            console.print(
+                f"  [dim]Gateway machine[/dim] — run [bold]molebie-ai install[/bold] "
+                f"\u2192 choose [bold]Custom[/bold], enable Gateway"
+            )
+        elif not config.run_webapp:
+            console.print(
+                f"  [dim]Webapp machine[/dim]  — run [bold]molebie-ai install[/bold] "
+                f"\u2192 choose [bold]Custom[/bold], enable Webapp"
+            )
+
+    console.print()
+
+
 def _ask_setup_type(config: MolebieConfig) -> None:
     print_step_header(2, 8, "Deployment Layout")
     choice = ask_choice(
         "How will you run Molebie AI?",
         [
             "All-in-one — everything on this Mac",
-            "Distributed — choose what this machine runs",
+            "Frontend + API — Webapp + Gateway here, LLM on another machine",
+            "LLM server — LLM only, app + API on another machine",
+            "Custom — pick services individually",
         ],
         default="All-in-one — everything on this Mac",
     )
 
-    if "Distributed" in choice:
+    if "All-in-one" in choice:
+        config.setup_type = SetupType.SINGLE
+        print_ok("All-in-one mode: all services on localhost")
+
+    elif "Frontend + API" in choice:
+        config.setup_type = SetupType.DISTRIBUTED
+        config.run_inference = False
+        config.run_gateway = True
+        config.run_webapp = True
+        console.print()
+        console.print("  [dim](Tip: use Tailscale IPs for reliable connectivity)[/dim]")
+        host = ask_text("  LLM Server host", default="")
+        if not host:
+            print_fail("LLM Server host is required.")
+            raise typer.Exit(1)
+        config.inference_host = host
+        print_ok(f"Webapp + Gateway on this machine, LLM \u2192 {host}")
+        _show_other_machine_instructions(config)
+
+    elif "LLM server" in choice:
+        config.setup_type = SetupType.DISTRIBUTED
+        config.run_inference = True
+        config.run_gateway = False
+        config.run_webapp = False
+        print_ok("LLM Server on this machine (Gateway + Webapp run elsewhere)")
+        _show_other_machine_instructions(config)
+
+    elif "Custom" in choice:
         config.setup_type = SetupType.DISTRIBUTED
         console.print()
         console.print("  [heading]What will THIS machine run?[/heading]")
@@ -164,24 +231,26 @@ def _ask_setup_type(config: MolebieConfig) -> None:
             print_fail("At least one service must run on this machine.")
             raise typer.Exit(1)
 
-        # Ask for remote service addresses
+        # Only ask for hosts that local services actually need to connect to:
+        #   Gateway → LLM Server (inference requests)
+        #   Webapp  → Gateway    (API calls)
+        #   Gateway needs Webapp origin for CORS
         remote_services = []
-        if not config.run_inference:
+        if config.run_gateway and not config.run_inference:
             remote_services.append(("inference_host", "LLM Server host"))
-        if not config.run_gateway:
+        if config.run_webapp and not config.run_gateway:
             remote_services.append(("gateway_host", "Gateway host"))
-        if not config.run_webapp:
-            remote_services.append(("webapp_host", "Webapp host"))
+        if config.run_gateway and not config.run_webapp:
+            remote_services.append(("webapp_host", "Webapp host (for CORS)"))
 
         if remote_services:
             console.print()
-            console.print("  [heading]Remote service addresses[/heading]")
             console.print("  [dim](Tip: use Tailscale IPs for reliable connectivity)[/dim]")
             console.print()
             for field_name, label in remote_services:
                 host = ask_text(f"  {label}", default="")
                 if not host:
-                    print_fail(f"{label} is required when the service runs remotely.")
+                    print_fail(f"{label} is required.")
                     raise typer.Exit(1)
                 setattr(config, field_name, host)
 
@@ -202,9 +271,7 @@ def _ask_setup_type(config: MolebieConfig) -> None:
         print_ok(f"This machine: {', '.join(local)}")
         for r in remote:
             print_ok(f"Remote: {r}")
-    else:
-        config.setup_type = SetupType.SINGLE
-        print_ok("All-in-one mode: all services on localhost")
+        _show_other_machine_instructions(config)
 
 
 # ──────────────────────────────────────────────────────────────
