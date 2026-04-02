@@ -282,19 +282,19 @@ def _ask_backend(config: MolebieConfig, sys_info: SystemInfo) -> None:
     print_step_header(3, 8, "Inference Backend")
 
     rec = backend_setup.detect_recommended_backend(sys_info, config.run_inference)
-    print_info(f"Recommendation: {rec.backend.value} — {rec.reason}")
-    console.print()
 
-    if ask_confirm(f"Use {rec.backend.value}?", default=True):
-        config.inference_backend = rec.backend
-    else:
+    if not config.run_inference:
+        # Inference is remote — ask what the remote machine runs
+        console.print("  [dim]The LLM runs on another machine. What backend does it use?[/dim]")
+        console.print()
         choice = ask_choice(
-            "Choose your inference backend:",
+            "Remote LLM backend:",
             [
-                "MLX (Apple Silicon)",
-                "Ollama (cross-platform)",
+                "MLX (Apple Silicon Mac)",
+                "Ollama",
                 "OpenAI-compatible (vLLM, llama.cpp, OpenAI API, etc.)",
             ],
+            default="MLX (Apple Silicon Mac)",
         )
         if "MLX" in choice:
             config.inference_backend = InferenceBackend.MLX
@@ -302,11 +302,32 @@ def _ask_backend(config: MolebieConfig, sys_info: SystemInfo) -> None:
             config.inference_backend = InferenceBackend.OLLAMA
         else:
             config.inference_backend = InferenceBackend.OPENAI_COMPATIBLE
+    else:
+        print_info(f"Recommendation: {rec.backend.value} — {rec.reason}")
+        console.print()
+        if ask_confirm(f"Use {rec.backend.value}?", default=True):
+            config.inference_backend = rec.backend
+        else:
+            choice = ask_choice(
+                "Choose your inference backend:",
+                [
+                    "MLX (Apple Silicon)",
+                    "Ollama (cross-platform)",
+                    "OpenAI-compatible (vLLM, llama.cpp, OpenAI API, etc.)",
+                ],
+            )
+            if "MLX" in choice:
+                config.inference_backend = InferenceBackend.MLX
+            elif "Ollama" in choice:
+                config.inference_backend = InferenceBackend.OLLAMA
+            else:
+                config.inference_backend = InferenceBackend.OPENAI_COMPATIBLE
 
     # OpenAI-compatible: ask for endpoint details
     if config.inference_backend == InferenceBackend.OPENAI_COMPATIBLE:
         console.print()
-        config.inference_url = ask_text("  Endpoint URL", default="http://localhost:8080")
+        default_url = f"http://{config.inference_host}:8080" if not config.run_inference else "http://localhost:8080"
+        config.inference_url = ask_text("  Endpoint URL", default=default_url)
         api_key = ask_text("  API key (empty if none)", default="")
         config.inference_api_key = api_key if api_key else None
         config.thinking_model = ask_text("  Thinking model name (optional)", default="")
@@ -834,7 +855,11 @@ def install(
         _ask_setup_type(config)
         _ask_backend(config, sys_info)
         _ask_model_profile(config, sys_info)
-        _ask_features(config)
+        if config.run_gateway:
+            _ask_features(config)
+        else:
+            print_step_header(5, 8, "Optional Features")
+            print_info("Features (search, RAG, voice) run on the Gateway machine — skipped here")
         _show_review(config)
 
     # Preliminary save — preserves wizard choices if install fails partway
