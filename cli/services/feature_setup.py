@@ -47,6 +47,12 @@ def setup_search(project_root: Path) -> FeatureSetupResult:
             message=f"Docker is required for web search (SearXNG): {msg}",
         )
 
+    # Remove stale container if it exists (prevents name-conflict errors on re-install)
+    subprocess.run(
+        ["docker", "rm", "-f", "searxng"],
+        capture_output=True, text=True, timeout=30,
+    )
+
     # Start SearXNG — same command as existing install.py and Makefile
     result = subprocess.run(
         ["docker", "compose", "up", "-d", "searxng"],
@@ -103,6 +109,12 @@ def setup_voice(project_root: Path) -> FeatureSetupResult:
             message=f"Docker is required for voice (Kokoro TTS): {msg}",
         )
 
+    # Remove stale container if it exists (prevents name-conflict errors on re-install)
+    subprocess.run(
+        ["docker", "rm", "-f", "kokoro-tts"],
+        capture_output=True, text=True, timeout=30,
+    )
+
     # Start Kokoro TTS — same command as existing install.py and Makefile
     result = subprocess.run(
         ["docker", "compose", "up", "-d", "kokoro-tts"],
@@ -136,6 +148,22 @@ def setup_voice(project_root: Path) -> FeatureSetupResult:
 def setup_rag() -> FeatureSetupResult:
     """Prepare RAG prerequisites and optionally pre-download the embedding model."""
     warnings: list[str] = []
+
+    # Quick check: are ML dependencies (torch + sentence-transformers) available?
+    check = subprocess.run(
+        [sys.executable, "-c", "import torch; import sentence_transformers"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if check.returncode != 0:
+        return FeatureSetupResult(
+            feature="rag",
+            success=False,
+            message="RAG unavailable — ML dependencies (torch, sentence-transformers) not installed",
+            warnings=[
+                "This typically means PyTorch has no wheels for your platform/Python version.",
+                "Core chat, web search, and auth work normally without it.",
+            ],
+        )
 
     # Attempt to pre-download embedding model
     result = subprocess.run(

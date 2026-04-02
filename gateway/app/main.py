@@ -51,13 +51,19 @@ async def lifespan(app: FastAPI):
             print(f"     Preloading embedding model in background...")
             from app.services.embedding import get_embedding_service
             def _preload_embedding():
-                get_embedding_service()._load_model()
+                try:
+                    get_embedding_service()._load_model()
+                except (ImportError, RuntimeError) as exc:
+                    print(f"[embedding] Preload skipped: {exc}")
             asyncio.create_task(asyncio.to_thread(_preload_embedding))
         if settings.rag_reranker_preload and settings.rag_reranker_enabled:
             print(f"     Preloading reranker model in background...")
             from app.services.reranker import get_reranker
             def _preload_reranker():
-                get_reranker()._load_model()
+                try:
+                    get_reranker()._load_model()
+                except (ImportError, RuntimeError) as exc:
+                    print(f"[reranker] Preload skipped: {exc}")
             asyncio.create_task(asyncio.to_thread(_preload_reranker))
     yield
     print(f"Shutting down {settings.app_name}")

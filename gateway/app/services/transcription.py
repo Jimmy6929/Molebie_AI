@@ -17,7 +17,14 @@ def _get_model():
     if _model is not None:
         return _model
 
-    from faster_whisper import WhisperModel
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise RuntimeError(
+            "faster-whisper is not installed. "
+            "Voice transcription requires PyTorch and faster-whisper — "
+            "install with: pip install -r requirements-ml.txt"
+        )
 
     print("[transcription] Loading Whisper tiny model (first call may download ~75 MB)...")
     _model = WhisperModel("tiny", device="cpu", compute_type="int8")

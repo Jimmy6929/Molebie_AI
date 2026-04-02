@@ -297,36 +297,71 @@ def _display_check_results(results: list) -> bool:
 
 
 def _gateway_deps_fresh(root: Path) -> bool:
-    """Check if gateway deps are installed and newer than requirements.txt."""
+    """Check if gateway deps are installed and newer than requirements files."""
     marker = root / "gateway" / ".deps_installed"
     req = root / "gateway" / "requirements.txt"
+    ml_req = root / "gateway" / "requirements-ml.txt"
     if not marker.exists() or not req.exists():
         return False
-    return marker.stat().st_mtime >= req.stat().st_mtime
+    if marker.stat().st_mtime < req.stat().st_mtime:
+        return False
+    if ml_req.exists() and marker.stat().st_mtime < ml_req.stat().st_mtime:
+        return False
+    return True
 
 
 def _install_gateway_deps(root) -> None:
-    """Install gateway Python dependencies into the project venv."""
+    """Install gateway Python dependencies into the project venv.
+
+    Two-phase install:
+      1. Core deps (requirements.txt) — must succeed.
+      2. ML deps (requirements-ml.txt) — attempted, failure is non-fatal.
+    This ensures the installer never fails due to optional ML packages
+    (e.g. PyTorch unavailable on the current platform/Python version).
+    """
     if _gateway_deps_fresh(root):
         print_ok("Gateway dependencies already installed — skipping")
         return
 
     venv_python = str(root / ".venv" / "bin" / "python")
     python_cmd = venv_python if Path(venv_python).exists() else sys.executable
-    with console.status("[info]Installing gateway dependencies...[/info]"):
+
+    # Phase 1: Core dependencies — must succeed
+    with console.status("[info]Installing gateway core dependencies...[/info]"):
         result = subprocess.run(
             [python_cmd, "-m", "pip", "install", "-r", "requirements.txt", "--quiet"],
             cwd=str(root / "gateway"),
             capture_output=True, text=True, timeout=300,
         )
-    if result.returncode == 0:
-        print_ok("Gateway dependencies installed")
-        # Write marker so subsequent runs skip this step
-        (root / "gateway" / ".deps_installed").touch()
-    else:
-        print_warn("Gateway dependency install had issues — check manually")
+    if result.returncode != 0:
+        print_warn("Gateway core dependency install had issues — check manually")
         if result.stderr:
             console.print(f"    [dim]{result.stderr[:200]}[/dim]")
+        return
+    print_ok("Gateway core dependencies installed")
+
+    # Phase 2: ML dependencies (torch, sentence-transformers, faster-whisper)
+    # These may fail on platforms without PyTorch wheels — that's OK.
+    ml_req = root / "gateway" / "requirements-ml.txt"
+    if ml_req.exists():
+        with console.status("[info]Installing ML dependencies (torch, embeddings)...[/info]"):
+            ml_result = subprocess.run(
+                [python_cmd, "-m", "pip", "install", "-r", "requirements-ml.txt", "--quiet"],
+                cwd=str(root / "gateway"),
+                capture_output=True, text=True, timeout=600,
+            )
+        if ml_result.returncode == 0:
+            print_ok("ML dependencies installed (RAG + voice ready)")
+        else:
+            print_warn("ML dependencies could not be installed")
+            if ml_result.stderr:
+                lines = ml_result.stderr.strip().splitlines()
+                last_line = lines[-1] if lines else ""
+                console.print(f"    [dim]{last_line[:200]}[/dim]")
+            print_info("Core chat, web search, and auth work normally without them.")
+            print_info("RAG and voice features will be unavailable until resolved.")
+
+    (root / "gateway" / ".deps_installed").touch()
 
 
 def _install_webapp_deps(root) -> None:
@@ -426,7 +461,12 @@ def _setup_features(config: MolebieConfig, root) -> None:
     if config.rag_enabled:
         print_info("Preparing RAG prerequisites...")
         r = feature_setup.setup_rag()
-        print_ok(r.message) if r.success else print_warn(r.message)
+        if r.success:
+            print_ok(r.message)
+        else:
+            print_warn(r.message)
+            config.rag_enabled = False
+            print_info("RAG disabled — re-enable later with: molebie-ai feature add rag")
         for w in r.warnings:
             print_warn(w)
 

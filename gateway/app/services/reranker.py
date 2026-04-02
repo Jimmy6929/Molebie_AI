@@ -25,7 +25,14 @@ class RerankerService:
     def _load_model(self):
         if self._model is not None:
             return
-        from sentence_transformers import CrossEncoder
+        try:
+            from sentence_transformers import CrossEncoder
+        except ImportError:
+            raise RuntimeError(
+                "sentence-transformers is not installed. "
+                "Reranking requires PyTorch and sentence-transformers — "
+                "install with: pip install -r requirements-ml.txt"
+            )
 
         print(f"[reranker] Loading model: {self.model_name}")
         self._model = CrossEncoder(self.model_name)

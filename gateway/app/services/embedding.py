@@ -22,7 +22,14 @@ class EmbeddingService:
     def _load_model(self):
         if self._model is not None:
             return
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise RuntimeError(
+                "sentence-transformers is not installed. "
+                "RAG requires PyTorch and sentence-transformers — "
+                "install with: pip install -r requirements-ml.txt"
+            )
 
         print(f"[embedding] Loading model: {self.model_name} (local_files_only={self.local_files_only})")
         self._model = SentenceTransformer(

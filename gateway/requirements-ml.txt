@@ -1,0 +1,10 @@
+# Optional ML dependencies for RAG embeddings and voice transcription.
+# These require PyTorch, which may not be available on every platform
+# (e.g. macOS x86_64, new Python versions before PyTorch adds support).
+#
+# Core chat, auth, and web search work without these packages.
+# Install separately: pip install -r requirements-ml.txt
+
+torch>=2.0.0
+sentence-transformers>=3.0.0
+faster-whisper==1.1.1
