@@ -1,0 +1,12 @@
+Package: molebie-ai
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: libc6 (>= 2.31)
+Maintainer: Jimmy <jimmy@molebieai.com>
+Homepage: https://molebieai.com
+Description: Self-hosted privacy-first AI assistant
+ Molebie AI is a fully self-hosted AI assistant platform with
+ local LLM inference, web search, RAG, and voice features.
+ This package installs the molebie-ai CLI tool.

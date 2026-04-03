@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: MolebieAI.MolebieAI
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: Molebie AI
+PublisherUrl: https://molebieai.com
+PackageName: Molebie AI
+PackageUrl: https://github.com/Jimmy6929/Molebie_AI
+License: MIT
+LicenseUrl: https://github.com/Jimmy6929/Molebie_AI/blob/main/LICENSE
+ShortDescription: Self-hosted privacy-first AI assistant
+Description: |-
+  Molebie AI is a fully self-hosted AI assistant platform with local LLM inference,
+  web search, RAG (retrieval-augmented generation), and voice features. No cloud
+  dependency — your data stays on your machine.
+Tags:
+  - ai
+  - assistant
+  - llm
+  - privacy
+  - self-hosted
+  - chat
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

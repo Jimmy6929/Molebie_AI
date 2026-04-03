@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: MolebieAI.MolebieAI
+PackageVersion: 0.1.0
+Installers:
+  - Architecture: x64
+    InstallerType: nullsoft
+    InstallerUrl: https://github.com/Jimmy6929/Molebie_AI/releases/download/v0.1.0/molebie-ai-0.1.0-setup.exe
+    InstallerSha256: PLACEHOLDER_SHA256  # Update with actual hash on release
+    Scope: machine
+    InstallerSwitches:
+      Silent: /S
+      SilentWithProgress: /S
+ManifestType: installer
+ManifestVersion: 1.6.0

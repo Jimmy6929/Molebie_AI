@@ -1,0 +1,34 @@
+app-id: org.molebieai.MolebieAI
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+command: molebie-ai
+
+finish-args:
+  # Network access for API calls, model downloads, web search
+  - --share=network
+  # Filesystem access for data directory and config
+  - --filesystem=home
+  # Talk to Docker daemon (for SearXNG, TTS)
+  - --filesystem=/var/run/docker.sock
+
+modules:
+  - name: molebie-ai
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 molebie-ai /app/bin/molebie-ai
+    sources:
+      - type: file
+        # Point to the PyInstaller binary from the release
+        url: https://github.com/Jimmy6929/Molebie_AI/releases/download/v0.1.0/molebie-ai-linux-x86_64
+        sha256: PLACEHOLDER_SHA256  # Update with actual hash on release
+        dest-filename: molebie-ai
+
+# Build instructions:
+#   flatpak-builder --force-clean build-dir org.molebieai.MolebieAI.yml
+#   flatpak-builder --run build-dir org.molebieai.MolebieAI.yml molebie-ai --version
+#
+# To install locally:
+#   flatpak-builder --install --user build-dir org.molebieai.MolebieAI.yml
+#
+# To publish to Flathub, submit this manifest to github.com/flathub/flathub

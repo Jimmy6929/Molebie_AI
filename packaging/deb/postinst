@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+echo ""
+echo "molebie-ai installed successfully!"
+echo ""
+echo "To complete setup, run:"
+echo "  molebie-ai install"
+echo ""
+echo "This will configure your inference backend, download models,"
+echo "and set up optional features (web search, RAG, voice)."
+echo ""

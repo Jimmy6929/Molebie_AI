@@ -21,7 +21,9 @@ class SystemInfo:
 
 
 def _get_chip_name() -> str:
-    if platform.system() == "Darwin":
+    system = platform.system()
+
+    if system == "Darwin":
         try:
             result = subprocess.run(
                 ["sysctl", "-n", "machdep.cpu.brand_string"],
@@ -31,11 +33,36 @@ def _get_chip_name() -> str:
                 return result.stdout.strip()
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
+
+    elif system == "Linux":
+        try:
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if line.startswith("model name"):
+                        return line.split(":", 1)[1].strip()
+        except OSError:
+            pass
+
+    elif system == "Windows":
+        try:
+            result = subprocess.run(
+                ["wmic", "cpu", "get", "Name", "/format:value"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if line.startswith("Name="):
+                        return line.split("=", 1)[1].strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
     return platform.processor() or "Unknown"
 
 
 def _get_total_memory_gb() -> float:
-    if platform.system() == "Darwin":
+    system = platform.system()
+
+    if system == "Darwin":
         try:
             result = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
@@ -45,13 +72,40 @@ def _get_total_memory_gb() -> float:
                 return int(result.stdout.strip()) / (1024**3)
         except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
             pass
-    else:
+
+    elif system == "Windows":
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.wintypes.DWORD),
+                    ("dwMemoryLoad", ctypes.wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(stat)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return stat.ullTotalPhys / (1024**3)
+        except (OSError, AttributeError):
+            pass
+
+    else:  # Linux and other Unix
         try:
             pages = os.sysconf("SC_PHYS_PAGES")
             page_size = os.sysconf("SC_PAGE_SIZE")
             return (pages * page_size) / (1024**3)
         except (ValueError, AttributeError):
             pass
+
     return 0.0
 
 

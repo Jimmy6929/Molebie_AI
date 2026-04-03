@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '20'
+
+jobs:
+  # ────────────────────────────────────────────────────────────
+  # Build standalone binaries on all 3 platforms
+  # ────────────────────────────────────────────────────────────
+  build-binaries:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon runner
+            artifact: molebie-ai-macos-arm64
+            binary: dist/molebie-ai
+          - os: macos-13          # Intel runner
+            artifact: molebie-ai-macos-x86_64
+            binary: dist/molebie-ai
+          - os: ubuntu-22.04
+            artifact: molebie-ai-linux-x86_64
+            binary: dist/molebie-ai
+          - os: windows-latest
+            artifact: molebie-ai-windows-x86_64
+            binary: dist/molebie-ai.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies and build binary
+        shell: bash
+        run: |
+          python -m venv .venv
+          if [ -f ".venv/Scripts/python.exe" ]; then
+            PY=".venv/Scripts/python.exe"
+          else
+            PY=".venv/bin/python"
+          fi
+          "$PY" -m pip install --upgrade pip -q
+          "$PY" -m pip install -e . -q
+          "$PY" -m pip install pyinstaller -q
+          "$PY" -m PyInstaller packaging/pyinstaller/molebie-ai.spec --distpath dist --workpath build/pyinstaller --noconfirm
+
+      - name: Verify binary
+        shell: bash
+        run: |
+          if [ -f "dist/molebie-ai.exe" ]; then
+            ./dist/molebie-ai.exe --version
+          else
+            ./dist/molebie-ai --version
+          fi
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────
+  # Build .deb package
+  # ────────────────────────────────────────────────────────────
+  build-deb:
+    needs: build-binaries
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: molebie-ai-linux-x86_64
+          path: dist/
+
+      - name: Set binary permissions
+        run: chmod +x dist/molebie-ai
+
+      - name: Build .deb
+        run: bash packaging/deb/build-deb.sh
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: dist/*.deb
+
+  # ────────────────────────────────────────────────────────────
+  # Build .rpm package
+  # ────────────────────────────────────────────────────────────
+  build-rpm:
+    needs: build-binaries
+    runs-on: ubuntu-22.04
+    container: fedora:39
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rpmbuild
+        run: dnf install -y rpm-build
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: molebie-ai-linux-x86_64
+          path: dist/
+
+      - name: Set binary permissions
+        run: chmod +x dist/molebie-ai
+
+      - name: Build .rpm
+        run: bash packaging/rpm/build-rpm.sh
+
+      - name: Upload .rpm
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: dist/*.rpm
+
+  # ────────────────────────────────────────────────────────────
+  # Build AppImage
+  # ────────────────────────────────────────────────────────────
+  build-appimage:
+    needs: build-binaries
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: molebie-ai-linux-x86_64
+          path: dist/
+
+      - name: Set binary permissions
+        run: chmod +x dist/molebie-ai
+
+      - name: Install FUSE (required by appimagetool)
+        run: sudo apt-get update && sudo apt-get install -y fuse libfuse2
+
+      - name: Build AppImage
+        run: bash packaging/appimage/build-appimage.sh
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: dist/*.AppImage
+
+  # ────────────────────────────────────────────────────────────
+  # Build Windows NSIS installer
+  # ────────────────────────────────────────────────────────────
+  build-windows-installer:
+    needs: build-binaries
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: molebie-ai-windows-x86_64
+          path: dist/
+
+      - name: Build NSIS installer
+        run: makensis packaging\windows\molebie-ai.nsi
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*-setup.exe
+
+  # ────────────────────────────────────────────────────────────
+  # Create GitHub Release with all artifacts
+  # ────────────────────────────────────────────────────────────
+  release:
+    needs:
+      - build-binaries
+      - build-deb
+      - build-rpm
+      - build-appimage
+      - build-windows-installer
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Binaries
+          cp release-artifacts/molebie-ai-macos-arm64/molebie-ai   release-files/molebie-ai-${VERSION}-macos-arm64
+          cp release-artifacts/molebie-ai-macos-x86_64/molebie-ai  release-files/molebie-ai-${VERSION}-macos-x86_64
+          cp release-artifacts/molebie-ai-linux-x86_64/molebie-ai  release-files/molebie-ai-${VERSION}-linux-x86_64
+          cp release-artifacts/molebie-ai-windows-x86_64/molebie-ai.exe release-files/molebie-ai-${VERSION}-windows-x86_64.exe
+
+          # Windows zip for scoop
+          cd release-files && zip molebie-ai-windows-x86_64.zip molebie-ai-${VERSION}-windows-x86_64.exe && cd ..
+
+          # Packages
+          cp release-artifacts/deb-package/*.deb release-files/ 2>/dev/null || true
+          cp release-artifacts/rpm-package/*.rpm release-files/ 2>/dev/null || true
+          cp release-artifacts/appimage/*.AppImage release-files/ 2>/dev/null || true
+          cp release-artifacts/windows-installer/*-setup.exe release-files/ 2>/dev/null || true
+
+          # Generate checksums
+          cd release-files
+          sha256sum * > SHA256SUMS.txt
+          cd ..
+
+          echo "=== Release files ==="
+          ls -la release-files/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import os
 import platform
 import shutil
 import subprocess
@@ -74,6 +75,12 @@ def detect_package_manager() -> str | None:
         return "dnf"
     if shutil.which("pacman"):
         return "pacman"
+    if shutil.which("winget"):
+        return "winget"
+    if shutil.which("choco"):
+        return "choco"
+    if shutil.which("scoop"):
+        return "scoop"
     return None
 
 
@@ -89,6 +96,9 @@ DOCKER_PREREQ = InstallablePrereq(
                 "curl -fsSL https://get.docker.com | sh"],
         "dnf": ["sudo", "dnf", "install", "-y", "docker-ce"],
         "pacman": ["sudo", "pacman", "-S", "--noconfirm", "docker"],
+        "winget": ["winget", "install", "Docker.DockerDesktop",
+                   "--accept-source-agreements", "--accept-package-agreements"],
+        "choco": ["choco", "install", "docker-desktop", "-y"],
     },
     post_install_msg="Please open Docker Desktop to finish setup, then press Enter.",
 )
@@ -102,6 +112,10 @@ NODE_PREREQ = InstallablePrereq(
                 "&& apt-get install -y nodejs"],
         "dnf": ["sudo", "dnf", "install", "-y", "nodejs"],
         "pacman": ["sudo", "pacman", "-S", "--noconfirm", "nodejs", "npm"],
+        "winget": ["winget", "install", "OpenJS.NodeJS.LTS",
+                   "--accept-source-agreements", "--accept-package-agreements"],
+        "choco": ["choco", "install", "nodejs-lts", "-y"],
+        "scoop": ["scoop", "install", "nodejs-lts"],
     },
 )
 
@@ -112,6 +126,10 @@ FFMPEG_PREREQ = InstallablePrereq(
         "apt": ["sudo", "apt-get", "install", "-y", "ffmpeg"],
         "dnf": ["sudo", "dnf", "install", "-y", "ffmpeg"],
         "pacman": ["sudo", "pacman", "-S", "--noconfirm", "ffmpeg"],
+        "winget": ["winget", "install", "Gyan.FFmpeg",
+                   "--accept-source-agreements", "--accept-package-agreements"],
+        "choco": ["choco", "install", "ffmpeg", "-y"],
+        "scoop": ["scoop", "install", "ffmpeg"],
     },
     is_required=False,
 )
@@ -121,9 +139,14 @@ FFMPEG_PREREQ = InstallablePrereq(
 # Docker state detection & resolution
 # ──────────────────────────────────────────────────────────────
 
-_DOCKER_APP_PATHS = [
+_DOCKER_APP_PATHS_MACOS = [
     Path("/Applications/Docker.app"),
     Path.home() / "Applications" / "Docker.app",
+]
+
+_DOCKER_APP_PATHS_WINDOWS = [
+    Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker" / "Docker Desktop.exe",
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Docker" / "Docker Desktop.exe",
 ]
 
 
@@ -132,11 +155,19 @@ def detect_docker_state() -> DockerState:
     if shutil.which("docker"):
         rc, _ = _run_quiet(["docker", "info"])
         return DockerState.READY if rc == 0 else DockerState.DAEMON_STOPPED
+
+    os_name = detect_os()
     # macOS: Docker Desktop may be installed but CLI not yet symlinked
-    if detect_os() == "darwin":
-        for app_path in _DOCKER_APP_PATHS:
+    if os_name == "darwin":
+        for app_path in _DOCKER_APP_PATHS_MACOS:
             if app_path.exists():
                 return DockerState.APP_EXISTS_NO_CLI
+    # Windows: Docker Desktop may be installed but CLI not in PATH
+    elif os_name == "windows":
+        for app_path in _DOCKER_APP_PATHS_WINDOWS:
+            if app_path.exists():
+                return DockerState.APP_EXISTS_NO_CLI
+
     return DockerState.NOT_INSTALLED
 
 
@@ -241,21 +272,38 @@ def resolve_docker(log: "Callable[[str], None] | None" = None) -> tuple[bool, st
 def check_docker() -> CheckResult:
     """Read-only Docker status check (used by ``doctor`` and display functions)."""
     state = detect_docker_state()
+    os_name = detect_os()
+
     if state == DockerState.READY:
         return CheckResult("Docker", True, "Installed and running")
+
     if state == DockerState.DAEMON_STOPPED:
-        return CheckResult(
-            "Docker daemon", False, "Not running",
-            fix_hint="Open Docker Desktop or run: open -a Docker",
-        )
+        if os_name == "darwin":
+            hint = "Open Docker Desktop or run: open -a Docker"
+        elif os_name == "windows":
+            hint = "Open Docker Desktop from the Start Menu"
+        else:
+            hint = "Start Docker: sudo systemctl start docker"
+        return CheckResult("Docker daemon", False, "Not running", fix_hint=hint)
+
     if state == DockerState.APP_EXISTS_NO_CLI:
+        if os_name == "windows":
+            hint = "Open Docker Desktop once to add CLI to PATH, then restart your terminal"
+        else:
+            hint = "Open Docker Desktop once to create CLI symlinks, or run: open -a Docker"
         return CheckResult(
-            "Docker", False, "App installed but CLI not in PATH",
-            fix_hint="Open Docker Desktop once to create CLI symlinks, or run: open -a Docker",
+            "Docker", False, "App installed but CLI not in PATH", fix_hint=hint,
         )
+
+    # NOT_INSTALLED
+    hints = {
+        "darwin": "Install from https://docker.com or: brew install --cask docker",
+        "windows": "Install from https://docker.com or: winget install Docker.DockerDesktop",
+        "linux": "Install from https://docker.com or: curl -fsSL https://get.docker.com | sh",
+    }
     return CheckResult(
         "Docker", False, "Not installed",
-        fix_hint="Install from https://docker.com or: brew install --cask docker",
+        fix_hint=hints.get(os_name, "Install from https://docker.com"),
     )
 
 
@@ -264,11 +312,35 @@ def check_docker() -> CheckResult:
 # ──────────────────────────────────────────────────────────────
 
 
+def _install_hint(tool: str) -> str:
+    """Return an OS-appropriate install hint for a given tool."""
+    os_name = detect_os()
+    hints: dict[str, dict[str, str]] = {
+        "node": {
+            "darwin": "brew install node",
+            "linux": "See https://nodejs.org/en/download/package-manager",
+            "windows": "winget install OpenJS.NodeJS.LTS",
+        },
+        "python": {
+            "darwin": "brew install python@3.12",
+            "linux": "apt install python3 (or dnf/pacman equivalent)",
+            "windows": "winget install Python.Python.3.12",
+        },
+        "ffmpeg": {
+            "darwin": "brew install ffmpeg",
+            "linux": "apt install ffmpeg (or dnf/pacman equivalent)",
+            "windows": "winget install Gyan.FFmpeg",
+        },
+    }
+    tool_hints = hints.get(tool, {})
+    return tool_hints.get(os_name, f"Install {tool} from its official website")
+
+
 def check_node() -> CheckResult:
     if not shutil.which("node"):
         return CheckResult(
             "Node.js", False, "Not installed",
-            fix_hint="brew install node",
+            fix_hint=_install_hint("node"),
         )
     rc, out = _run_quiet(["node", "-v"])
     if rc != 0:
@@ -280,7 +352,7 @@ def check_node() -> CheckResult:
     if major < 18:
         return CheckResult(
             "Node.js", False, f"v{major} found, need 18+",
-            fix_hint="brew install node",
+            fix_hint=_install_hint("node"),
         )
     return CheckResult("Node.js", True, out)
 
@@ -289,7 +361,7 @@ def check_python() -> CheckResult:
     if not shutil.which("python3"):
         return CheckResult(
             "Python 3", False, "Not installed",
-            fix_hint="brew install python",
+            fix_hint=_install_hint("python"),
         )
     rc, out = _run_quiet(["python3", "-c", "import sys; print(sys.version_info.minor)"])
     if rc != 0:
@@ -301,7 +373,7 @@ def check_python() -> CheckResult:
     if minor < 10:
         return CheckResult(
             "Python 3", False, f"3.{minor} found, need 3.10+",
-            fix_hint="brew install python",
+            fix_hint=_install_hint("python"),
         )
     return CheckResult("Python 3", True, f"3.{minor}")
 
@@ -310,7 +382,7 @@ def check_ffmpeg() -> CheckResult:
     if not shutil.which("ffmpeg"):
         return CheckResult(
             "ffmpeg", False, "Not installed (voice features won't work)",
-            fix_hint="brew install ffmpeg",
+            fix_hint=_install_hint("ffmpeg"),
             is_warning=True,
         )
     return CheckResult("ffmpeg", True, "Installed")
@@ -506,6 +578,16 @@ def start_docker_daemon(timeout_seconds: int = 120) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+    elif os_name == "windows":
+        # Launch Docker Desktop on Windows
+        for app_path in _DOCKER_APP_PATHS_WINDOWS:
+            if app_path.exists():
+                subprocess.Popen(
+                    [str(app_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                break
     elif os_name == "linux":
         # Try systemctl to start the docker service
         subprocess.run(

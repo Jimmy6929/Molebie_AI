@@ -32,6 +32,15 @@ ok()    { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 fail()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
+# Portable sed -i: BSD sed (macOS) requires '' as a separate arg, GNU sed does not.
+sed_inplace() {
+    if [[ "$OSTYPE" == darwin* ]]; then
+        sed -i '' "$@"
+    else
+        sed -i "$@"
+    fi
+}
+
 echo ""
 echo -e "${BOLD}══════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}  Molebie AI — Setup${NC}"
@@ -151,13 +160,13 @@ else
 
     # Generate a random JWT secret
     JWT_SECRET_VAL=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    sed -i '' "s|JWT_SECRET=CHANGE_ME_TO_A_RANDOM_SECRET|JWT_SECRET=${JWT_SECRET_VAL}|" .env.local
+    sed_inplace "s|JWT_SECRET=CHANGE_ME_TO_A_RANDOM_SECRET|JWT_SECRET=${JWT_SECRET_VAL}|" .env.local
 
     if [ "$DEPLOY_MODE" = "two-machine" ]; then
-        sed -i '' "s|INFERENCE_THINKING_URL=http://localhost:8080|INFERENCE_THINKING_URL=http://${GPU_IP}:8080|" .env.local
-        sed -i '' "s|INFERENCE_INSTANT_URL=http://localhost:8081|INFERENCE_INSTANT_URL=http://${GPU_IP}:8081|" .env.local
-        sed -i '' "s|NEXT_PUBLIC_GATEWAY_URL=http://localhost:8000|NEXT_PUBLIC_GATEWAY_URL=http://${SERVER_IP}:8000|" .env.local
-        sed -i '' "s|CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000|CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://${SERVER_IP}:3000|" .env.local
+        sed_inplace "s|INFERENCE_THINKING_URL=http://localhost:8080|INFERENCE_THINKING_URL=http://${GPU_IP}:8080|" .env.local
+        sed_inplace "s|INFERENCE_INSTANT_URL=http://localhost:8081|INFERENCE_INSTANT_URL=http://${GPU_IP}:8081|" .env.local
+        sed_inplace "s|NEXT_PUBLIC_GATEWAY_URL=http://localhost:8000|NEXT_PUBLIC_GATEWAY_URL=http://${SERVER_IP}:8000|" .env.local
+        sed_inplace "s|CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000|CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://${SERVER_IP}:3000|" .env.local
     fi
 
     ok ".env.local created with JWT secret"

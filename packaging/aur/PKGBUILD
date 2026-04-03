@@ -1,0 +1,36 @@
+# Maintainer: Jimmy <jimmy@molebieai.com>
+pkgname=molebie-ai
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Self-hosted privacy-first AI assistant CLI'
+arch=('x86_64' 'aarch64')
+url='https://molebieai.com'
+license=('MIT')
+depends=('python>=3.10' 'python-pip')
+optdepends=(
+    'docker: for web search (SearXNG) and TTS (Kokoro) features'
+    'nodejs: for the web frontend'
+    'ffmpeg: for voice features'
+)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/Jimmy6929/Molebie_AI/archive/v$pkgver.tar.gz")
+sha256sums=('PLACEHOLDER_SHA256')  # Update with: updpkgsums
+
+build() {
+    cd "Molebie_AI-$pkgver"
+    python -m venv --system-site-packages "$srcdir/venv"
+    "$srcdir/venv/bin/pip" install --no-deps . -q
+}
+
+package() {
+    cd "Molebie_AI-$pkgver"
+
+    # Install the CLI binary
+    install -Dm755 "$srcdir/venv/bin/molebie-ai" "$pkgdir/usr/bin/molebie-ai"
+
+    # Install the full package into a lib directory
+    install -dm755 "$pkgdir/usr/lib/$pkgname"
+    cp -r "$srcdir/venv/lib" "$pkgdir/usr/lib/$pkgname/"
+
+    # License
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,170 @@
+name: Test Installers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'install.sh'
+      - 'install.ps1'
+      - 'setup.sh'
+      - 'cli/**'
+      - 'pyproject.toml'
+      - 'gateway/requirements.txt'
+  pull_request:
+    paths:
+      - 'install.sh'
+      - 'install.ps1'
+      - 'setup.sh'
+      - 'cli/**'
+      - 'pyproject.toml'
+      - 'gateway/requirements.txt'
+
+env:
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '20'
+
+jobs:
+  # ────────────────────────────────────────────────────────────
+  # macOS
+  # ────────────────────────────────────────────────────────────
+  test-macos:
+    runs-on: macos-14  # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run install.sh --quick
+        run: bash install.sh --quick
+
+      - name: Verify CLI
+        run: .venv/bin/molebie-ai --version
+
+      - name: Verify system_info module
+        run: |
+          .venv/bin/python -c "
+          from cli.services.system_info import get_system_info
+          si = get_system_info()
+          assert si.os == 'darwin', f'Expected darwin, got {si.os}'
+          assert si.total_memory_gb > 0, 'Memory detection failed'
+          assert si.chip_name != 'Unknown', f'Chip detection failed: {si.chip_name}'
+          print(f'OK: {si.os} {si.arch} {si.chip_name} {si.total_memory_gb}GB')
+          "
+
+      - name: Verify prerequisite checker
+        run: |
+          .venv/bin/python -c "
+          from cli.services.prerequisite_checker import check_all, detect_package_manager
+          results = check_all(core_only=True)
+          for r in results:
+              print(f'{r.name}: passed={r.passed} hint={r.fix_hint}')
+              assert 'winget' not in r.fix_hint, 'macOS should not suggest winget'
+          "
+
+  # ────────────────────────────────────────────────────────────
+  # Ubuntu
+  # ────────────────────────────────────────────────────────────
+  test-ubuntu:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run install.sh --quick
+        run: bash install.sh --quick
+
+      - name: Verify CLI
+        run: .venv/bin/molebie-ai --version
+
+      - name: Verify system_info module
+        run: |
+          .venv/bin/python -c "
+          from cli.services.system_info import get_system_info
+          si = get_system_info()
+          assert si.os == 'linux', f'Expected linux, got {si.os}'
+          assert si.total_memory_gb > 0, 'Memory detection failed'
+          assert si.chip_name != 'Unknown', f'Chip detection failed: {si.chip_name}'
+          print(f'OK: {si.os} {si.arch} {si.chip_name} {si.total_memory_gb}GB')
+          "
+
+      - name: Verify prerequisite checker
+        run: |
+          .venv/bin/python -c "
+          from cli.services.prerequisite_checker import check_all, detect_package_manager
+          results = check_all(core_only=True)
+          for r in results:
+              print(f'{r.name}: passed={r.passed} hint={r.fix_hint}')
+              assert 'brew' not in r.fix_hint, 'Linux should not suggest brew'
+          "
+
+      - name: Verify setup.sh sed compatibility
+        run: |
+          # Ensure setup.sh uses sed_inplace (not raw sed -i '')
+          if grep -n "sed -i ''" setup.sh; then
+            echo "FAIL: setup.sh still has raw BSD sed -i ''"
+            exit 1
+          fi
+          echo "OK: setup.sh uses portable sed_inplace"
+
+  # ────────────────────────────────────────────────────────────
+  # Windows
+  # ────────────────────────────────────────────────────────────
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run install.ps1 -Quick
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          .\install.ps1 -Quick
+
+      - name: Verify CLI
+        shell: pwsh
+        run: .\.venv\Scripts\molebie-ai.exe --version
+
+      - name: Verify system_info module
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -c @"
+          from cli.services.system_info import get_system_info
+          si = get_system_info()
+          assert si.os == 'windows', f'Expected windows, got {si.os}'
+          assert si.total_memory_gb > 0, f'Memory detection failed: {si.total_memory_gb}'
+          assert si.chip_name != 'Unknown', f'Chip detection failed: {si.chip_name}'
+          print(f'OK: {si.os} {si.arch} {si.chip_name} {si.total_memory_gb}GB')
+          "@
+
+      - name: Verify prerequisite checker
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -c @"
+          from cli.services.prerequisite_checker import detect_package_manager, check_all
+          pkg = detect_package_manager()
+          print(f'Package manager: {pkg}')
+          results = check_all(core_only=True)
+          for r in results:
+              print(f'{r.name}: passed={r.passed} hint={r.fix_hint}')
+          "@

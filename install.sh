@@ -10,9 +10,10 @@ set -euo pipefail
 # Usage:
 #   Local:   ./install.sh                          (interactive)
 #            ./install.sh --quick                   (auto-select defaults)
-#   Remote:  curl -fsSL https://raw.githubusercontent.com/Jimmy6929/Molebie_AI/main/install.sh | bash
-#            curl -fsSL <url> | bash -s -- --quick
-#            curl -fsSL <url> | bash -s -- --install-dir ~/my-molebie
+#   Remote:  curl -fsSL https://molebieai.com/install.sh | bash
+#            curl -fsSL https://raw.githubusercontent.com/Jimmy6929/Molebie_AI/main/install.sh | bash
+#            curl -fsSL https://molebieai.com/install.sh | bash -s -- --quick
+#            curl -fsSL https://molebieai.com/install.sh | bash -s -- --install-dir ~/my-molebie
 # ══════════════════════════════════════════════════════════════
 
 # Colors

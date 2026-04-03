@@ -1,0 +1,17 @@
+pkgbase = molebie-ai
+	pkgdesc = Self-hosted privacy-first AI assistant CLI
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://molebieai.com
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	depends = python>=3.10
+	depends = python-pip
+	optdepends = docker: for web search (SearXNG) and TTS (Kokoro) features
+	optdepends = nodejs: for the web frontend
+	optdepends = ffmpeg: for voice features
+	source = molebie-ai-0.1.0.tar.gz::https://github.com/Jimmy6929/Molebie_AI/archive/v0.1.0.tar.gz
+	sha256sums = PLACEHOLDER_SHA256
+
+pkgname = molebie-ai

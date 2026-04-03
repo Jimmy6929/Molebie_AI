@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Molebie AI
+Comment=Self-hosted privacy-first AI assistant
+Exec=molebie-ai
+Icon=molebie-ai
+Terminal=true
+Type=Application
+Categories=Utility;Development;
+Keywords=ai;assistant;llm;chat;

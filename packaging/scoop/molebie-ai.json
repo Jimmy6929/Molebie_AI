@@ -1,0 +1,20 @@
+{
+    "version": "0.1.0",
+    "description": "Self-hosted privacy-first AI assistant CLI",
+    "homepage": "https://molebieai.com",
+    "license": "MIT",
+    "url": "https://github.com/Jimmy6929/Molebie_AI/releases/download/v0.1.0/molebie-ai-windows-x86_64.zip",
+    "hash": "PLACEHOLDER_SHA256",
+    "extract_dir": "",
+    "bin": "molebie-ai.exe",
+    "checkver": {
+        "github": "https://github.com/Jimmy6929/Molebie_AI"
+    },
+    "autoupdate": {
+        "url": "https://github.com/Jimmy6929/Molebie_AI/releases/download/v$version/molebie-ai-windows-x86_64.zip",
+        "hash": {
+            "url": "$url.sha256"
+        }
+    },
+    "notes": "Run 'molebie-ai install' to complete setup."
+}

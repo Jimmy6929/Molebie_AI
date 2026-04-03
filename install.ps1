@@ -10,7 +10,7 @@
       Local:   .\install.ps1                          (interactive)
                .\install.ps1 -Quick                   (auto-select defaults)
       Remote:  irm https://molebieai.com/install.ps1 | iex
-               powershell -c "irm https://molebieai.com/install.ps1 | iex"
+               irm https://raw.githubusercontent.com/Jimmy6929/Molebie_AI/main/install.ps1 | iex
 #>
 
 param(
@@ -95,11 +95,10 @@ if ($RemoteMode) {
 
     Write-Info "Handing off to local installer..."
     $installerPath = Join-Path $InstallDir "install.ps1"
-    if ($Quick) {
-        & powershell -ExecutionPolicy Bypass -File $installerPath -Quick
-    } else {
-        & powershell -ExecutionPolicy Bypass -File $installerPath
-    }
+    $reArgs = @("-ExecutionPolicy", "Bypass", "-File", $installerPath)
+    if ($Quick) { $reArgs += "-Quick" }
+    if ($InstallDir) { $reArgs += @("-InstallDir", $InstallDir) }
+    & powershell @reArgs
     exit $LASTEXITCODE
 }
 
@@ -113,6 +112,20 @@ Write-Host "==================================================" -ForegroundColor
 Write-Host "  Molebie AI - Installer" -ForegroundColor White
 Write-Host "==================================================" -ForegroundColor White
 Write-Host ""
+
+# ──────────────────────────────────────────────────────────────
+# Step 0: Check WSL2 availability
+# ──────────────────────────────────────────────────────────────
+try {
+    $wslOutput = & wsl --status 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "wsl not ready" }
+} catch {
+    Write-Warn "WSL2 is not installed or not enabled."
+    Write-Warn "Some features require WSL2: Docker containers, local inference backends."
+    Write-Info "Install WSL2:  wsl --install  (requires restart)"
+    Write-Info "Continuing without WSL2 - core features will still work."
+    Write-Host ""
+}
 
 # ──────────────────────────────────────────────────────────────
 # Step 1: Find Python 3.10+

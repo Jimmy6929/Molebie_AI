@@ -1,0 +1,39 @@
+name: molebie-ai
+base: core22
+version: '0.1.0'
+summary: Self-hosted privacy-first AI assistant
+description: |
+  Molebie AI is a fully self-hosted AI assistant platform with local
+  LLM inference, web search, RAG, and voice features. No cloud
+  dependency — your data stays on your machine.
+
+  After installing, run: molebie-ai install
+
+grade: stable
+confinement: classic  # Needs filesystem, network, Docker socket access
+
+architectures:
+  - build-on: [amd64]
+    build-for: [amd64]
+  - build-on: [arm64]
+    build-for: [arm64]
+
+apps:
+  molebie-ai:
+    command: bin/molebie-ai
+
+parts:
+  molebie-ai:
+    plugin: dump
+    source: ../../dist/
+    source-type: local
+    organize:
+      molebie-ai: bin/molebie-ai
+    stage:
+      - bin/molebie-ai
+
+# Build instructions:
+#   1. Build the PyInstaller binary first: bash packaging/pyinstaller/build.sh
+#   2. Then: cd packaging/snap && snapcraft
+#   3. Install: sudo snap install molebie-ai_0.1.0_amd64.snap --classic --dangerous
+#   4. Publish: snapcraft upload molebie-ai_0.1.0_amd64.snap --release=stable
