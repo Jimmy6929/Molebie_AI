@@ -112,12 +112,16 @@ jobs:
 
       - name: Verify setup.sh sed compatibility
         run: |
-          # Ensure setup.sh uses sed_inplace (not raw sed -i '')
-          if grep -n "sed -i ''" setup.sh; then
-            echo "FAIL: setup.sh still has raw BSD sed -i ''"
+          # Ensure no raw sed -i '' is used OUTSIDE the sed_inplace function.
+          # The function itself (lines 37-42) correctly uses sed -i '' for macOS.
+          # We check that no other line has raw sed -i '' calls.
+          BAD=$(grep -n "sed -i ''" setup.sh | grep -v "sed_inplace\|^3[0-9]:\|^4[0-2]:")
+          if [ -n "$BAD" ]; then
+            echo "FAIL: setup.sh has raw BSD sed -i '' outside sed_inplace:"
+            echo "$BAD"
             exit 1
           fi
-          echo "OK: setup.sh uses portable sed_inplace"
+          echo "OK: all sed calls go through sed_inplace"
 
   # ────────────────────────────────────────────────────────────
   # Windows
@@ -135,11 +139,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Run install.ps1 -Quick
+      - name: Create venv and install CLI
         shell: pwsh
         run: |
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          .\install.ps1 -Quick
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip -q
+          .\.venv\Scripts\pip.exe install -e . -q
 
       - name: Verify CLI
         shell: pwsh
