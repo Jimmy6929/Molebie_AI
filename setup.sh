@@ -63,12 +63,14 @@ if command -v python3 &>/dev/null; then
     PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.minor}')")
     if [ "$PY_VER" -ge 10 ] 2>/dev/null; then
         ok "Python 3.$PY_VER"
-        # Probe: check if key packages have pre-built wheels for this Python.
-        # Catches too-new Python versions automatically (no hardcoded cap).
+        # Probe: install the pinned pydantic (which depends on compiled pydantic-core)
+        # using only pre-built wheels.  Catches too-new Python automatically.
+        PYDANTIC_PIN=$(grep -E '^pydantic==' gateway/requirements.txt 2>/dev/null | head -1)
+        PROBE_PKG="${PYDANTIC_PIN:-pydantic}"
         PROBE_DIR=$(mktemp -d)
         if python3 -m venv "$PROBE_DIR/probe_venv" 2>/dev/null; then
             "$PROBE_DIR/probe_venv/bin/pip" install --upgrade pip --quiet 2>/dev/null
-            if ! "$PROBE_DIR/probe_venv/bin/pip" install pydantic-core --only-binary :all: --quiet 2>/dev/null; then
+            if ! "$PROBE_DIR/probe_venv/bin/pip" install "$PROBE_PKG" --only-binary :all: --force-reinstall --quiet 2>/dev/null; then
                 rm -rf "$PROBE_DIR"
                 echo -e "${RED}[FAIL]${NC} Python 3.$PY_VER has no pre-built packages — version likely too new"
                 echo -e "       Install a compatible Python: ${BOLD}brew install python@3.12${NC}"

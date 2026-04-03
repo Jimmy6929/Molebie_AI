@@ -188,13 +188,15 @@ fi
 # ──────────────────────────────────────────────────────────────
 # Step 2b: Validate Python compatibility
 # ──────────────────────────────────────────────────────────────
-# Probe: try installing pydantic-core using only pre-built wheels.
-# If no wheel exists for this Python version (e.g. too-new Python 3.14+),
-# pip fails instantly.  This auto-detects incompatible Python without
-# hardcoded version caps — when a new Python gets package support, the
-# probe passes automatically.
+# Probe: install the PINNED pydantic version from requirements.txt using
+# only pre-built wheels (--only-binary :all:).  pydantic depends on
+# pydantic-core (compiled Rust), so if no wheel exists for this Python
+# version, pip fails instantly.  This auto-detects incompatible Python
+# without hardcoded version caps.
 info "Checking package compatibility..."
-if .venv/bin/pip install pydantic-core --only-binary :all: --quiet 2>/dev/null; then
+PYDANTIC_PIN=$(grep -E '^pydantic==' gateway/requirements.txt 2>/dev/null | head -1)
+PROBE_PKG="${PYDANTIC_PIN:-pydantic}"
+if .venv/bin/pip install "$PROBE_PKG" --only-binary :all: --force-reinstall --quiet 2>/dev/null; then
     ok "Package compatibility verified"
 else
     warn "Python $PY_VERSION has no pre-built packages for key dependencies."
@@ -233,7 +235,7 @@ else
     .venv/bin/python -m pip install --upgrade pip --quiet 2>/dev/null
 
     # Re-verify the fallback Python works
-    if .venv/bin/pip install pydantic-core --only-binary :all: --quiet 2>/dev/null; then
+    if .venv/bin/pip install "$PROBE_PKG" --only-binary :all: --force-reinstall --quiet 2>/dev/null; then
         ok "Python $PY_VERSION — package compatibility verified"
     else
         fail "Python $PY_VERSION also failed the compatibility check.\n  Install Python 3.12 from https://www.python.org/downloads/ and re-run."
