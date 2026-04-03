@@ -135,31 +135,37 @@ def doctor(
 
     # 4. Service health
     console.print("[heading]Services[/heading]")
-    inference_host = "localhost" if config.run_inference else config.inference_host
-    gateway_host = "localhost" if config.run_gateway else config.gateway_host
-    webapp_host = "localhost" if config.run_webapp else config.webapp_host
+    services: list[tuple[str, str]] = []
 
-    services = [
-        (f"http://{gateway_host}:8000/health", "Gateway"),
-        (f"http://{webapp_host}:3000", "Webapp"),
-    ]
+    # Local services — always check what runs on this machine
+    if config.run_gateway:
+        services.append(("http://localhost:8000/health", "Gateway"))
+    if config.run_webapp:
+        services.append(("http://localhost:3000", "Webapp"))
+    if config.run_inference:
+        if config.inference_backend == InferenceBackend.MLX:
+            services.append(("http://localhost:8080/v1/models", "MLX Thinking"))
+            services.append(("http://localhost:8081/v1/models", "MLX Instant"))
+        elif config.inference_backend == InferenceBackend.OLLAMA:
+            services.append(("http://localhost:11434/v1/models", "Ollama"))
 
-    # Inference endpoints
-    if config.inference_backend == InferenceBackend.MLX:
-        services.append((f"http://{inference_host}:8080/v1/models", "MLX Thinking"))
-        services.append((f"http://{inference_host}:8081/v1/models", "MLX Instant"))
-    elif config.inference_backend == InferenceBackend.OLLAMA:
-        services.append((f"http://{inference_host}:11434/v1/models", "Ollama"))
+    # Remote services — only those this machine actually connects to
+    for name, url in config.required_remote_endpoints():
+        services.append((url, f"{name} (remote)"))
 
     # Optional services (co-located with gateway)
-    if config.search_enabled:
-        services.append((f"http://{gateway_host}:8888/", "SearXNG"))
-    if config.voice_enabled:
-        services.append((f"http://{gateway_host}:8880/health", "Kokoro TTS"))
+    if config.search_enabled and config.run_gateway:
+        services.append(("http://localhost:8888/", "SearXNG"))
+    if config.voice_enabled and config.run_gateway:
+        services.append(("http://localhost:8880/health", "Kokoro TTS"))
 
     for url, name in services:
         if not _health_check(url, name):
             all_ok = False
+
+    if not services:
+        print_info("No services to check on this machine")
+
     console.print()
 
     # 5. Deep application-logic checks (optional)

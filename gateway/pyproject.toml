@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "Gateway API for Molebie AI"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "All Rights Reserved"}
+license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "you@example.com"}
+    {name = "Jimmy", email = "jimmy@molebieai.com"}
 ]
 dependencies = [
     "fastapi>=0.109.0",

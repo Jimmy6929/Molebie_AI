@@ -7,7 +7,7 @@ from typing import Optional
 import httpx
 import typer
 
-from cli.models.config import InferenceBackend, MolebieConfig, ModelProfile, SetupType
+from cli.models.config import InferenceBackend, MolebieConfig, ModelProfile
 from cli.services import config_manager
 from cli.services.service_manager import ServiceRunner
 from cli.ui.console import console, print_banner, print_fail, print_info, print_ok, print_warn
@@ -104,30 +104,12 @@ def _ensure_ready() -> MolebieConfig:
 
 
 def _check_remote_services(config) -> None:
-    """For distributed setups, verify remote services are reachable before starting."""
-    if config.setup_type != SetupType.DISTRIBUTED:
-        return
+    """For distributed setups, verify remote services are reachable before starting.
 
-    endpoints: list[tuple[str, str]] = []
-
-    # Check remote inference
-    if not config.run_inference:
-        host = config.inference_host
-        if config.inference_backend == InferenceBackend.MLX:
-            endpoints.append(("MLX Thinking", f"http://{host}:8080/v1/models"))
-            endpoints.append(("MLX Instant", f"http://{host}:8081/v1/models"))
-        elif config.inference_backend == InferenceBackend.OLLAMA:
-            endpoints.append(("Ollama", f"http://{host}:11434/v1/models"))
-        elif config.inference_backend == InferenceBackend.OPENAI_COMPATIBLE and config.inference_url:
-            endpoints.append(("Inference", f"{config.inference_url}/v1/models"))
-
-    # Check remote gateway
-    if not config.run_gateway:
-        endpoints.append(("Gateway", f"http://{config.gateway_host}:8000/health"))
-
-    # Check remote webapp
-    if not config.run_webapp:
-        endpoints.append(("Webapp", f"http://{config.webapp_host}:3000"))
+    Uses config.required_remote_endpoints() which encodes the connectivity
+    graph: only services that a LOCAL service connects to are checked.
+    """
+    endpoints = config.required_remote_endpoints()
 
     if not endpoints:
         return

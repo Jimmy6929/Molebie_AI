@@ -392,16 +392,9 @@ def _show_review(config: MolebieConfig) -> None:
 
     table.add_row("Setup type", config.setup_type.value)
     if config.setup_type == SetupType.DISTRIBUTED:
-        local_svcs = [n for n, r in [("LLM Server", config.run_inference),
-                                      ("Gateway", config.run_gateway),
-                                      ("Webapp", config.run_webapp)] if r]
-        table.add_row("Local services", ", ".join(local_svcs))
-        if not config.run_inference:
-            table.add_row("LLM Server host", config.inference_host)
-        if not config.run_gateway:
-            table.add_row("Gateway host", config.gateway_host)
-        if not config.run_webapp:
-            table.add_row("Webapp host", config.webapp_host)
+        table.add_row("Local services", ", ".join(config.local_service_names()))
+        for label, host in config.relevant_remote_hosts():
+            table.add_row(label, host)
     table.add_row("Backend", config.inference_backend.value)
     table.add_row("Model profile", config.model_profile.value)
     if config.thinking_model:
@@ -799,16 +792,9 @@ def _show_summary(config: MolebieConfig) -> None:
 
     table.add_row("Setup", config.setup_type.value)
     if config.setup_type == SetupType.DISTRIBUTED:
-        local_svcs = [n for n, r in [("LLM Server", config.run_inference),
-                                      ("Gateway", config.run_gateway),
-                                      ("Webapp", config.run_webapp)] if r]
-        table.add_row("Local services", ", ".join(local_svcs))
-        if not config.run_inference:
-            table.add_row("LLM Server host", config.inference_host)
-        if not config.run_gateway:
-            table.add_row("Gateway host", config.gateway_host)
-        if not config.run_webapp:
-            table.add_row("Webapp host", config.webapp_host)
+        table.add_row("Local services", ", ".join(config.local_service_names()))
+        for label, host in config.relevant_remote_hosts():
+            table.add_row(label, host)
     table.add_row("Backend", config.inference_backend.value)
     table.add_row("Model profile", config.model_profile.value)
     if config.thinking_model:

@@ -89,3 +89,66 @@ class MolebieConfig(BaseModel):
             if not any([self.run_inference, self.run_gateway, self.run_webapp]):
                 raise ValueError("At least one service must run on this machine")
         return self
+
+    # ── Connectivity graph ───────────────────────────────────
+    # Defines which remote services each local service actually
+    # needs to connect to.  Used by install review, run, doctor.
+    #
+    # Rules:
+    #   Gateway  → Inference  (forwards LLM requests)
+    #   Webapp   → Gateway    (calls the API)
+    #   Inference → nothing   (passive — only listens)
+
+    def required_remote_endpoints(self) -> list[tuple[str, str]]:
+        """Return ``(name, url)`` pairs for remote services this machine must reach.
+
+        Only includes services that a LOCAL service actually connects to.
+        A pure LLM-server machine returns an empty list because it only listens.
+        """
+        if self.setup_type != SetupType.DISTRIBUTED:
+            return []
+
+        endpoints: list[tuple[str, str]] = []
+
+        # Gateway connects to Inference
+        if self.run_gateway and not self.run_inference:
+            host = self.inference_host
+            if self.inference_backend == InferenceBackend.MLX:
+                endpoints.append(("MLX Thinking", f"http://{host}:8080/v1/models"))
+                endpoints.append(("MLX Instant", f"http://{host}:8081/v1/models"))
+            elif self.inference_backend == InferenceBackend.OLLAMA:
+                endpoints.append(("Ollama", f"http://{host}:11434/v1/models"))
+            elif self.inference_backend == InferenceBackend.OPENAI_COMPATIBLE and self.inference_url:
+                endpoints.append(("Inference", f"{self.inference_url}/v1/models"))
+
+        # Webapp connects to Gateway
+        if self.run_webapp and not self.run_gateway:
+            endpoints.append(("Gateway", f"http://{self.gateway_host}:8000/health"))
+
+        return endpoints
+
+    def relevant_remote_hosts(self) -> list[tuple[str, str]]:
+        """Return ``(label, host)`` pairs for remote hosts worth displaying.
+
+        Only includes hosts that a LOCAL service needs to know about —
+        i.e. hosts that appear in :meth:`required_remote_endpoints`.
+        """
+        if self.setup_type != SetupType.DISTRIBUTED:
+            return []
+
+        hosts: list[tuple[str, str]] = []
+
+        if self.run_gateway and not self.run_inference:
+            hosts.append(("LLM Server host", self.inference_host))
+        if self.run_webapp and not self.run_gateway:
+            hosts.append(("Gateway host", self.gateway_host))
+
+        return hosts
+
+    def local_service_names(self) -> list[str]:
+        """Return human-readable names of services that run on this machine."""
+        return [name for name, runs in [
+            ("LLM Server", self.run_inference),
+            ("Gateway", self.run_gateway),
+            ("Webapp", self.run_webapp),
+        ] if runs]
