@@ -107,9 +107,16 @@ if [[ "$REMOTE_MODE" -eq 1 ]]; then
         ok "Repository cloned"
     fi
 
-    # Re-exec the local install.sh (clean terminal context, no pipe on stdin)
+    # Re-exec the local install.sh with stdin reconnected to the terminal.
+    # This allows the interactive wizard to work even when invoked via curl|bash.
+    # Falls back to --quick if no terminal is available (e.g. CI, containers).
     info "Handing off to local installer..."
-    exec "$INSTALL_DIR/install.sh" --quick "$@"
+    if [ -t 0 ] || [ -e /dev/tty ]; then
+        exec "$INSTALL_DIR/install.sh" "$@" </dev/tty
+    else
+        warn "No terminal detected — running in non-interactive mode"
+        exec "$INSTALL_DIR/install.sh" --quick "$@"
+    fi
 fi
 
 # ──────────────────────────────────────────────────────────────
