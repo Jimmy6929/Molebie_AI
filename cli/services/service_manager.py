@@ -104,7 +104,10 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
 
     # 3. Gateway (only if this machine runs gateway)
     if config.run_gateway:
-        venv_python = str(root / ".venv" / "bin" / "python")
+        if sys.platform == "win32":
+            venv_python = str(root / ".venv" / "Scripts" / "python.exe")
+        else:
+            venv_python = str(root / ".venv" / "bin" / "python")
         services.append(ServiceDef(
             name="Gateway",
             port=8000,
@@ -239,14 +242,30 @@ class ServiceRunner:
     def _free_port(port: int, name: str) -> None:
         """Kill any stale process occupying a port before starting a service."""
         try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True, text=True, timeout=5,
-            )
-            pids = result.stdout.strip().split()
-            for pid in pids:
-                if pid:
-                    os.kill(int(pid), signal.SIGTERM)
+            if sys.platform == "win32":
+                result = subprocess.run(
+                    ["netstat", "-ano"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                pids = []
+                for line in result.stdout.splitlines():
+                    if f":{port} " in line and "LISTENING" in line:
+                        parts = line.split()
+                        if parts:
+                            pids.append(parts[-1])
+                for pid in set(pids):
+                    if pid and pid != "0":
+                        subprocess.run(["taskkill", "/F", "/PID", pid],
+                                       capture_output=True, timeout=5)
+            else:
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{port}"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                pids = result.stdout.strip().split()
+                for pid in pids:
+                    if pid:
+                        os.kill(int(pid), signal.SIGTERM)
             if pids and pids[0]:
                 print_warn(f"Killed stale process on :{port} for {name}")
                 time.sleep(1)

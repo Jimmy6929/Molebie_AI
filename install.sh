@@ -215,15 +215,75 @@ else
     done
 
     if [ -z "$FALLBACK_CMD" ]; then
-        if command -v brew &>/dev/null; then
-            info "No compatible Python found. Installing Python 3.12 via Homebrew..."
-            brew install python@3.12
-            FALLBACK_CMD="$(brew --prefix)/bin/python3.12"
-            if ! command -v "$FALLBACK_CMD" &>/dev/null; then
-                FALLBACK_CMD="python3.12"
+        # No compatible Python installed — try to install one automatically.
+        # Strategy: Homebrew → python.org .pkg (macOS) → apt/dnf/pacman (Linux)
+
+        # Attempt 1: Homebrew (macOS & Linux)
+        if [ -z "$FALLBACK_CMD" ] && command -v brew &>/dev/null; then
+            info "Installing Python 3.12 via Homebrew..."
+            if brew install python@3.12 2>/dev/null; then
+                FALLBACK_CMD="$(brew --prefix)/bin/python3.12"
+                if ! command -v "$FALLBACK_CMD" &>/dev/null; then
+                    FALLBACK_CMD="python3.12"
+                fi
+                command -v "$FALLBACK_CMD" &>/dev/null || FALLBACK_CMD=""
+            else
+                warn "Homebrew install failed — trying next method..."
             fi
-        else
-            fail "No compatible Python found and Homebrew is not available.\n  Install Python 3.10–3.13 from https://www.python.org/downloads/ and re-run."
+        fi
+
+        # Attempt 2: python.org official installer (macOS only)
+        if [ -z "$FALLBACK_CMD" ] && [[ "$OSTYPE" == darwin* ]]; then
+            info "Downloading Python 3.12 from python.org..."
+            PY_PKG="/tmp/molebie-python-3.12.pkg"
+            if curl -fsSL "https://www.python.org/ftp/python/3.12.13/python-3.12.13-macos11.pkg" -o "$PY_PKG" 2>/dev/null; then
+                info "Installing Python 3.12 (may ask for your password)..."
+                if sudo installer -pkg "$PY_PKG" -target / 2>/dev/null; then
+                    # python.org installer puts python3.12 in /usr/local/bin (Intel)
+                    # or /Library/Frameworks/Python.framework/Versions/3.12/bin (universal)
+                    for pypath in /usr/local/bin/python3.12 /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12; do
+                        if [ -x "$pypath" ]; then
+                            FALLBACK_CMD="$pypath"
+                            break
+                        fi
+                    done
+                    if [ -z "$FALLBACK_CMD" ] && command -v python3.12 &>/dev/null; then
+                        FALLBACK_CMD="python3.12"
+                    fi
+                    [ -n "$FALLBACK_CMD" ] && ok "Python 3.12 installed from python.org"
+                else
+                    warn "python.org installer failed — trying next method..."
+                fi
+                rm -f "$PY_PKG"
+            else
+                warn "Download failed — trying next method..."
+            fi
+        fi
+
+        # Attempt 3: System package manager (Linux)
+        if [ -z "$FALLBACK_CMD" ] && [[ "$OSTYPE" == linux* ]]; then
+            if command -v apt-get &>/dev/null; then
+                info "Installing Python 3.12 via apt..."
+                if sudo apt-get update -qq && sudo apt-get install -y python3.12 python3.12-venv 2>/dev/null; then
+                    FALLBACK_CMD="python3.12"
+                fi
+            elif command -v dnf &>/dev/null; then
+                info "Installing Python 3.12 via dnf..."
+                if sudo dnf install -y python3.12 2>/dev/null; then
+                    FALLBACK_CMD="python3.12"
+                fi
+            elif command -v pacman &>/dev/null; then
+                info "Installing Python 3.12 via pacman..."
+                if sudo pacman -S --noconfirm python 2>/dev/null; then
+                    FALLBACK_CMD="python3"
+                fi
+            fi
+        fi
+
+        # All automatic methods exhausted
+        if [ -z "$FALLBACK_CMD" ]; then
+            echo ""
+            fail "Could not install a compatible Python automatically.\n\n  Install Python 3.12 manually:\n    macOS:  https://www.python.org/downloads/release/python-31213/\n    Linux:  https://www.python.org/downloads/\n\n  Then re-run this installer."
         fi
     fi
 

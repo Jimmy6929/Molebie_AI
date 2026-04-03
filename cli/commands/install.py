@@ -469,7 +469,10 @@ def _install_gateway_deps(root) -> None:
         print_ok("Gateway dependencies already installed — skipping")
         return
 
-    venv_python = str(root / ".venv" / "bin" / "python")
+    if sys.platform == "win32":
+        venv_python = str(root / ".venv" / "Scripts" / "python.exe")
+    else:
+        venv_python = str(root / ".venv" / "bin" / "python")
     python_cmd = venv_python if Path(venv_python).exists() else sys.executable
 
     # Phase 1: Core dependencies — must succeed
