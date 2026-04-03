@@ -186,6 +186,61 @@ fi
 .venv/bin/python -m pip install --upgrade pip --quiet 2>/dev/null
 
 # ──────────────────────────────────────────────────────────────
+# Step 2b: Validate Python compatibility
+# ──────────────────────────────────────────────────────────────
+# Probe: try installing pydantic-core using only pre-built wheels.
+# If no wheel exists for this Python version (e.g. too-new Python 3.14+),
+# pip fails instantly.  This auto-detects incompatible Python without
+# hardcoded version caps — when a new Python gets package support, the
+# probe passes automatically.
+info "Checking package compatibility..."
+if .venv/bin/pip install pydantic-core --only-binary :all: --quiet 2>/dev/null; then
+    ok "Package compatibility verified"
+else
+    warn "Python $PY_VERSION has no pre-built packages for key dependencies."
+    warn "This usually means the Python version is too new for the package ecosystem."
+    info "Looking for a compatible Python..."
+
+    FALLBACK_CMD=""
+    for fb in python3.13 python3.12 python3.11 python3.10; do
+        if command -v "$fb" &>/dev/null; then
+            FB_MINOR=$("$fb" -c "import sys; print(sys.version_info.minor)" 2>/dev/null || echo "0")
+            if [ "$FB_MINOR" -ge 10 ] 2>/dev/null; then
+                FALLBACK_CMD="$fb"
+                break
+            fi
+        fi
+    done
+
+    if [ -z "$FALLBACK_CMD" ]; then
+        if command -v brew &>/dev/null; then
+            info "No compatible Python found. Installing Python 3.12 via Homebrew..."
+            brew install python@3.12
+            FALLBACK_CMD="$(brew --prefix)/bin/python3.12"
+            if ! command -v "$FALLBACK_CMD" &>/dev/null; then
+                FALLBACK_CMD="python3.12"
+            fi
+        else
+            fail "No compatible Python found and Homebrew is not available.\n  Install Python 3.10–3.13 from https://www.python.org/downloads/ and re-run."
+        fi
+    fi
+
+    PYTHON_CMD="$FALLBACK_CMD"
+    PY_VERSION=$("$PYTHON_CMD" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    info "Switching to Python $PY_VERSION ($PYTHON_CMD)..."
+    rm -rf .venv
+    "$PYTHON_CMD" -m venv .venv
+    .venv/bin/python -m pip install --upgrade pip --quiet 2>/dev/null
+
+    # Re-verify the fallback Python works
+    if .venv/bin/pip install pydantic-core --only-binary :all: --quiet 2>/dev/null; then
+        ok "Python $PY_VERSION — package compatibility verified"
+    else
+        fail "Python $PY_VERSION also failed the compatibility check.\n  Install Python 3.12 from https://www.python.org/downloads/ and re-run."
+    fi
+fi
+
+# ──────────────────────────────────────────────────────────────
 # Step 3: Install CLI
 # ──────────────────────────────────────────────────────────────
 info "Installing molebie-ai CLI..."
