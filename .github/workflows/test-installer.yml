@@ -115,16 +115,19 @@ jobs:
 
       - name: Verify setup.sh sed compatibility
         run: |
-          # Ensure no raw sed -i '' is used OUTSIDE the sed_inplace function.
-          # The function itself (lines 37-42) correctly uses sed -i '' for macOS.
-          # We check that no other line has raw sed -i '' calls.
-          BAD=$(grep -n "sed -i ''" setup.sh | grep -v "sed_inplace\|^3[0-9]:\|^4[0-2]:")
-          if [ -n "$BAD" ]; then
-            echo "FAIL: setup.sh has raw BSD sed -i '' outside sed_inplace:"
-            echo "$BAD"
+          # The sed_inplace function wraps sed -i for portability.
+          # Check: no direct sed -i calls with a substitution pattern (s|...).
+          # The function body uses sed -i "$@" which is fine.
+          if grep -n 'sed -i.*s|' setup.sh; then
+            echo "FAIL: setup.sh has raw sed -i with substitution — use sed_inplace instead"
             exit 1
           fi
-          echo "OK: all sed calls go through sed_inplace"
+          # Check: sed_inplace function exists
+          if ! grep -q 'sed_inplace()' setup.sh; then
+            echo "FAIL: sed_inplace function not found in setup.sh"
+            exit 1
+          fi
+          echo "OK: setup.sh uses portable sed_inplace"
 
   # ────────────────────────────────────────────────────────────
   # Windows
