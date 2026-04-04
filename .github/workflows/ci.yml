@@ -14,13 +14,13 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -28,7 +28,7 @@ jobs:
         run: |
           cd gateway
           pip install -r requirements.txt -q
-          pip install -e ".[dev]" -q
+          pip install pytest pytest-asyncio pytest-mock ruff -q
 
       - name: Lint gateway
         run: |
