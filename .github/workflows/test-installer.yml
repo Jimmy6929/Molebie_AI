@@ -7,7 +7,6 @@ on:
     paths:
       - 'install.sh'
       - 'install.ps1'
-      - 'setup.sh'
       - 'cli/**'
       - 'pyproject.toml'
       - 'gateway/requirements.txt'
@@ -16,7 +15,6 @@ on:
     paths:
       - 'install.sh'
       - 'install.ps1'
-      - 'setup.sh'
       - 'cli/**'
       - 'pyproject.toml'
       - 'gateway/requirements.txt'
@@ -112,22 +110,6 @@ jobs:
               print(f'{r.name}: passed={r.passed} hint={r.fix_hint}')
               assert 'brew' not in r.fix_hint, 'Linux should not suggest brew'
           "
-
-      - name: Verify setup.sh sed compatibility
-        run: |
-          # The sed_inplace function wraps sed -i for portability.
-          # Check: no direct sed -i calls with a substitution pattern (s|...).
-          # The function body uses sed -i "$@" which is fine.
-          if grep -n 'sed -i.*s|' setup.sh; then
-            echo "FAIL: setup.sh has raw sed -i with substitution — use sed_inplace instead"
-            exit 1
-          fi
-          # Check: sed_inplace function exists
-          if ! grep -q 'sed_inplace()' setup.sh; then
-            echo "FAIL: sed_inplace function not found in setup.sh"
-            exit 1
-          fi
-          echo "OK: setup.sh uses portable sed_inplace"
 
   # ────────────────────────────────────────────────────────────
   # Windows

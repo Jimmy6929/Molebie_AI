@@ -25,6 +25,13 @@ env/
 dist/
 build/
 
+# Node.js
+node_modules/
+.next/
+
+# Database
+*.db
+
 # IDE
 .idea/
 .vscode/
@@ -34,7 +41,8 @@ build/
 
 # Project docs (private - do not push)
 Local_AI_model_Project_doc/
-docs/
+docs/CLAUDE.md
+docs/PRD-landing-page.md
 
 # Logs
 logs/
@@ -53,3 +61,4 @@ bin/
 # AI tools (private)
 .claude/
 .cursor/
+CLAUDE.md

@@ -1,7 +1,7 @@
 # Molebie AI - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help quickstart setup dev dev-gateway dev-webapp test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
+.PHONY: help quickstart dev dev-gateway dev-webapp test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
 
 # Default target
 help:
@@ -11,8 +11,7 @@ help:
 	@echo ""
 	@echo "  make quickstart     One-command setup — installs everything and launches wizard"
 	@echo ""
-	@echo "  make setup          First-time setup (checks prereqs, installs deps, generates config)"
-	@echo "  make cli            Install molebie-ai CLI (alternative to make setup)"
+	@echo "  make cli            Install molebie-ai CLI"
 	@echo ""
 	@echo "  make install        Install all dependencies"
 	@echo "  make dev            Start all services (gateway, webapp)"
@@ -70,9 +69,6 @@ cli:
 # ──────────────────────────────────────────────────────────────
 # DEVELOPMENT SERVERS
 # ──────────────────────────────────────────────────────────────
-
-setup:
-	@bash setup.sh
 
 dev:
 	@echo "🚀 Starting all services..."

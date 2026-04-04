@@ -15,13 +15,10 @@ pytest tests/
 pytest tests/ --cov=app --cov-report=html
 
 # Run specific test file
-pytest tests/test_inference.py -v
+pytest tests/test_web_search_routing.py -v
 ```
 
 ## Test Files
 
 - `conftest.py` - Shared fixtures and test configuration
-- `test_chat_full.py` - Full integration tests for chat endpoints
-- `test_inference.py` - Tests for inference service
-- `test_sessions.py` - Tests for session management
-- `test_chat.sh` - Shell script for manual API testing
+- `test_web_search_routing.py` - Tests for web search intent routing
