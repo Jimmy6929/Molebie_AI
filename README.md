@@ -41,6 +41,22 @@ Auto-detects your system, picks models for your RAM, generates config, and start
 
 For more control, run `molebie-ai install` to use the interactive setup wizard.
 
+## CLI
+
+| Command | Description |
+|---------|-------------|
+| `molebie-ai run` | Start all services — auto-configures on first run |
+| `molebie-ai install` | Interactive setup wizard |
+| `molebie-ai doctor` | Diagnose problems — checks deps, config, and services |
+| `molebie-ai status` | Show current config and running services |
+| `molebie-ai config env` | List all environment variables |
+| `molebie-ai config set KEY=VALUE` | Update a config value |
+| `molebie-ai model list` | Show available models and download status |
+| `molebie-ai model add 9b` | Download a model |
+| `molebie-ai feature add voice` | Enable a feature (also: `search`, `rag`) |
+
+See [Configuration](docs/configuration.md) for the full command reference.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) — System diagram, project structure, multi-machine setup
