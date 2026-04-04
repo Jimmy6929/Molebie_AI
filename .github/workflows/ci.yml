@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '20'
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install gateway dependencies
+        run: |
+          cd gateway
+          pip install -r requirements.txt -q
+          pip install ruff pytest -q
+
+      - name: Lint gateway
+        run: |
+          cd gateway
+          ruff check app/ tests/
+
+      - name: Test gateway
+        run: |
+          cd gateway
+          pytest tests/ -v
+
+      - name: Type check webapp
+        run: |
+          cd webapp
+          npm install --silent
+          npx tsc --noEmit
