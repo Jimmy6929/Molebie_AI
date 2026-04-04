@@ -8,31 +8,40 @@ import re
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from typing import Any
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import Response, StreamingResponse
 
+from app.config import get_settings
 from app.middleware.auth import JWTPayload, get_current_user
 from app.models.chat import (
+    ChatMessage,
     ChatRequest,
     ChatResponse,
-    ChatMessage,
-    ChatMode,
     InferenceMetadata,
     SessionInfo,
-    SessionRenameRequest,
-    SessionPinRequest,
     SessionListResponse,
+    SessionPinRequest,
+    SessionRenameRequest,
     TTSRequest,
 )
-from app.config import get_settings
 from app.services.database import DatabaseService, get_database_service
 from app.services.inference import InferenceService, get_inference_service
-from app.services.web_search import WebSearchService, get_web_search_service
-from app.services.rag import RAGService, get_rag_service
-from app.services.storage import LocalStorageService, get_storage_service
-from app.services.summarizer import get_summariser_service
 from app.services.memory import get_memory_service
+from app.services.rag import RAGService, get_rag_service
+from app.services.storage import get_storage_service
+from app.services.summarizer import get_summariser_service
+from app.services.web_search import WebSearchService, get_web_search_service
 
 
 @lru_cache(maxsize=4)
@@ -49,8 +58,8 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def _build_evidence_summary(
-    search_results: List[Dict[str, Any]],
-    rag_chunks: List[Dict[str, Any]],
+    search_results: list[dict[str, Any]],
+    rag_chunks: list[dict[str, Any]],
 ) -> str:
     """Generate an evidence meta-block for the system message.
 
@@ -73,7 +82,7 @@ def _build_evidence_summary(
         full_page = sum(1 for r in search_results if r.get("content_source") == "full_page")
         snippet_only = len(search_results) - full_page
 
-        type_counts: Dict[str, int] = {}
+        type_counts: dict[str, int] = {}
         for r in search_results:
             st = r.get("source_type", "web")
             type_counts[st] = type_counts.get(st, 0) + 1
@@ -94,7 +103,7 @@ def _build_evidence_summary(
     # ── RAG chunks ──
     if rag_chunks:
         top_sim = max(c.get("similarity", 0) for c in rag_chunks)
-        quality_counts: Dict[str, int] = {"HIGH": 0, "MODERATE": 0, "WEAK": 0}
+        quality_counts: dict[str, int] = {"HIGH": 0, "MODERATE": 0, "WEAK": 0}
         for c in rag_chunks:
             sim = c.get("similarity", 0)
             if sim > 0.75:
@@ -129,7 +138,7 @@ def _build_evidence_summary(
     return "\n".join(lines)
 
 
-def _rag_quality_header(chunks: List[Dict[str, Any]]) -> str:
+def _rag_quality_header(chunks: list[dict[str, Any]]) -> str:
     """Build a descriptive header for the RAG context section."""
     if not chunks:
         return "DOCUMENT CONTEXT:"
@@ -145,8 +154,8 @@ def _rag_quality_header(chunks: List[Dict[str, Any]]) -> str:
 
 def _validate_response_sources(
     response_text: str,
-    search_results: List[Dict[str, Any]],
-    rag_chunks: List[Dict[str, Any]],
+    search_results: list[dict[str, Any]],
+    rag_chunks: list[dict[str, Any]],
 ) -> None:
     """Log whether the response referenced any of the provided sources.
 
@@ -179,8 +188,8 @@ def _validate_response_sources(
 
 def _build_system_message(
     conversation_mode: bool = False,
-    summary: Optional[str] = None,
-    memories_text: Optional[str] = None,
+    summary: str | None = None,
+    memories_text: str | None = None,
 ) -> dict:
     template_name = "system_voice" if conversation_mode else "system"
     prompt_template = _load_prompt_template(template_name)
@@ -222,7 +231,7 @@ def _validate_image(data_uri: str, settings) -> tuple:
     return mime_type, raw_bytes
 
 
-def _extract_thinking(content: str) -> Optional[str]:
+def _extract_thinking(content: str) -> str | None:
     """Extract thinking block text from raw content, if present."""
     m = _THINK_RE.search(content)
     if m:
@@ -283,7 +292,7 @@ async def send_message(
 ) -> ChatResponse:
     """
     Send a message and get an AI response.
-    
+
     - Creates a new session if session_id is not provided
     - Stores user message and AI response in database
     - Returns the AI response with session info
@@ -510,7 +519,7 @@ async def send_message(
         finish_reason=inference_result.get("finish_reason"),
         rag_metrics=rag_metrics,
     )
-    
+
     sources_list = [{"title": r["title"], "url": r["url"]} for r in search_results] if search_results else None
 
     return ChatResponse(
@@ -551,12 +560,12 @@ async def list_sessions(
     )
 
 
-@router.get("/sessions/{session_id}/messages", response_model=List[ChatMessage])
+@router.get("/sessions/{session_id}/messages", response_model=list[ChatMessage])
 async def get_session_messages(
     session_id: str,
     user: JWTPayload = Depends(get_current_user),
     db: DatabaseService = Depends(get_database_service),
-) -> List[ChatMessage]:
+) -> list[ChatMessage]:
     """Get all messages in a session."""
     session = await db.get_session(session_id, user.user_id)
     if not session:
@@ -670,7 +679,7 @@ async def send_message_stream(
 ):
     """
     Send a message and stream the AI response via Server-Sent Events (SSE).
-    
+
     - Same session/message logic as POST /chat
     - Returns SSE stream with OpenAI-compatible chunks
     - Final event includes full content for database storage
@@ -819,7 +828,7 @@ async def send_message_stream(
         full_content = []
         full_reasoning = []
         client_disconnected = False
-        
+
         if await http_request.is_disconnected():
             return
 
@@ -887,7 +896,7 @@ async def send_message_stream(
 
         if client_disconnected:
             return
-        
+
         # Build final content for DB (strip thinking tags, persist reasoning separately)
         raw_content = "".join(full_content)
         content = _strip_thinking(raw_content)
@@ -936,7 +945,7 @@ async def send_message_stream(
                     )
             except Exception as db_err:
                 print(f"[chat] Failed to save assistant message to DB: {db_err}")
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -953,7 +962,7 @@ async def transcribe_audio_endpoint(
     file: UploadFile = File(...),
     verify_speaker: bool = Form(False),
     user: JWTPayload = Depends(get_current_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Transcribe audio to text. Optionally verify the speaker matches enrolled voice."""
     audio_bytes = await file.read()
     if not audio_bytes:
@@ -966,7 +975,7 @@ async def transcribe_audio_endpoint(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
 
-    result: Dict[str, Any] = {"text": text}
+    result: dict[str, Any] = {"text": text}
 
     if verify_speaker:
         from app.services.speaker import verify_speaker as do_verify
@@ -986,7 +995,7 @@ async def transcribe_audio_endpoint(
 async def enroll_voice(
     file: UploadFile = File(...),
     user: JWTPayload = Depends(get_current_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Add a voice sample for speaker enrollment."""
     audio_bytes = await file.read()
     if not audio_bytes:
@@ -1003,7 +1012,7 @@ async def enroll_voice(
 @router.get("/voice-profile")
 async def voice_profile_status(
     user: JWTPayload = Depends(get_current_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get voice enrollment status for the current user."""
     from app.services.speaker import get_voice_profile_status
 
@@ -1013,7 +1022,7 @@ async def voice_profile_status(
 @router.delete("/voice-profile")
 async def delete_voice_profile_endpoint(
     user: JWTPayload = Depends(get_current_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Delete the enrolled voice profile."""
     from app.services.speaker import delete_voice_profile
 
@@ -1028,6 +1037,7 @@ async def text_to_speech(
 ):
     """Synthesize speech from text using Kokoro TTS."""
     import httpx
+
     from app.config import get_settings
 
     settings = get_settings()

@@ -8,13 +8,10 @@ Supports markdown-header-aware splitting for better chunk boundaries.
 
 import io
 import re
-import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from app.config import Settings, get_settings
 from app.services.embedding import EmbeddingService, get_embedding_service
-
 
 # ── Text Extraction ──────────────────────────────────────────────────────
 
@@ -51,7 +48,7 @@ _SEPARATORS = ["\n\n\n", "\n\n", "\n", ". ", " ", ""]
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.+)$", re.MULTILINE)
 
 
-def _split_by_headings(text: str) -> List[Tuple[Optional[str], str]]:
+def _split_by_headings(text: str) -> list[tuple[str | None, str]]:
     """Split text on markdown headings (# / ## / ###).
 
     Returns list of (heading, section_text) tuples.
@@ -61,7 +58,7 @@ def _split_by_headings(text: str) -> List[Tuple[Optional[str], str]]:
     if not matches:
         return [(None, text)]
 
-    sections: List[Tuple[Optional[str], str]] = []
+    sections: list[tuple[str | None, str]] = []
 
     # Text before first heading
     if matches[0].start() > 0:
@@ -84,7 +81,7 @@ def chunk_text_structured(
     text: str,
     chunk_size: int = 1024,
     chunk_overlap: int = 128,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Split text into overlapping chunks with heading metadata.
 
     For markdown text, splits on section boundaries first, then falls
@@ -96,11 +93,11 @@ def chunk_text_structured(
         return []
 
     sections = _split_by_headings(text)
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     chunk_index = 0
 
     for heading, section_text in sections:
-        raw_chunks: List[str] = []
+        raw_chunks: list[str] = []
         _recursive_split(section_text, _SEPARATORS, chunk_size, chunk_overlap, raw_chunks)
         for chunk in raw_chunks:
             if chunk.strip():
@@ -114,7 +111,7 @@ def chunk_text_structured(
     return result
 
 
-def chunk_text(text: str, chunk_size: int = 1024, chunk_overlap: int = 128) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 1024, chunk_overlap: int = 128) -> list[str]:
     """
     Split text into overlapping chunks using a recursive character splitter.
 
@@ -128,10 +125,10 @@ def chunk_text(text: str, chunk_size: int = 1024, chunk_overlap: int = 128) -> L
 
 def _recursive_split(
     text: str,
-    separators: List[str],
+    separators: list[str],
     chunk_size: int,
     chunk_overlap: int,
-    result: List[str],
+    result: list[str],
 ):
     if len(text) <= chunk_size:
         result.append(text.strip())
@@ -149,7 +146,7 @@ def _recursive_split(
         return
 
     parts = text.split(sep)
-    current: List[str] = []
+    current: list[str] = []
     current_len = 0
 
     for part in parts:
@@ -162,7 +159,7 @@ def _recursive_split(
                 result.append(merged)
 
             # Keep overlap
-            overlap_parts: List[str] = []
+            overlap_parts: list[str] = []
             overlap_len = 0
             for p in reversed(current):
                 if overlap_len + len(p) + len(sep) > chunk_overlap:
@@ -196,7 +193,7 @@ class DocumentProcessor:
 
     def process(
         self, file_data: bytes, file_type: str
-    ) -> List[Tuple[str, List[float], Dict[str, Any]]]:
+    ) -> list[tuple[str, list[float], dict[str, Any]]]:
         """
         Extract text, chunk, and embed.
 
@@ -228,15 +225,15 @@ class DocumentProcessor:
                 emb,
                 {"chunk_index": c["chunk_index"], "heading": c["heading"]},
             )
-            for c, emb in zip(structured_chunks, embeddings)
+            for c, emb in zip(structured_chunks, embeddings, strict=False)
         ]
 
     async def process_async(
         self,
         file_data: bytes,
         file_type: str,
-        full_text: Optional[str] = None,
-    ) -> List[Tuple[str, List[float], Dict[str, Any]]]:
+        full_text: str | None = None,
+    ) -> list[tuple[str, list[float], dict[str, Any]]]:
         """
         Async version of process() that supports contextual retrieval.
 
@@ -260,7 +257,7 @@ class DocumentProcessor:
 
         # Contextual retrieval: generate context prefixes
         texts_to_embed = chunk_texts
-        contextualized_texts: Optional[List[Optional[str]]] = None
+        contextualized_texts: list[str | None] | None = None
 
         if self.settings.rag_contextual_retrieval_enabled:
             try:
@@ -270,7 +267,7 @@ class DocumentProcessor:
                 contexts = await generate_batch(text, chunk_texts, self.settings)
                 contextualized_texts = []
                 texts_to_embed = []
-                for chunk_text, context in zip(chunk_texts, contexts):
+                for chunk_text, context in zip(chunk_texts, contexts, strict=False):
                     if context:
                         ctx_text = f"{context}\n\n{chunk_text}"
                         contextualized_texts.append(ctx_text)
@@ -294,8 +291,8 @@ class DocumentProcessor:
         print(f"[doc_processor] Embeddings complete — {len(embeddings)} vectors of dim {len(embeddings[0])}")
 
         results = []
-        for i, (c, emb) in enumerate(zip(structured_chunks, embeddings)):
-            meta: Dict[str, Any] = {
+        for i, (c, emb) in enumerate(zip(structured_chunks, embeddings, strict=False)):
+            meta: dict[str, Any] = {
                 "chunk_index": c["chunk_index"],
                 "heading": c["heading"],
             }
@@ -306,7 +303,7 @@ class DocumentProcessor:
         return results
 
 
-_processor: Optional[DocumentProcessor] = None
+_processor: DocumentProcessor | None = None
 
 
 def get_document_processor() -> DocumentProcessor:

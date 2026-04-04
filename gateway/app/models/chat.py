@@ -6,10 +6,11 @@ model. Mode selection, fallback info, and latency are surfaced in
 responses so the frontend can display appropriate indicators.
 """
 
-from typing import Any, Dict, Optional, List
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field
 from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatMode(str, Enum):
@@ -22,10 +23,10 @@ class ChatMode(str, Enum):
 class ChatRequest(BaseModel):
     """Request body for POST /chat."""
     message: str = Field(..., min_length=1, max_length=32000, description="User message")
-    session_id: Optional[str] = Field(None, description="Existing session ID, or null for new session")
+    session_id: str | None = Field(None, description="Existing session ID, or null for new session")
     mode: ChatMode = Field(ChatMode.INSTANT, description="Inference mode: instant (fast) or thinking (deeper reasoning)")
     conversation_mode: bool = Field(False, description="When true, use voice conversation system prompt")
-    image: Optional[str] = Field(None, description="Base64-encoded image as data URI (data:image/...;base64,...)")
+    image: str | None = Field(None, description="Base64-encoded image as data URI (data:image/...;base64,...)")
     web_search: bool = Field(False, description="When true, force web search for this message")
 
 
@@ -35,34 +36,34 @@ class ChatMessage(BaseModel):
     id: str
     role: str  # 'user' | 'assistant' | 'system'
     content: str
-    mode_used: Optional[str] = None
-    inference_model: Optional[str] = Field(None, alias="model_used")
-    reasoning_content: Optional[str] = None
-    image_id: Optional[str] = None
-    sources: Optional[List[Dict[str, str]]] = None
+    mode_used: str | None = None
+    inference_model: str | None = Field(None, alias="model_used")
+    reasoning_content: str | None = None
+    image_id: str | None = None
+    sources: list[dict[str, str]] | None = None
     created_at: datetime
 
 
 class InferenceMetadata(BaseModel):
     """Metadata about the inference call, returned alongside the response."""
     mode_used: str                          # actual mode used (may differ if fallback)
-    model: Optional[str] = None             # model name that served the request
+    model: str | None = None             # model name that served the request
     fallback_used: bool = False             # True if thinking fell back to instant
-    original_mode: Optional[str] = None     # original requested mode (if fallback)
-    latency_ms: Optional[int] = None        # total round-trip time in ms
-    tokens_used: Optional[int] = None       # total tokens (prompt + completion)
-    prompt_tokens: Optional[int] = None
-    completion_tokens: Optional[int] = None
-    finish_reason: Optional[str] = None
-    rag_metrics: Optional[Dict[str, Any]] = None  # RAG pipeline metrics (timing, scores)
+    original_mode: str | None = None     # original requested mode (if fallback)
+    latency_ms: int | None = None        # total round-trip time in ms
+    tokens_used: int | None = None       # total tokens (prompt + completion)
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    finish_reason: str | None = None
+    rag_metrics: dict[str, Any] | None = None  # RAG pipeline metrics (timing, scores)
 
 
 class ChatResponse(BaseModel):
     """Response body for POST /chat."""
     session_id: str
     message: ChatMessage
-    session_title: Optional[str] = None
-    inference: Optional[InferenceMetadata] = None  # rich metadata about the inference call
+    session_title: str | None = None
+    inference: InferenceMetadata | None = None  # rich metadata about the inference call
 
 
 class SessionInfo(BaseModel):
@@ -87,7 +88,7 @@ class SessionPinRequest(BaseModel):
 
 class SessionListResponse(BaseModel):
     """Response for listing sessions."""
-    sessions: List[SessionInfo]
+    sessions: list[SessionInfo]
 
 
 class TTSRequest(BaseModel):

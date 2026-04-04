@@ -5,10 +5,9 @@ Tests the rule-based tiers (SKIP and SEARCH patterns) without needing
 a running LLM or SearXNG instance.
 """
 
-import asyncio
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # ── Helpers ──────────────────────────────────────────────────────
 

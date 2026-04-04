@@ -9,7 +9,7 @@ for the top N results to give the model richer evidence.
 
 import asyncio
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -146,7 +146,7 @@ def _classify_source(url: str) -> str:
     return "web"
 
 
-_TRUST_LABELS: Dict[str, str] = {
+_TRUST_LABELS: dict[str, str] = {
     "official": "high trust",
     "reference": "high trust, may lag",
     "news": "high trust for events",
@@ -155,7 +155,7 @@ _TRUST_LABELS: Dict[str, str] = {
 }
 
 
-def _is_duplicate_content(new_snippet: str, existing_snippets: List[str], threshold: float = 0.6) -> bool:
+def _is_duplicate_content(new_snippet: str, existing_snippets: list[str], threshold: float = 0.6) -> bool:
     """Check if new_snippet is too similar to any existing snippet (Jaccard on word sets)."""
     new_words = set(new_snippet.lower().split())
     if not new_words:
@@ -262,7 +262,7 @@ class WebSearchService:
         print(f"[web_search] No match, LLM classify off → skip: '{cleaned[:60]}'")
         return False
 
-    async def search(self, query: str, num_results: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def search(self, query: str, num_results: int | None = None) -> list[dict[str, Any]]:
         """
         Query SearXNG and return a list of result dicts with
         keys: title, url, content, domain, source_type, engines, published_date.
@@ -291,8 +291,8 @@ class WebSearchService:
 
         raw_results = data.get("results", [])
         seen_urls: set[str] = set()
-        existing_snippets: List[str] = []
-        results: List[Dict[str, Any]] = []
+        existing_snippets: list[str] = []
+        results: list[dict[str, Any]] = []
 
         for item in raw_results:
             url = item.get("url", "")
@@ -323,7 +323,7 @@ class WebSearchService:
         print(f"[web_search] Found {len(results)} results for: {query[:80]}")
         return results
 
-    async def _fetch_page_content(self, url: str) -> Optional[str]:
+    async def _fetch_page_content(self, url: str) -> str | None:
         """Fetch full-page content from *url* and extract clean text."""
         if trafilatura is None:
             return None
@@ -353,8 +353,8 @@ class WebSearchService:
         return text
 
     async def enrich_with_full_content(
-        self, results: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, results: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Fetch full-page text for the top N results (concurrent)."""
         if not self.fetch_full_content or not results:
             return results
@@ -379,7 +379,7 @@ class WebSearchService:
         print(f"[web_search] Full-page enrichment: {full_ok}/{count} succeeded")
         return results
 
-    def format_results_for_context(self, results: List[Dict[str, Any]]) -> str:
+    def format_results_for_context(self, results: list[dict[str, Any]]) -> str:
         """Format search results into a text block for the system message."""
         if not results:
             return ""
@@ -406,7 +406,7 @@ class WebSearchService:
 
 # ── Singleton ────────────────────────────────────────────────────
 
-_web_search_service: Optional[WebSearchService] = None
+_web_search_service: WebSearchService | None = None
 
 
 def get_web_search_service() -> WebSearchService:

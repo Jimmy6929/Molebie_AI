@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import auth, health, chat, documents
+from app.routes import auth, chat, documents, health
 
 
 @asynccontextmanager
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
         print(f"     Contextual retrieval: {settings.rag_contextual_retrieval_enabled}")
         print(f"     Reranker: {settings.rag_reranker_enabled} ({settings.rag_reranker_model})")
         if settings.embedding_preload:
-            print(f"     Preloading embedding model in background...")
+            print("     Preloading embedding model in background...")
             from app.services.embedding import get_embedding_service
             def _preload_embedding():
                 try:
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
                     print(f"[embedding] Preload skipped: {exc}")
             asyncio.create_task(asyncio.to_thread(_preload_embedding))
         if settings.rag_reranker_preload and settings.rag_reranker_enabled:
-            print(f"     Preloading reranker model in background...")
+            print("     Preloading reranker model in background...")
             from app.services.reranker import get_reranker
             def _preload_reranker():
                 try:
@@ -72,14 +72,14 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
-    
+
     app = FastAPI(
         title=settings.app_name,
         description="Gateway API for AI Assistant - handles auth, chat, and inference routing",
         version="0.1.0",
         lifespan=lifespan,
     )
-    
+
     # Configure CORS — origins from CORS_ORIGINS env var + private IP regex for LAN access
     cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     app.add_middleware(
@@ -91,13 +91,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["X-Session-ID"],
     )
-    
+
     # Register routes
     app.include_router(auth.router)
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(documents.router)
-    
+
     return app
 
 

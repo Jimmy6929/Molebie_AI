@@ -2,9 +2,9 @@
 Pydantic models for the documents / RAG endpoints.
 """
 
-from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel
 
 
 class DocumentInfo(BaseModel):
@@ -15,12 +15,12 @@ class DocumentInfo(BaseModel):
     file_size: int
     status: str
     created_at: datetime
-    processed_at: Optional[datetime] = None
+    processed_at: datetime | None = None
 
 
 class DocumentListResponse(BaseModel):
     """Response for GET /documents."""
-    documents: List[DocumentInfo]
+    documents: list[DocumentInfo]
 
 
 class UploadResponse(BaseModel):
@@ -55,4 +55,4 @@ class AttachResponse(BaseModel):
 
 class SessionAttachmentListResponse(BaseModel):
     """Response for GET /chat/sessions/{session_id}/attachments."""
-    attachments: List[SessionAttachmentInfo]
+    attachments: list[SessionAttachmentInfo]

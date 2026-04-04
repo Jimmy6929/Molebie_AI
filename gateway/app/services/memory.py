@@ -10,7 +10,7 @@ time, relevant memories are injected into the system message.
 import asyncio
 import json
 import re
-from typing import Optional, Dict, Any, List
+from typing import Any
 
 from app.config import Settings, get_settings
 from app.services.database import DatabaseService, get_database_service
@@ -64,7 +64,7 @@ class MemoryService:
         self,
         session_id: str,
         user_id: str,
-        recent_messages: List[Dict[str, Any]],
+        recent_messages: list[dict[str, Any]],
     ) -> None:
         """Background task: extract facts from recent messages, dedup, store.
 
@@ -81,7 +81,7 @@ class MemoryService:
         self,
         session_id: str,
         user_id: str,
-        recent_messages: List[Dict[str, Any]],
+        recent_messages: list[dict[str, Any]],
     ) -> None:
         """Core extraction and storage logic."""
         # 1. Format recent messages for LLM
@@ -125,7 +125,7 @@ class MemoryService:
         # 5. For each fact, check for duplicates and store/update
         stored = 0
         updated = 0
-        for fact, embedding in zip(facts, embeddings):
+        for fact, embedding in zip(facts, embeddings, strict=False):
             action = await self._dedup_and_store(
                 user_id=user_id,
                 content=fact["content"],
@@ -149,7 +149,7 @@ class MemoryService:
         user_id: str,
         content: str,
         category: str,
-        embedding: List[float],
+        embedding: list[float],
         session_id: str,
     ) -> str:
         """Check for duplicate via cosine similarity, store or update.
@@ -173,10 +173,10 @@ class MemoryService:
     async def _search_similar(
         self,
         user_id: str,
-        embedding: List[float],
+        embedding: list[float],
         threshold: float,
         limit: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search for similar memories using vector similarity."""
         try:
             return await self.db.vector_search_memories(
@@ -191,7 +191,7 @@ class MemoryService:
         user_id: str,
         query: str,
         timeout: float = 5.0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Retrieve memories relevant to the current query.
 
         Called at query time (inline, not background) to inject context.
@@ -226,7 +226,7 @@ class MemoryService:
 
         return memories
 
-    def format_memories_for_context(self, memories: List[Dict[str, Any]]) -> str:
+    def format_memories_for_context(self, memories: list[dict[str, Any]]) -> str:
         """Format retrieved memories into a system message block."""
         if not memories:
             return ""
@@ -239,7 +239,7 @@ class MemoryService:
 
         return "\n".join(lines)
 
-    def _format_messages(self, messages: List[Dict[str, Any]]) -> str:
+    def _format_messages(self, messages: list[dict[str, Any]]) -> str:
         """Format messages for the extraction prompt."""
         lines = []
         for msg in messages:
@@ -252,7 +252,7 @@ class MemoryService:
             lines.append(f"{role}: {content}")
         return "\n\n".join(lines)
 
-    def _parse_facts(self, raw: str) -> List[Dict[str, str]]:
+    def _parse_facts(self, raw: str) -> list[dict[str, str]]:
         """Parse LLM JSON response into a list of fact dicts."""
         try:
             cleaned = raw.strip()
@@ -282,7 +282,7 @@ class MemoryService:
             return []
 
 
-_memory_service: Optional[MemoryService] = None
+_memory_service: MemoryService | None = None
 
 
 def get_memory_service() -> MemoryService:

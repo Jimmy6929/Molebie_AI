@@ -5,7 +5,6 @@ Uses sentence-transformers to generate embeddings locally on CPU/Apple Silicon.
 Dimension configured via EMBEDDING_MODEL in .env.
 """
 
-from typing import List, Optional
 
 from app.config import Settings, get_settings
 
@@ -64,13 +63,13 @@ class EmbeddingService:
         self._load_model()
         return self._dimension
 
-    def embed(self, text: str, prefix: str = "search_query") -> List[float]:
+    def embed(self, text: str, prefix: str = "search_query") -> list[float]:
         """Embed a single text string."""
         self._load_model()
         vector = self._model.encode(text, normalize_embeddings=True)
         return vector.tolist()
 
-    def embed_batch(self, texts: List[str], batch_size: int = 32, prefix: str = "search_document") -> List[List[float]]:
+    def embed_batch(self, texts: list[str], batch_size: int = 32, prefix: str = "search_document") -> list[list[float]]:
         """Embed multiple texts."""
         if not texts:
             return []
@@ -79,7 +78,7 @@ class EmbeddingService:
         return [v.tolist() for v in vectors]
 
 
-_embedding_service: Optional[EmbeddingService] = None
+_embedding_service: EmbeddingService | None = None
 
 
 def get_embedding_service() -> EmbeddingService:

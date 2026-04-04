@@ -9,12 +9,10 @@ search retrieval quality by 35-49%.
 See: https://www.anthropic.com/news/contextual-retrieval
 """
 
-from typing import List, Optional
 
 import httpx
 
 from app.config import Settings
-
 
 _CONTEXT_PROMPT = """\
 <document>
@@ -41,7 +39,7 @@ async def _generate_context(
     doc_text: str,
     chunk_text: str,
     settings: Settings,
-) -> Optional[str]:
+) -> str | None:
     """Generate a context prefix for a single chunk using the local LLM."""
     mode = settings.rag_context_llm_mode  # "instant" or "thinking"
 
@@ -92,16 +90,16 @@ async def _generate_context(
 
 async def generate_batch(
     doc_text: str,
-    chunks: List[str],
+    chunks: list[str],
     settings: Settings,
-) -> List[Optional[str]]:
+) -> list[str | None]:
     """Generate context prefixes for all chunks in a document.
 
     Processes chunks sequentially to avoid overwhelming the local LLM.
     Returns a list of context strings (or None for failures) parallel
     to the input chunks list.
     """
-    results: List[Optional[str]] = []
+    results: list[str | None] = []
 
     for i, chunk in enumerate(chunks):
         context = await _generate_context(doc_text, chunk, settings)

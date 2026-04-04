@@ -4,16 +4,14 @@ JWT Authentication middleware.
 Validates gateway-issued JWT tokens signed with JWT_SECRET.
 """
 
-from typing import Optional
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from jose.exceptions import JWTClaimsError
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-
 
 # HTTP Bearer token scheme
 security = HTTPBearer()
@@ -22,11 +20,11 @@ security = HTTPBearer()
 class JWTPayload(BaseModel):
     """Decoded JWT payload."""
     sub: str  # User ID
-    email: Optional[str] = None
-    role: Optional[str] = None
-    aud: Optional[str] = None
-    exp: Optional[int] = None
-    iat: Optional[int] = None
+    email: str | None = None
+    role: str | None = None
+    aud: str | None = None
+    exp: int | None = None
+    iat: int | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -66,11 +64,11 @@ async def get_current_user(
 
 
 async def get_optional_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
+    credentials: HTTPAuthorizationCredentials | None = Depends(
         HTTPBearer(auto_error=False)
     ),
     settings: Settings = Depends(get_settings),
-) -> Optional[JWTPayload]:
+) -> JWTPayload | None:
     """FastAPI dependency for optional authentication."""
     if credentials is None:
         return None

@@ -5,17 +5,15 @@ Replaces Supabase Auth. Supports single-user (password only)
 and multi-user (email + password) modes.
 """
 
-import secrets
-from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import bcrypt
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 
 from app.config import Settings, get_settings
+from app.schema import DEFAULT_USER_ID
 from app.services.database import DatabaseService, get_database_service
-from app.schema import DEFAULT_USER_ID, DEFAULT_USER_EMAIL
-
 
 TOKEN_EXPIRY_HOURS = 168  # 7 days
 
@@ -50,7 +48,7 @@ class AuthService:
         }
         return jwt.encode(payload, self.jwt_secret, algorithm=self.jwt_algorithm)
 
-    def verify_token(self, token: str) -> Dict[str, Any]:
+    def verify_token(self, token: str) -> dict[str, Any]:
         """Decode and validate a JWT token. Returns the payload dict."""
         try:
             return jwt.decode(
@@ -62,7 +60,7 @@ class AuthService:
         except JWTError as e:
             raise ValueError(f"Invalid token: {e}")
 
-    async def register(self, email: str, password: str) -> Dict[str, Any]:
+    async def register(self, email: str, password: str) -> dict[str, Any]:
         """Register a new user (multi-user mode). Returns {token, user}."""
         if self.auth_mode != "multi":
             raise ValueError("Registration is disabled in single-user mode")
@@ -77,7 +75,7 @@ class AuthService:
             raise ValueError("Email already registered")
 
         # Create user
-        from app.services.database import _uuid, _now
+        from app.services.database import _now, _uuid
         user_id = _uuid()
         now = _now()
         password_hash = _hash_password(password)
@@ -94,7 +92,7 @@ class AuthService:
             "user": {"id": user_id, "email": email},
         }
 
-    async def login(self, email: str, password: str) -> Dict[str, Any]:
+    async def login(self, email: str, password: str) -> dict[str, Any]:
         """Login with email + password (multi-user mode). Returns {token, user}."""
         conn = await self.db._get_conn()
         rows = await conn.execute_fetchall(
@@ -113,7 +111,7 @@ class AuthService:
             "user": {"id": user["id"], "email": user["email"]},
         }
 
-    async def login_simple(self, password: str) -> Dict[str, Any]:
+    async def login_simple(self, password: str) -> dict[str, Any]:
         """Login with password only (single-user mode). Returns {token, user}."""
         conn = await self.db._get_conn()
         rows = await conn.execute_fetchall(
@@ -142,7 +140,7 @@ class AuthService:
             "user": {"id": user["id"], "email": user["email"]},
         }
 
-    async def get_auth_mode_info(self) -> Dict[str, Any]:
+    async def get_auth_mode_info(self) -> dict[str, Any]:
         """Return auth mode and setup state."""
         conn = await self.db._get_conn()
         rows = await conn.execute_fetchall(
@@ -155,7 +153,7 @@ class AuthService:
         }
 
 
-_auth_service: Optional[AuthService] = None
+_auth_service: AuthService | None = None
 
 
 def get_auth_service() -> AuthService:

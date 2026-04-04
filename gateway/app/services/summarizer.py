@@ -8,7 +8,7 @@ to 10 recent messages and prepends the summary to the system message.
 """
 
 import re
-from typing import Optional, Dict, Any, List
+from typing import Any
 
 from app.config import Settings, get_settings
 
@@ -147,7 +147,7 @@ class SummariserService:
             f"summary={len(summary_text)} chars"
         )
 
-    def _format_messages(self, messages: List[Dict[str, Any]]) -> str:
+    def _format_messages(self, messages: list[dict[str, Any]]) -> str:
         """Format messages into text for the LLM prompt, respecting char limit."""
         lines = []
         total_chars = 0
@@ -166,7 +166,7 @@ class SummariserService:
         return "\n\n".join(lines)
 
 
-_summariser_service: Optional[SummariserService] = None
+_summariser_service: SummariserService | None = None
 
 
 def get_summariser_service() -> SummariserService:

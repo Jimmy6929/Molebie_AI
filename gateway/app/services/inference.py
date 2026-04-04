@@ -10,9 +10,11 @@ The API prefix ("/v1" or "") is configurable per tier so both server
 types work transparently through the same gateway code.
 """
 
-from typing import Optional, List, Dict, Any, AsyncIterator
 import json
 import time
+from collections.abc import AsyncIterator
+from typing import Any
+
 import httpx
 
 from app.config import Settings, get_settings
@@ -61,7 +63,7 @@ class InferenceService:
 
     # ==================== Mode Config Helpers ====================
 
-    def _get_endpoint(self, mode: str) -> Optional[str]:
+    def _get_endpoint(self, mode: str) -> str | None:
         """Get the inference endpoint URL for the given mode."""
         if mode in ("thinking", "thinking_harder"):
             return self.thinking_url
@@ -103,13 +105,13 @@ class InferenceService:
         """Get whether chain-of-thought is enabled for the given mode."""
         return self.settings.get_enable_thinking_for_mode(mode)
 
-    def _get_thinking_budget(self, mode: str) -> Optional[int]:
+    def _get_thinking_budget(self, mode: str) -> int | None:
         """Get the thinking token budget for the given mode, or None."""
         return self.settings.get_thinking_budget_for_mode(mode)
 
     # ==================== Health Check ====================
 
-    async def check_health(self, mode: str = "instant") -> Dict[str, Any]:
+    async def check_health(self, mode: str = "instant") -> dict[str, Any]:
         """
         Check if the inference endpoint is healthy.
         Returns status info including model name and cold-start readiness.
@@ -190,11 +192,11 @@ class InferenceService:
 
     async def generate_response(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         mode: str = "instant",
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> dict[str, Any]:
         """
         Generate a complete response from the LLM.
 
@@ -293,7 +295,7 @@ class InferenceService:
         self,
         endpoint: str,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         mode: str,
         max_tokens: int,
         temperature: float,
@@ -302,15 +304,15 @@ class InferenceService:
         timeout: float,
         api_prefix: str = "/v1",
         enable_thinking: bool = False,
-        thinking_budget: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        thinking_budget: int | None = None,
+    ) -> dict[str, Any]:
         """
         Make the actual HTTP call to the inference endpoint.
         Works with both mlx_lm (/v1/...) and mlx_vlm (/...) servers.
         """
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                payload: Dict[str, Any] = {
+                payload: dict[str, Any] = {
                     "model": model,
                     "messages": messages,
                     "max_tokens": max_tokens,
@@ -373,10 +375,10 @@ class InferenceService:
 
     async def generate_response_stream(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         mode: str = "instant",
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
         """
         Generate a streaming response from the LLM (SSE format).
@@ -429,7 +431,7 @@ class InferenceService:
             meta = {"mode": mode, "model": model, "fallback_used": fallback_used}
             yield f"data: {json.dumps({'metadata': meta})}\n\n"
 
-            stream_payload: Dict[str, Any] = {
+            stream_payload: dict[str, Any] = {
                 "model": model,
                 "messages": messages,
                 "max_tokens": resolved_max_tokens,
@@ -509,9 +511,9 @@ class InferenceService:
 
     async def _mock_response(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         mode: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate a mock response for testing when no endpoint is configured."""
         raw_content = messages[-1]["content"] if messages else ""
         last_message = raw_content if isinstance(raw_content, str) else (
@@ -555,7 +557,7 @@ class InferenceService:
 
     async def _mock_stream(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         mode: str,
     ) -> AsyncIterator[str]:
         """Stream a mock response word by word."""
@@ -582,7 +584,7 @@ class InferenceService:
 
 
 # Singleton instance
-_inference_service: Optional[InferenceService] = None
+_inference_service: InferenceService | None = None
 
 
 def get_inference_service() -> InferenceService:

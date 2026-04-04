@@ -10,7 +10,7 @@ Model: cross-encoder/ms-marco-MiniLM-L6-v2 (~80MB, runs locally on CPU).
 Adds ~200-500ms for 20 candidates but improves precision by 20-35%.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.config import Settings, get_settings
 
@@ -36,14 +36,14 @@ class RerankerService:
 
         print(f"[reranker] Loading model: {self.model_name}")
         self._model = CrossEncoder(self.model_name)
-        print(f"[reranker] Model loaded")
+        print("[reranker] Model loaded")
 
     def rerank(
         self,
         query: str,
-        chunks: List[Dict[str, Any]],
+        chunks: list[dict[str, Any]],
         top_k: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Re-score and re-rank chunks using the cross-encoder.
 
         Args:
@@ -64,14 +64,14 @@ class RerankerService:
         scores = self._model.predict(pairs)
 
         # Attach scores and sort
-        for chunk, score in zip(chunks, scores):
+        for chunk, score in zip(chunks, scores, strict=False):
             chunk["rerank_score"] = float(score)
 
         ranked = sorted(chunks, key=lambda c: c.get("rerank_score", 0), reverse=True)
         return ranked[:top_k]
 
 
-_reranker: Optional[RerankerService] = None
+_reranker: RerankerService | None = None
 
 
 def get_reranker() -> RerankerService:

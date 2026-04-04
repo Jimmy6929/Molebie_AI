@@ -6,7 +6,6 @@ Files are stored locally; metadata and chunks in SQLite.
 """
 
 from datetime import datetime, timezone
-from typing import Dict, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
@@ -20,14 +19,17 @@ from app.models.documents import (
     SessionAttachmentListResponse,
     UploadResponse,
 )
-from app.services.document_processor import extract_text
 from app.services.database import DatabaseService, get_database_service
-from app.services.storage import LocalStorageService, get_storage_service
-from app.services.document_processor import DocumentProcessor, get_document_processor
+from app.services.document_processor import (
+    DocumentProcessor,
+    extract_text,
+    get_document_processor,
+)
+from app.services.storage import get_storage_service
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
-ALLOWED_TYPES: Dict[str, str] = {
+ALLOWED_TYPES: dict[str, str] = {
     "text/plain": "txt",
     "text/markdown": "md",
     "application/pdf": "pdf",
@@ -347,7 +349,7 @@ async def reindex_documents(
     import struct
 
     db = get_database_service()
-    processor = get_document_processor()
+    get_document_processor()
     conn = await db._get_conn()
     user_id = user.user_id
 
@@ -383,7 +385,7 @@ async def reindex_documents(
     embeddings = emb_svc.embed_batch(texts)
 
     inserted = 0
-    for (rowid, _text), embedding in zip(missing, embeddings):
+    for (rowid, _text), embedding in zip(missing, embeddings, strict=False):
         blob = struct.pack(f"{len(embedding)}f", *embedding)
         try:
             await conn.execute(
@@ -405,17 +407,17 @@ async def reindex_documents(
 
 # ── RAG Evaluation Endpoint ──────────────────────────────────────────────
 
+
 from pydantic import BaseModel, Field
-from typing import List as TypingList
 
 
 class EvalTestCase(BaseModel):
     query: str
-    expected_doc_ids: TypingList[str] = Field(default_factory=list)
+    expected_doc_ids: list[str] = Field(default_factory=list)
 
 
 class EvalRequest(BaseModel):
-    test_cases: TypingList[EvalTestCase]
+    test_cases: list[EvalTestCase]
 
 
 @router.post("/evaluate", tags=["RAG Evaluation"])

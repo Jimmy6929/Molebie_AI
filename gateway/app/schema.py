@@ -6,15 +6,12 @@ that creates all tables, FTS5 virtual tables, and sqlite-vec virtual tables.
 """
 
 import os
-import uuid
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import aiosqlite
 import sqlite_vec
-
 
 SCHEMA_VERSION = 1
 
@@ -289,7 +286,7 @@ def init_database_sync(
     data_dir: str,
     embedding_dim: int = 1536,
     auth_mode: str = "single",
-    default_password_hash: Optional[str] = None,
+    default_password_hash: str | None = None,
 ) -> str:
     """
     Initialize the SQLite database synchronously.
@@ -379,7 +376,7 @@ async def init_database(
     data_dir: str,
     embedding_dim: int = 1536,
     auth_mode: str = "single",
-    default_password_hash: Optional[str] = None,
+    default_password_hash: str | None = None,
 ) -> str:
     """
     Initialize the SQLite database asynchronously.

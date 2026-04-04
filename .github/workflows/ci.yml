@@ -28,7 +28,7 @@ jobs:
         run: |
           cd gateway
           pip install -r requirements.txt -q
-          pip install ruff pytest -q
+          pip install -e ".[dev]" -q
 
       - name: Lint gateway
         run: |

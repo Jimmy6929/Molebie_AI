@@ -120,7 +120,7 @@ def _load_profile(user_id: str):
     path = _profile_path(user_id)
     if not os.path.exists(path):
         return None
-    with open(path, "r") as f:
+    with open(path) as f:
         data = json.load(f)
     return {
         "embedding": np.array(data["embedding"]),

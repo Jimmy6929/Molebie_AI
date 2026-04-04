@@ -76,6 +76,8 @@ exclude = '''
 [tool.ruff]
 line-length = 88
 target-version = "py310"
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -88,6 +90,8 @@ select = [
 ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
+    "E402",  # module-level import not at top (intentional: logging config, lazy loading)
+    "B904",  # raise from in except (not useful for HTTP error responses)
 ]
 
 [tool.mypy]

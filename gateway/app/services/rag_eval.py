@@ -6,17 +6,17 @@ provides an evaluation endpoint for running test cases against the
 full RAG pipeline.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.config import Settings, get_settings
-from app.services.rag import RAGService, get_rag_service
+from app.services.rag import get_rag_service
 
 
 async def evaluate_queries(
-    test_cases: List[Dict[str, Any]],
+    test_cases: list[dict[str, Any]],
     user_id: str,
-    settings: Optional[Settings] = None,
-) -> Dict[str, Any]:
+    settings: Settings | None = None,
+) -> dict[str, Any]:
     """Run test cases through the RAG pipeline and compute metrics.
 
     Each test case: {"query": str, "expected_doc_ids": List[str]}

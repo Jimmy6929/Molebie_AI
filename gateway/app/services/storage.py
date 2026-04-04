@@ -5,10 +5,8 @@ Replaces Supabase Storage with simple file I/O in the data/ directory.
 Documents stored in data/documents/{user_id}/, images in data/images/{user_id}/.
 """
 
-import os
 import uuid
 from pathlib import Path
-from typing import Optional
 
 
 class LocalStorageService:
@@ -69,7 +67,7 @@ class LocalStorageService:
             full_path.unlink()
 
 
-_storage_service: Optional[LocalStorageService] = None
+_storage_service: LocalStorageService | None = None
 
 
 def get_storage_service() -> LocalStorageService:

@@ -8,7 +8,7 @@ and formats matching chunks as context for injection into the LLM prompt.
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.config import Settings, get_settings
 from app.services.database import DatabaseService, get_database_service
@@ -25,18 +25,18 @@ def _quality_label(similarity: float) -> str:
 
 
 def _rrf_fuse(
-    vector_results: List[Dict[str, Any]],
-    text_results: List[Dict[str, Any]],
+    vector_results: list[dict[str, Any]],
+    text_results: list[dict[str, Any]],
     k: int = 60,
     vector_weight: float = 0.7,
     text_weight: float = 0.3,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Reciprocal Rank Fusion of vector and full-text search results."""
     vec_ranked = {r["chunk_id"]: (i + 1, r) for i, r in enumerate(vector_results)}
     txt_ranked = {r["chunk_id"]: (i + 1, r) for i, r in enumerate(text_results)}
     all_ids = set(vec_ranked) | set(txt_ranked)
 
-    fused: List[Dict[str, Any]] = []
+    fused: list[dict[str, Any]] = []
     for chunk_id in all_ids:
         vec_entry = vec_ranked.get(chunk_id)
         txt_entry = txt_ranked.get(chunk_id)
@@ -94,10 +94,10 @@ class RAGService:
     async def _search_chunks(
         self,
         user_id: str,
-        query_embedding: List[float],
+        query_embedding: list[float],
         count: int,
         threshold: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Run a single vector similarity search against document_chunks."""
         try:
             return await self.db.vector_search_chunks(
@@ -110,11 +110,11 @@ class RAGService:
     async def _hybrid_search(
         self,
         user_id: str,
-        query_embedding: List[float],
+        query_embedding: list[float],
         query_text: str,
         count: int,
         threshold: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Run hybrid search (vector + full-text) with RRF fusion."""
         try:
             vector_results, text_results = await asyncio.gather(
@@ -136,7 +136,7 @@ class RAGService:
     async def _rewrite_query(
         self,
         query: str,
-        conversation_context: List[Dict[str, str]],
+        conversation_context: list[dict[str, str]],
     ) -> str:
         """Rewrite the query using conversation context for better retrieval.
 
@@ -201,10 +201,10 @@ class RAGService:
         self,
         user_id: str,
         query: str,
-        limit: Optional[int] = None,
-        threshold: Optional[float] = None,
-        conversation_context: Optional[List[Dict[str, str]]] = None,
-    ) -> List[Dict[str, Any]]:
+        limit: int | None = None,
+        threshold: float | None = None,
+        conversation_context: list[dict[str, str]] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Embed the query and search for matching document chunks.
 
@@ -222,7 +222,7 @@ class RAGService:
 
         count = limit or self.match_count
         thresh = threshold or self.match_threshold
-        timings: Dict[str, float] = {}
+        timings: dict[str, float] = {}
 
         # Step 0: Query rewriting (contextual expansion)
         search_query = query
@@ -295,7 +295,7 @@ class RAGService:
 
         return results
 
-    def format_context(self, chunks: List[Dict[str, Any]]) -> str:
+    def format_context(self, chunks: list[dict[str, Any]]) -> str:
         """Format retrieved chunks into a text block for the system message.
 
         Each chunk is labelled with a quality tier (HIGH / MODERATE / WEAK)
@@ -332,7 +332,7 @@ class RAGService:
 
         return "\n\n".join(lines)
 
-    def get_metrics(self, chunks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def get_metrics(self, chunks: list[dict[str, Any]]) -> dict[str, Any] | None:
         """Extract RAG metrics from retrieval results."""
         if not chunks or not self.settings.rag_metrics_enabled:
             return None
@@ -341,7 +341,7 @@ class RAGService:
         similarities = [c.get("similarity", 0) for c in chunks]
         rrf_scores = [c.get("rrf_score", 0) for c in chunks if c.get("rrf_score") is not None]
         rerank_scores = [c.get("rerank_score", 0) for c in chunks if c.get("rerank_score") is not None]
-        unique_docs = len(set(c.get("document_id", "") for c in chunks))
+        unique_docs = len({c.get("document_id", "") for c in chunks})
 
         return {
             "num_candidates": len(chunks),
@@ -357,7 +357,7 @@ class RAGService:
         }
 
 
-_rag_service: Optional[RAGService] = None
+_rag_service: RAGService | None = None
 
 
 def get_rag_service() -> RAGService:

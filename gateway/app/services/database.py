@@ -10,7 +10,7 @@ import struct
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiosqlite
 
@@ -26,12 +26,12 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
-def _row_to_dict(row: aiosqlite.Row) -> Dict[str, Any]:
+def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
     """Convert an aiosqlite.Row to a plain dict."""
     return dict(row)
 
 
-def _serialize_embedding(embedding: List[float]) -> bytes:
+def _serialize_embedding(embedding: list[float]) -> bytes:
     """Pack a float list into bytes for sqlite-vec."""
     return struct.pack(f"{len(embedding)}f", *embedding)
 
@@ -41,7 +41,7 @@ class DatabaseService:
 
     def __init__(self, settings: Settings):
         self.data_dir = getattr(settings, "data_dir", "data")
-        self._conn: Optional[aiosqlite.Connection] = None
+        self._conn: aiosqlite.Connection | None = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -57,7 +57,7 @@ class DatabaseService:
 
     async def create_session(
         self, user_id: str, title: str = "New Chat", **_kwargs
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         db = await self._get_conn()
         now = _now()
         sid = _uuid()
@@ -74,7 +74,7 @@ class DatabaseService:
 
     async def get_session(
         self, session_id: str, user_id: str, **_kwargs
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             "SELECT * FROM chat_sessions WHERE id = ? AND user_id = ?",
@@ -84,7 +84,7 @@ class DatabaseService:
 
     async def list_sessions(
         self, user_id: str, limit: int = 50, **_kwargs
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             "SELECT * FROM chat_sessions WHERE user_id = ? AND is_archived = 0 "
@@ -152,11 +152,11 @@ class DatabaseService:
         user_id: str,
         role: str,
         content: str,
-        mode_used: Optional[str] = None,
-        tokens_used: Optional[int] = None,
-        reasoning_content: Optional[str] = None,
+        mode_used: str | None = None,
+        tokens_used: int | None = None,
+        reasoning_content: str | None = None,
         **_kwargs,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         db = await self._get_conn()
         now = _now()
         mid = _uuid()
@@ -183,7 +183,7 @@ class DatabaseService:
         user_id: str,
         limit: int = 100,
         **_kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             "SELECT * FROM chat_messages WHERE session_id = ? AND user_id = ? "
@@ -199,11 +199,11 @@ class DatabaseService:
         message_id: str,
         user_id: str,
         storage_path: str,
-        filename: Optional[str] = None,
+        filename: str | None = None,
         mime_type: str = "image/jpeg",
         file_size: int = 0,
         **_kwargs,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         db = await self._get_conn()
         iid = _uuid()
         now = _now()
@@ -221,10 +221,10 @@ class DatabaseService:
 
     async def get_message_images(
         self,
-        message_ids: List[str],
+        message_ids: list[str],
         user_id: str,
         **_kwargs,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]]:
         if not message_ids:
             return {}
         db = await self._get_conn()
@@ -241,7 +241,7 @@ class DatabaseService:
     async def create_message_sources(
         self,
         message_id: str,
-        sources: List[Dict[str, str]],
+        sources: list[dict[str, str]],
     ) -> None:
         """Batch-insert web search source links for a message."""
         if not sources:
@@ -258,8 +258,8 @@ class DatabaseService:
 
     async def get_message_sources(
         self,
-        message_ids: List[str],
-    ) -> Dict[str, List[Dict[str, str]]]:
+        message_ids: list[str],
+    ) -> dict[str, list[dict[str, str]]]:
         """Fetch source links for multiple messages. Returns {message_id: [{title, url}, ...]}."""
         if not message_ids:
             return {}
@@ -270,7 +270,7 @@ class DatabaseService:
             f"WHERE message_id IN ({placeholders}) ORDER BY created_at ASC",
             tuple(message_ids),
         )
-        result: Dict[str, List[Dict[str, str]]] = {}
+        result: dict[str, list[dict[str, str]]] = {}
         for r in rows:
             mid = r["message_id"]
             if mid not in result:
@@ -280,7 +280,7 @@ class DatabaseService:
 
     async def get_image_metadata(
         self, image_id: str, user_id: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             "SELECT storage_path, mime_type FROM message_images "
@@ -292,8 +292,8 @@ class DatabaseService:
     # ==================== User Profile ====================
 
     async def get_or_create_profile(
-        self, user_id: str, email: Optional[str] = None, **_kwargs
-    ) -> Optional[Dict[str, Any]]:
+        self, user_id: str, email: str | None = None, **_kwargs
+    ) -> dict[str, Any] | None:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             "SELECT * FROM users WHERE id = ?", (user_id,)
@@ -324,7 +324,7 @@ class DatabaseService:
         file_type: str,
         file_size: int,
         doc_status: str = "pending",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = await self._get_conn()
         did = _uuid()
         now = _now()
@@ -339,7 +339,7 @@ class DatabaseService:
         return _row_to_dict(rows[0])
 
     async def update_document_status(
-        self, doc_id: str, doc_status: str, processed_at: Optional[str] = None
+        self, doc_id: str, doc_status: str, processed_at: str | None = None
     ) -> None:
         db = await self._get_conn()
         if processed_at:
@@ -356,7 +356,7 @@ class DatabaseService:
 
     async def get_document(
         self, doc_id: str, user_id: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             "SELECT * FROM documents WHERE id = ? AND user_id = ?",
@@ -364,7 +364,7 @@ class DatabaseService:
         )
         return _row_to_dict(rows[0]) if rows else None
 
-    async def list_documents(self, user_id: str) -> List[Dict[str, Any]]:
+    async def list_documents(self, user_id: str) -> list[dict[str, Any]]:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             "SELECT * FROM documents WHERE user_id = ? ORDER BY created_at DESC",
@@ -398,7 +398,7 @@ class DatabaseService:
 
     # ==================== Document Chunks ====================
 
-    async def insert_chunks(self, chunks: List[Dict[str, Any]]) -> None:
+    async def insert_chunks(self, chunks: list[dict[str, Any]]) -> None:
         """Batch insert chunks into document_chunks, FTS5, and vec tables."""
         if not chunks:
             return
@@ -454,7 +454,7 @@ class DatabaseService:
         filename: str,
         content: str,
         file_size: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = await self._get_conn()
         sid = _uuid()
         now = _now()
@@ -472,7 +472,7 @@ class DatabaseService:
 
     async def list_session_documents(
         self, session_id: str, user_id: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             "SELECT * FROM session_documents "
@@ -511,10 +511,10 @@ class DatabaseService:
     async def vector_search_chunks(
         self,
         user_id: str,
-        query_embedding: List[float],
+        query_embedding: list[float],
         threshold: float = 0.3,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search document chunks by vector similarity using sqlite-vec."""
         db = await self._get_conn()
         blob = _serialize_embedding(query_embedding)
@@ -562,7 +562,7 @@ class DatabaseService:
         user_id: str,
         query_text: str,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search document chunks by full-text (BM25) using FTS5."""
         db = await self._get_conn()
         # Escape FTS5 special chars — wrap each token in double quotes
@@ -611,9 +611,9 @@ class DatabaseService:
         user_id: str,
         content: str,
         category: str,
-        embedding: List[float],
-        session_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        embedding: list[float],
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
         db = await self._get_conn()
         mid = _uuid()
         now = _now()
@@ -643,7 +643,7 @@ class DatabaseService:
         self,
         memory_id: str,
         content: str,
-        embedding: List[float],
+        embedding: list[float],
     ) -> None:
         db = await self._get_conn()
         now = _now()
@@ -667,10 +667,10 @@ class DatabaseService:
     async def vector_search_memories(
         self,
         user_id: str,
-        query_embedding: List[float],
+        query_embedding: list[float],
         threshold: float = 0.5,
         limit: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search user memories by vector similarity."""
         db = await self._get_conn()
         blob = _serialize_embedding(query_embedding)
@@ -719,7 +719,7 @@ class DatabaseService:
     # ==================== RAG Metrics ====================
 
     async def insert_rag_metrics(
-        self, user_id: str, metrics: Dict[str, Any]
+        self, user_id: str, metrics: dict[str, Any]
     ) -> None:
         db = await self._get_conn()
         mid = _uuid()
@@ -754,7 +754,7 @@ class DatabaseService:
         await db.commit()
 
 
-_db_service: Optional[DatabaseService] = None
+_db_service: DatabaseService | None = None
 
 
 @lru_cache

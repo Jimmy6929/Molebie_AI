@@ -4,14 +4,12 @@ Authentication endpoints for the Gateway API.
 Supports single-user mode (password only) and multi-user mode (email + password).
 """
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.middleware.auth import JWTPayload, get_current_user
 from app.services.auth_service import AuthService, get_auth_service
-
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 

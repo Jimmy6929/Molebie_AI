@@ -6,7 +6,7 @@ and deep application-logic checks for the CLI doctor command.
 
 import asyncio
 import struct
-from typing import Optional, Dict, Any, List
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -14,7 +14,6 @@ from pydantic import BaseModel
 from app.config import Settings, get_settings
 from app.middleware.auth import JWTPayload, get_current_user
 from app.services.inference import InferenceService, get_inference_service
-
 
 router = APIRouter(tags=["Health"])
 
@@ -29,14 +28,14 @@ class HealthResponse(BaseModel):
 class AuthenticatedHealthResponse(HealthResponse):
     """Health check response with user info."""
     user_id: str
-    email: Optional[str] = None
+    email: str | None = None
 
 
 class InferenceHealthResponse(BaseModel):
     """Health check response for inference endpoints (both tiers)."""
-    instant: Dict[str, Any]
-    thinking: Dict[str, Any]
-    routing: Dict[str, Any]
+    instant: dict[str, Any]
+    thinking: dict[str, Any]
+    routing: dict[str, Any]
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -103,7 +102,7 @@ async def inference_health_check(
 @router.get("/health/deep")
 async def deep_health_check(
     settings: Settings = Depends(get_settings),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Deep application-logic health checks.
 
@@ -111,7 +110,7 @@ async def deep_health_check(
     Called by `molebie-ai doctor --deep` to verify the runtime environment.
     Public endpoint — no auth required.
     """
-    results: Dict[str, Any] = {}
+    results: dict[str, Any] = {}
 
     # 1. Embedding model check (run in thread — model loading is CPU-heavy and blocks the async loop)
     results["embedding"] = await asyncio.to_thread(_check_embedding, settings)
@@ -132,7 +131,7 @@ async def deep_health_check(
     return results
 
 
-def _check_embedding(settings: Settings) -> Dict[str, Any]:
+def _check_embedding(settings: Settings) -> dict[str, Any]:
     """Test that the embedding model loads and produces correct-dimension vectors."""
     if not settings.rag_enabled:
         return {"status": "skip", "message": "RAG disabled"}
@@ -157,8 +156,8 @@ def _check_embedding(settings: Settings) -> Dict[str, Any]:
 
 
 async def _check_vector_roundtrip(
-    test_embedding: List[float],
-) -> Dict[str, Any]:
+    test_embedding: list[float],
+) -> dict[str, Any]:
     """Insert a test embedding, query it back, verify, and clean up."""
     from app.services.database import get_database_service
 
