@@ -72,7 +72,7 @@ cli:
 
 dev:
 	@echo "🚀 Starting all services..."
-	@echo "   First-time? Run: make setup"
+	@echo "   First-time? Run: make quickstart"
 	@echo ""
 	@echo "   Run each command in a separate terminal:"
 	@echo ""
