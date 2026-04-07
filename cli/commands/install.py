@@ -176,9 +176,9 @@ def _ask_setup_type(config: MolebieConfig) -> None:
         "How will you run Molebie AI?",
         [
             "All-in-one — everything on this Mac",
-            "Frontend + API — Webapp + Gateway here, LLM on another machine",
-            "LLM server — LLM only, app + API on another machine",
-            "Custom — pick services individually",
+            "Frontend + API — Webapp + Gateway here, LLM on another machine  (still testing and building, welcome to try)",
+            "LLM server — LLM only, app + API on another machine  (still testing and building, welcome to try)",
+            "Custom — pick services individually  (still testing and building, welcome to try)",
         ],
         default="All-in-one — everything on this Mac",
     )
