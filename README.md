@@ -1,10 +1,19 @@
-# Molebie AI
+<p align="center">
+  <img src="assets/logo.jpg" alt="Molebie AI" width="480">
+</p>
 
-[![CI](https://github.com/Jimmy6929/Molebie_AI/actions/workflows/ci.yml/badge.svg)](https://github.com/Jimmy6929/Molebie_AI/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/ci.yml"><img src="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
 
-A self-hosted AI assistant with voice conversation, vision, RAG document memory, and web search. Private. Fast. Yours.
+<p align="center">
+  A self-hosted AI assistant with voice conversation, vision, RAG document memory, and web search.<br>
+  <strong>Private. Fast. Yours.</strong>
+</p>
 
-<!-- TODO: Add demo GIF — assets/demo.gif -->
+<p align="center">
+  <img src="assets/chat-demo.gif" alt="Chat demo" width="800">
+</p>
 
 ## Features
 
@@ -30,6 +39,10 @@ git clone https://github.com/Jimmy6929/Molebie_AI.git
 cd Molebie_AI
 ./install.sh
 ```
+
+<p align="center">
+  <img src="assets/install-demo.gif" alt="Installation demo" width="500">
+</p>
 
 ## Quick Start
 
