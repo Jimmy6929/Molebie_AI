@@ -80,12 +80,15 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Configure CORS — origins from CORS_ORIGINS env var + private IP regex for LAN access
+    # Configure CORS — origins from CORS_ORIGINS env var + private IP regex for LAN access.
+    # The regex covers RFC1918 private ranges and the 100.64.0.0/10 CGNAT block used by
+    # Tailscale, so remote devices on the same tailnet can reach the gateway on :8000.
+    # Each branch captures a 2-octet prefix; the trailing \.\d+\.\d+ matches the last two.
     cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_origin_regex=r"^http://(192\.168|172\.\d+|10\.\d+|100\.)\d+\.\d+:3000$",
+        allow_origin_regex=r"^http://(192\.168|172\.\d+|10\.\d+|100\.\d+)\.\d+\.\d+:3000$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

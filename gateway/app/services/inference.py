@@ -351,25 +351,34 @@ class InferenceService:
         except httpx.ConnectError:
             ctx = "cold start?" if mode in ("thinking", "thinking_harder") else "is pod running?"
             print(f"[inference] Cannot connect to {endpoint} ({mode}) -- {ctx}")
-            mock = await self._mock_response(messages, mode)
-            mock["_error"] = "connect_error"
-            return mock
+            return self._error_response(
+                mode=mode, endpoint=endpoint,
+                reason="connection refused",
+                detail=f"Cannot reach the inference server ({ctx}).",
+            )
         except httpx.TimeoutException:
             print(f"[inference] Timeout calling {endpoint} ({mode}, {timeout}s)")
-            mock = await self._mock_response(messages, mode)
-            mock["_error"] = "timeout"
-            return mock
+            return self._error_response(
+                mode=mode, endpoint=endpoint,
+                reason=f"timeout after {int(timeout)}s",
+                detail="The inference server accepted the request but didn't respond in time.",
+            )
         except httpx.HTTPStatusError as e:
+            body = e.response.text[:200]
             print(f"[inference] HTTP {e.response.status_code} from {endpoint} "
-                  f"({mode}): {e.response.text[:200]}")
-            mock = await self._mock_response(messages, mode)
-            mock["_error"] = f"http_{e.response.status_code}"
-            return mock
+                  f"({mode}): {body}")
+            return self._error_response(
+                mode=mode, endpoint=endpoint,
+                reason=f"HTTP {e.response.status_code}",
+                detail=body,
+            )
         except Exception as e:
             print(f"[inference] Error ({mode}): {e}")
-            mock = await self._mock_response(messages, mode)
-            mock["_error"] = str(e)
-            return mock
+            return self._error_response(
+                mode=mode, endpoint=endpoint,
+                reason=type(e).__name__,
+                detail=str(e),
+            )
 
     # ==================== Streaming ====================
 
@@ -460,6 +469,9 @@ class InferenceService:
         except Exception as e:
             error_context = f"{mode}, model={model}"
             print(f"[inference] Stream error ({error_context}): {e}")
+            primary_endpoint, primary_reason, primary_detail = (
+                endpoint, *_classify_stream_error(e),
+            )
 
             # If thinking failed, try fallback stream
             if mode in ("thinking", "thinking_harder") and self.fallback_to_instant and self.instant_url:
@@ -502,10 +514,96 @@ class InferenceService:
                     return
                 except Exception as fallback_err:
                     print(f"[inference] Fallback stream also failed: {fallback_err}")
+                    # Report the *fallback* failure — it's what the user ultimately saw.
+                    primary_endpoint = self.instant_url
+                    primary_reason, primary_detail = _classify_stream_error(fallback_err)
 
-            # Last resort: mock
-            async for chunk in self._mock_stream(messages, mode):
+            # Surface a real error to the user — don't pretend the endpoint is unconfigured.
+            async for chunk in self._error_stream(
+                mode=mode, endpoint=primary_endpoint,
+                reason=primary_reason, detail=primary_detail,
+            ):
                 yield chunk
+
+    # ==================== Error (configured-but-failed) ====================
+
+    def _error_response(
+        self,
+        mode: str,
+        endpoint: str,
+        reason: str,
+        detail: str = "",
+    ) -> dict[str, Any]:
+        """Build a response shape identical to a real chat message, but whose
+        content tells the user what broke and where to look.
+
+        Distinct from ``_mock_response``: this is for endpoints that ARE
+        configured but failed at call time, where the mock script's
+        "configure your endpoints" text would be actively misleading.
+        """
+        mode_label = "Thinking" if mode in ("thinking", "thinking_harder") else "Instant"
+        log_hint = _mlx_log_hint(endpoint)
+
+        lines = [
+            f"⚠️ **Inference error** — the **{mode_label}** tier at "
+            f"`{endpoint}` returned `{reason}`.",
+        ]
+        if detail:
+            first_line = detail.strip().splitlines()[0][:240]
+            if first_line:
+                lines.append(f"> `{first_line}`")
+        if log_hint:
+            lines.append(
+                f"Check `{log_hint}` for the full traceback, then restart "
+                f"the stack with `molebie-ai run`."
+            )
+        else:
+            lines.append(
+                "Check the inference server's logs, then restart with `molebie-ai run`."
+            )
+
+        content = "\n\n".join(lines)
+
+        return {
+            "content": content,
+            "tokens_used": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "mode_used": mode,
+            "model": "error",
+            "finish_reason": "stop",
+            "fallback_used": False,
+            "_error": reason,
+        }
+
+    async def _error_stream(
+        self,
+        mode: str,
+        endpoint: str,
+        reason: str,
+        detail: str = "",
+    ) -> AsyncIterator[str]:
+        """SSE variant of ``_error_response``. Mirrors ``_mock_stream`` shape so
+        the frontend renders it the same way as a normal assistant message."""
+        err = self._error_response(mode, endpoint, reason, detail)
+
+        meta = {"mode": mode, "model": "error", "fallback_used": False}
+        yield f"data: {json.dumps({'metadata': meta})}\n\n"
+
+        words = err["content"].split(" ")
+        for i, word in enumerate(words):
+            chunk = {
+                "choices": [{
+                    "delta": {
+                        "content": word + (" " if i < len(words) - 1 else ""),
+                    },
+                    "index": 0,
+                    "finish_reason": None if i < len(words) - 1 else "stop",
+                }],
+                "model": "error",
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+        yield "data: [DONE]\n\n"
 
     # ==================== Mock ====================
 
@@ -581,6 +679,35 @@ class InferenceService:
             }
             yield f"data: {json.dumps(chunk)}\n\n"
         yield "data: [DONE]\n\n"
+
+
+def _classify_stream_error(exc: BaseException) -> tuple[str, str]:
+    """Turn an exception raised while streaming into (reason, detail) strings
+    suitable for _error_response / _error_stream."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = exc.response.text[:240] if exc.response is not None else ""
+        return f"HTTP {exc.response.status_code}", body
+    if isinstance(exc, httpx.ConnectError):
+        return "connection refused", "Cannot reach the inference server."
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout", "The inference server didn't respond in time."
+    return type(exc).__name__, str(exc)
+
+
+def _mlx_log_hint(endpoint: str) -> str | None:
+    """If the endpoint looks like a locally-managed MLX server, return the
+    per-service log file path that the CLI writes via ServiceRunner. Returns
+    None for remote / non-MLX endpoints where we can't reliably guess the log."""
+    if not endpoint:
+        return None
+    low = endpoint.lower()
+    if "://localhost" not in low and "://127.0.0.1" not in low:
+        return None
+    if ":8080" in low:
+        return "data/logs/mlx-thinking.log"
+    if ":8081" in low:
+        return "data/logs/mlx-instant.log"
+    return None
 
 
 # Singleton instance

@@ -8,6 +8,7 @@ from rich.table import Table
 
 from cli.models.config import InferenceBackend, MolebieConfig, SetupType
 from cli.services import config_manager
+from cli.services.network_info import get_network_urls
 from cli.ui.console import console
 
 
@@ -93,3 +94,13 @@ def status() -> None:
 
     console.print(table)
     console.print()
+
+    # Network block — show reachable URLs when webapp runs on this machine
+    if config.run_webapp:
+        webapp_urls = get_network_urls(3000)
+        remote_urls = [(label, url) for label, url in webapp_urls if label != "Local"]
+        if remote_urls:
+            console.print("[bold cyan]Network[/bold cyan] [dim](reachable from other devices)[/dim]")
+            for label, url in remote_urls:
+                console.print(f"  {label + ':':12s}{url}")
+            console.print()

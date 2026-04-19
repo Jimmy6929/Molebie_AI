@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -114,11 +115,18 @@ def get_models_for_profile(
 # MLX setup
 # ──────────────────────────────────────────────────────────────
 
+# Minimum mlx-vlm version known to work with current transformers (≥5.1).
+# 0.4.1 passes a non-"pt" return_tensors to the HF fast image processor and
+# every image request 500s with "Only returning PyTorch tensors is currently
+# supported." Fixed in 0.4.2.
+MLX_VLM_MIN_VERSION = "0.4.2"
+
+
 def is_mlx_vlm_installed() -> bool:
-    """Check if mlx-vlm is installed (lightweight metadata check, no heavy import)."""
+    """Check if mlx-vlm is installed in the MLX interpreter."""
     try:
         result = subprocess.run(
-            [sys.executable, "-c", "from importlib.metadata import version; version('mlx-vlm')"],
+            [_mlx_python(), "-c", "from importlib.metadata import version; version('mlx-vlm')"],
             capture_output=True, timeout=10,
         )
         return result.returncode == 0
@@ -126,13 +134,144 @@ def is_mlx_vlm_installed() -> bool:
         return False
 
 
-def install_mlx_vlm() -> bool:
-    """Install mlx-vlm using sys.executable -m pip. Matches Makefile mlx-vlm-install."""
+def get_mlx_vlm_version() -> str | None:
+    """Return the installed mlx-vlm version string, or None if not installed."""
+    try:
+        result = subprocess.run(
+            [_mlx_python(), "-c", "from importlib.metadata import version; print(version('mlx-vlm'))"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Parse a dotted version string into a tuple of ints. Robust to rc/post suffixes."""
+    parts: list[int] = []
+    for segment in v.split("."):
+        digits = ""
+        for c in segment:
+            if c.isdigit():
+                digits += c
+            else:
+                break
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def is_mlx_vlm_version_ok(min_version: str = MLX_VLM_MIN_VERSION) -> bool:
+    """True iff installed mlx-vlm is ≥ min_version. False if not installed or older."""
+    installed = get_mlx_vlm_version()
+    if not installed:
+        return False
+    return _parse_version(installed) >= _parse_version(min_version)
+
+
+def upgrade_mlx_vlm() -> bool:
+    """Upgrade mlx-vlm to the latest version in the MLX interpreter.
+
+    Same PEP 668 fallback pattern as install_torchvision: some homebrew-managed
+    pythons reject plain pip; retry with --user if the externally-managed error
+    fires.
+    """
+    py = _mlx_python()
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-U", "mlx-vlm"],
+        [py, "-m", "pip", "install", "-U", "mlx-vlm"],
+        capture_output=True, text=True, timeout=600,
+    )
+    print(result.stdout)
+    if result.returncode == 0:
+        return True
+    print(result.stderr)
+    if "externally-managed-environment" in (result.stderr or ""):
+        print("Retrying with --user (PEP 668 externally-managed interpreter)…")
+        result = subprocess.run(
+            [py, "-m", "pip", "install", "-U", "--user", "mlx-vlm"],
+            capture_output=False, timeout=600,
+        )
+        return result.returncode == 0
+    return False
+
+
+def install_mlx_vlm() -> bool:
+    """Install mlx-vlm + torchvision.
+
+    torchvision isn't a declared mlx-vlm dep, but HF processors for Qwen3-VL,
+    Qwen2-VL, Llama-3.2-Vision and similar families import it unconditionally
+    during processor load. Without it, every /chat/completions call to
+    mlx_vlm.server raises ImportError and returns 500. Ship it by default.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-U", "mlx-vlm", "torchvision"],
         capture_output=False, timeout=600,
     )
     return result.returncode == 0
+
+
+def _mlx_python() -> str:
+    """Return the interpreter that runs (or would run) the MLX server.
+
+    Resolution order:
+      1. Project `.venv/bin/python3` if it exists. Project convention is to
+         run MLX from the venv (the user's shell auto-activates it and
+         `service_manager.py` resolves the literal string "python3" through
+         PATH, which has `.venv/bin` first).
+      2. PATH-resolved `python3` — what the literal "python3" command hits.
+      3. `sys.executable` as a last resort.
+
+    Why not `ps`-based detection: macOS venvs share the framework Python
+    binary with the base interpreter, so `ps ax -o command=` shows the
+    homebrew path even when the venv python actually launched the process.
+    That gives a misleading target.
+    """
+    root = Path(__file__).resolve().parents[2]
+    venv_py = root / ".venv" / "bin" / "python3"
+    if venv_py.exists():
+        return str(venv_py)
+    return shutil.which("python3") or sys.executable
+
+
+def is_torchvision_installed() -> bool:
+    """Check if torchvision is importable in the interpreter that runs MLX."""
+    try:
+        result = subprocess.run(
+            [_mlx_python(), "-c", "from importlib.metadata import version; version('torchvision')"],
+            capture_output=True, timeout=10,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def install_torchvision() -> bool:
+    """Install torchvision into the interpreter that runs the MLX server.
+
+    Homebrew-managed pythons enforce PEP 668 and reject plain `pip install`
+    against the system site-packages. Retry with `--user` (the same path
+    used for mlx-vlm in those envs) when we detect that error.
+    """
+    py = _mlx_python()
+    result = subprocess.run(
+        [py, "-m", "pip", "install", "-U", "torchvision"],
+        capture_output=True, text=True, timeout=600,
+    )
+    if result.returncode == 0:
+        print(result.stdout)
+        return True
+    stderr = result.stderr or ""
+    print(result.stdout)
+    print(stderr)
+    if "externally-managed-environment" in stderr:
+        print("Retrying with --user (PEP 668 externally-managed interpreter)…")
+        result = subprocess.run(
+            [py, "-m", "pip", "install", "-U", "--user", "torchvision"],
+            capture_output=False, timeout=600,
+        )
+        return result.returncode == 0
+    return False
 
 
 def is_mlx_model_cached(repo_id: str) -> bool:
@@ -177,6 +316,17 @@ def setup_mlx(profile: str, sys_info: SystemInfo) -> SetupResult:
             return SetupResult(
                 success=False,
                 message="Failed to install mlx-vlm. Try manually: python -m pip install -U mlx-vlm",
+            )
+
+    # 2b. Ensure torchvision is present even when mlx-vlm was already installed.
+    # Older envs (pre-commit-12974ac) didn't bundle torchvision, so the mlx-vlm
+    # gate above would skip and images would 500 at runtime. Non-fatal: text chat
+    # still works without it.
+    if not is_torchvision_installed():
+        if not install_torchvision():
+            warnings.append(
+                "Could not install torchvision — image uploads will return HTTP 500 from the MLX server. "
+                "Fix manually: python -m pip install -U torchvision"
             )
 
     # 3. Get models for profile

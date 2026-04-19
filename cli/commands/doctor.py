@@ -8,7 +8,7 @@ import httpx
 import typer
 
 from cli.models.config import InferenceBackend, MolebieConfig
-from cli.services import config_manager, prerequisite_checker
+from cli.services import backend_setup, config_manager, prerequisite_checker
 from cli.services.env_generator import init_env_local
 from cli.ui.console import console, make_status_table, print_fail, print_info, print_ok, print_warn
 
@@ -133,7 +133,60 @@ def doctor(
             all_ok = False
     console.print()
 
-    # 4. Service health
+    # 4. Backend dependencies — deps the chosen inference backend needs at runtime
+    # but that aren't declared by its pip package (silent failures at request time).
+    if config.run_inference and config.inference_backend == InferenceBackend.MLX:
+        console.print("[heading]Backend dependencies[/heading]")
+
+        # mlx-vlm version — 0.4.1 crashes on every image request with recent
+        # transformers. See backend_setup.MLX_VLM_MIN_VERSION for context.
+        installed_version = backend_setup.get_mlx_vlm_version()
+        if installed_version is None:
+            print_fail("mlx-vlm not installed in the MLX interpreter")
+            console.print("    Fix: run [bold]molebie-ai install[/bold]")
+            all_ok = False
+        elif backend_setup.is_mlx_vlm_version_ok():
+            print_ok(f"mlx-vlm {installed_version} (≥ {backend_setup.MLX_VLM_MIN_VERSION})")
+        elif fix:
+            console.print(
+                f"    Upgrading mlx-vlm (installed {installed_version}, "
+                f"need ≥ {backend_setup.MLX_VLM_MIN_VERSION})…"
+            )
+            if backend_setup.upgrade_mlx_vlm():
+                new_version = backend_setup.get_mlx_vlm_version() or "unknown"
+                print_ok(f"mlx-vlm upgraded to {new_version}")
+                console.print("    [dim]Restart the MLX servers to pick up the new version.[/dim]")
+            else:
+                print_fail("Failed to upgrade mlx-vlm")
+                console.print("    Fix: [bold]python -m pip install -U mlx-vlm[/bold]")
+                all_ok = False
+        else:
+            print_fail(
+                f"mlx-vlm {installed_version} is below minimum {backend_setup.MLX_VLM_MIN_VERSION} — "
+                "image uploads will return HTTP 500"
+            )
+            console.print("    Fix: run [bold]molebie-ai doctor --fix[/bold]")
+            all_ok = False
+
+        # torchvision — HF vision processors for some model families import it
+        # unconditionally during preprocessor load.
+        if backend_setup.is_torchvision_installed():
+            print_ok("torchvision installed")
+        elif fix:
+            console.print("    Installing torchvision (required for image uploads)…")
+            if backend_setup.install_torchvision():
+                print_ok("torchvision installed")
+            else:
+                print_fail("Failed to install torchvision")
+                console.print("    Fix: [bold]python -m pip install -U torchvision[/bold]")
+                all_ok = False
+        else:
+            print_fail("torchvision missing — image uploads will return HTTP 500 from the MLX server")
+            console.print("    Fix: run [bold]molebie-ai doctor --fix[/bold]")
+            all_ok = False
+        console.print()
+
+    # 5. Service health
     console.print("[heading]Services[/heading]")
     services: list[tuple[str, str]] = []
 
@@ -168,7 +221,7 @@ def doctor(
 
     console.print()
 
-    # 5. Deep application-logic checks (optional)
+    # 6. Deep application-logic checks (optional)
     if deep:
         console.print("[heading]Deep Application Checks[/heading]")
         from cli.services.deep_checker import run_deep_checks

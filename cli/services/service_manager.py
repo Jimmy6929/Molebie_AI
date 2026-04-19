@@ -16,6 +16,7 @@ from pathlib import Path
 
 from cli.models.config import InferenceBackend, MolebieConfig
 from cli.services.config_manager import get_project_root
+from cli.services.network_info import get_network_urls
 from cli.services.prerequisite_checker import check_docker, start_docker_daemon
 from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
 
@@ -127,7 +128,10 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
             name="Webapp",
             port=3000,
             health_url="http://localhost:3000",
-            start_cmd=["npm", "run", "dev"],
+            # -H 0.0.0.0 so other devices (LAN / Tailscale) can reach Next.js.
+            # The webapp derives the gateway URL from window.location at runtime,
+            # so no NEXT_PUBLIC_GATEWAY_URL injection is needed for single-machine use.
+            start_cmd=["npm", "run", "dev", "--", "-H", "0.0.0.0"],
             cwd=str(root / "webapp"),
             start_order=4,
         ))
@@ -167,6 +171,16 @@ def _print_startup_summary(
         if _check_health(svc.health_url, timeout=2.0):
             console.print(f"    {svc.name + ':':12s}http://localhost:{svc.port}")
     console.print()
+
+    # ── Network (other devices) ──
+    if webapp_svc:
+        webapp_urls = get_network_urls(webapp_svc.port)
+        remote_urls = [(label, url) for label, url in webapp_urls if label != "Local"]
+        if remote_urls:
+            console.print("  [bold cyan]Network:[/bold cyan] [dim](reachable from other devices)[/dim]")
+            for label, url in remote_urls:
+                console.print(f"    {label + ':':12s}{url}")
+            console.print()
 
     # ── Inference ──
     console.print("  [bold cyan]Inference:[/bold cyan]")
