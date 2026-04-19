@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -114,16 +115,85 @@ def get_models_for_profile(
 # MLX setup
 # ──────────────────────────────────────────────────────────────
 
+# Minimum mlx-vlm version known to work with current transformers (≥5.1).
+# 0.4.1 passes a non-"pt" return_tensors to the HF fast image processor and
+# every image request 500s with "Only returning PyTorch tensors is currently
+# supported." Fixed in 0.4.2.
+MLX_VLM_MIN_VERSION = "0.4.2"
+
+
 def is_mlx_vlm_installed() -> bool:
-    """Check if mlx-vlm is installed (lightweight metadata check, no heavy import)."""
+    """Check if mlx-vlm is installed in the MLX interpreter."""
     try:
         result = subprocess.run(
-            [sys.executable, "-c", "from importlib.metadata import version; version('mlx-vlm')"],
+            [_mlx_python(), "-c", "from importlib.metadata import version; version('mlx-vlm')"],
             capture_output=True, timeout=10,
         )
         return result.returncode == 0
     except subprocess.TimeoutExpired:
         return False
+
+
+def get_mlx_vlm_version() -> str | None:
+    """Return the installed mlx-vlm version string, or None if not installed."""
+    try:
+        result = subprocess.run(
+            [_mlx_python(), "-c", "from importlib.metadata import version; print(version('mlx-vlm'))"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Parse a dotted version string into a tuple of ints. Robust to rc/post suffixes."""
+    parts: list[int] = []
+    for segment in v.split("."):
+        digits = ""
+        for c in segment:
+            if c.isdigit():
+                digits += c
+            else:
+                break
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def is_mlx_vlm_version_ok(min_version: str = MLX_VLM_MIN_VERSION) -> bool:
+    """True iff installed mlx-vlm is ≥ min_version. False if not installed or older."""
+    installed = get_mlx_vlm_version()
+    if not installed:
+        return False
+    return _parse_version(installed) >= _parse_version(min_version)
+
+
+def upgrade_mlx_vlm() -> bool:
+    """Upgrade mlx-vlm to the latest version in the MLX interpreter.
+
+    Same PEP 668 fallback pattern as install_torchvision: some homebrew-managed
+    pythons reject plain pip; retry with --user if the externally-managed error
+    fires.
+    """
+    py = _mlx_python()
+    result = subprocess.run(
+        [py, "-m", "pip", "install", "-U", "mlx-vlm"],
+        capture_output=True, text=True, timeout=600,
+    )
+    print(result.stdout)
+    if result.returncode == 0:
+        return True
+    print(result.stderr)
+    if "externally-managed-environment" in (result.stderr or ""):
+        print("Retrying with --user (PEP 668 externally-managed interpreter)…")
+        result = subprocess.run(
+            [py, "-m", "pip", "install", "-U", "--user", "mlx-vlm"],
+            capture_output=False, timeout=600,
+        )
+        return result.returncode == 0
+    return False
 
 
 def install_mlx_vlm() -> bool:
@@ -141,40 +211,26 @@ def install_mlx_vlm() -> bool:
     return result.returncode == 0
 
 
-def _detect_running_mlx_python() -> str | None:
-    """Return the absolute interpreter path of a running mlx_server.py, if any."""
-    try:
-        out = subprocess.run(
-            ["ps", "ax", "-o", "command="],
-            capture_output=True, text=True, timeout=5,
-        ).stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
-    for line in out.splitlines():
-        if "mlx_server.py" not in line:
-            continue
-        parts = line.strip().split()
-        if parts and parts[0].startswith("/"):
-            return parts[0]
-    return None
-
-
 def _mlx_python() -> str:
     """Return the interpreter that runs (or would run) the MLX server.
 
-    `service_manager.py` and the Makefile launch MLX with the literal string
-    "python3", PATH-resolved at exec time. That interpreter can differ from
-    the CLI venv's `sys.executable` and from the user's shell `python3`, so
-    checking or installing torchvision against `sys.executable` gives a false
-    OK whenever the user launches MLX from a different shell.
+    Resolution order:
+      1. Project `.venv/bin/python3` if it exists. Project convention is to
+         run MLX from the venv (the user's shell auto-activates it and
+         `service_manager.py` resolves the literal string "python3" through
+         PATH, which has `.venv/bin` first).
+      2. PATH-resolved `python3` — what the literal "python3" command hits.
+      3. `sys.executable` as a last resort.
 
-    Strategy: if an MLX server is currently running, target its interpreter
-    exactly — that's the one that needs torchvision. Otherwise fall back to
-    whatever `python3` resolves to on PATH.
+    Why not `ps`-based detection: macOS venvs share the framework Python
+    binary with the base interpreter, so `ps ax -o command=` shows the
+    homebrew path even when the venv python actually launched the process.
+    That gives a misleading target.
     """
-    running = _detect_running_mlx_python()
-    if running:
-        return running
+    root = Path(__file__).resolve().parents[2]
+    venv_py = root / ".venv" / "bin" / "python3"
+    if venv_py.exists():
+        return str(venv_py)
     return shutil.which("python3") or sys.executable
 
 
