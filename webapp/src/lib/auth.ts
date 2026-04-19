@@ -5,8 +5,7 @@
  * Supports single-user (password only) and multi-user (email + password) modes.
  */
 
-const GATEWAY_URL =
-  process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+import { GATEWAY_URL } from "./gatewayUrl";
 
 const TOKEN_KEY = "molebie_token";
 

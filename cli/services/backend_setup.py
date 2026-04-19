@@ -127,9 +127,15 @@ def is_mlx_vlm_installed() -> bool:
 
 
 def install_mlx_vlm() -> bool:
-    """Install mlx-vlm using sys.executable -m pip. Matches Makefile mlx-vlm-install."""
+    """Install mlx-vlm + torchvision.
+
+    torchvision isn't a declared mlx-vlm dep, but HF processors for Qwen3-VL,
+    Qwen2-VL, Llama-3.2-Vision and similar families import it unconditionally
+    during processor load. Without it, every /chat/completions call to
+    mlx_vlm.server raises ImportError and returns 500. Ship it by default.
+    """
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-U", "mlx-vlm"],
+        [sys.executable, "-m", "pip", "install", "-U", "mlx-vlm", "torchvision"],
         capture_output=False, timeout=600,
     )
     return result.returncode == 0
