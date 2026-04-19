@@ -141,6 +141,83 @@ def install_mlx_vlm() -> bool:
     return result.returncode == 0
 
 
+def _detect_running_mlx_python() -> str | None:
+    """Return the absolute interpreter path of a running mlx_server.py, if any."""
+    try:
+        out = subprocess.run(
+            ["ps", "ax", "-o", "command="],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    for line in out.splitlines():
+        if "mlx_server.py" not in line:
+            continue
+        parts = line.strip().split()
+        if parts and parts[0].startswith("/"):
+            return parts[0]
+    return None
+
+
+def _mlx_python() -> str:
+    """Return the interpreter that runs (or would run) the MLX server.
+
+    `service_manager.py` and the Makefile launch MLX with the literal string
+    "python3", PATH-resolved at exec time. That interpreter can differ from
+    the CLI venv's `sys.executable` and from the user's shell `python3`, so
+    checking or installing torchvision against `sys.executable` gives a false
+    OK whenever the user launches MLX from a different shell.
+
+    Strategy: if an MLX server is currently running, target its interpreter
+    exactly — that's the one that needs torchvision. Otherwise fall back to
+    whatever `python3` resolves to on PATH.
+    """
+    running = _detect_running_mlx_python()
+    if running:
+        return running
+    return shutil.which("python3") or sys.executable
+
+
+def is_torchvision_installed() -> bool:
+    """Check if torchvision is importable in the interpreter that runs MLX."""
+    try:
+        result = subprocess.run(
+            [_mlx_python(), "-c", "from importlib.metadata import version; version('torchvision')"],
+            capture_output=True, timeout=10,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def install_torchvision() -> bool:
+    """Install torchvision into the interpreter that runs the MLX server.
+
+    Homebrew-managed pythons enforce PEP 668 and reject plain `pip install`
+    against the system site-packages. Retry with `--user` (the same path
+    used for mlx-vlm in those envs) when we detect that error.
+    """
+    py = _mlx_python()
+    result = subprocess.run(
+        [py, "-m", "pip", "install", "-U", "torchvision"],
+        capture_output=True, text=True, timeout=600,
+    )
+    if result.returncode == 0:
+        print(result.stdout)
+        return True
+    stderr = result.stderr or ""
+    print(result.stdout)
+    print(stderr)
+    if "externally-managed-environment" in stderr:
+        print("Retrying with --user (PEP 668 externally-managed interpreter)…")
+        result = subprocess.run(
+            [py, "-m", "pip", "install", "-U", "--user", "torchvision"],
+            capture_output=False, timeout=600,
+        )
+        return result.returncode == 0
+    return False
+
+
 def is_mlx_model_cached(repo_id: str) -> bool:
     """Check if an MLX model is already in the huggingface cache."""
     try:
@@ -183,6 +260,17 @@ def setup_mlx(profile: str, sys_info: SystemInfo) -> SetupResult:
             return SetupResult(
                 success=False,
                 message="Failed to install mlx-vlm. Try manually: python -m pip install -U mlx-vlm",
+            )
+
+    # 2b. Ensure torchvision is present even when mlx-vlm was already installed.
+    # Older envs (pre-commit-12974ac) didn't bundle torchvision, so the mlx-vlm
+    # gate above would skip and images would 500 at runtime. Non-fatal: text chat
+    # still works without it.
+    if not is_torchvision_installed():
+        if not install_torchvision():
+            warnings.append(
+                "Could not install torchvision — image uploads will return HTTP 500 from the MLX server. "
+                "Fix manually: python -m pip install -U torchvision"
             )
 
     # 3. Get models for profile
