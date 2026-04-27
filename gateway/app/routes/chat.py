@@ -5,6 +5,7 @@ Chat endpoints for the Gateway API.
 import asyncio
 import base64
 import re
+import time
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -38,6 +39,7 @@ from app.models.chat import (
 from app.services.database import DatabaseService, get_database_service
 from app.services.inference import InferenceService, get_inference_service
 from app.services.memory import get_memory_service
+from app.services.metrics_registry import RequestRecord, get_metrics_registry
 from app.services.rag import RAGService, get_rag_service
 from app.services.storage import get_storage_service
 from app.services.summarizer import get_summariser_service
@@ -452,11 +454,41 @@ async def send_message(
     else:
         inference_mode = request.mode.value
 
-    # Generate AI response
-    inference_result = await inference.generate_response(
-        messages=messages,
-        mode=inference_mode,
-    )
+    # Generate AI response — instrumented for /metrics/live
+    # Non-streaming path: TTFT is approximated as total_ms because we don't
+    # see individual tokens. Monitor reads the series with that caveat.
+    registry = get_metrics_registry()
+    await registry.mark_active(inference_mode)
+    t_start = time.perf_counter()
+    _metrics_error: str | None = None
+    try:
+        inference_result = await inference.generate_response(
+            messages=messages,
+            mode=inference_mode,
+        )
+    except Exception as exc:
+        _metrics_error = type(exc).__name__
+        raise
+    finally:
+        total_ms = (time.perf_counter() - t_start) * 1000.0
+        await registry.mark_inactive(inference_mode)
+        ok = _metrics_error is None
+        result = locals().get("inference_result") if ok else None
+        await registry.record(RequestRecord(
+            ended_at=time.time(),
+            tier=inference_mode,
+            model=(result.get("model") if result else None),
+            streaming=False,
+            ok=ok,
+            ttft_ms=total_ms,              # approximation for non-streaming
+            tpot_ms=None,
+            total_ms=total_ms,
+            completion_tokens=(result.get("completion_tokens") if result else None),
+            prompt_tokens=(result.get("prompt_tokens") if result else None),
+            finish_reason=(result.get("finish_reason") if result else None),
+            fallback=bool(result.get("fallback_used")) if result else False,
+            error_type=_metrics_error,
+        ))
 
     # Store assistant response (strip thinking blocks, persist reasoning separately)
     raw = inference_result["content"]
@@ -829,122 +861,166 @@ async def send_message_stream(
         full_reasoning = []
         client_disconnected = False
 
-        if await http_request.is_disconnected():
-            return
+        # ── Live-monitor instrumentation ─────────────────────────────
+        # Stamp entry; stamp first-token when we see the first content delta;
+        # in the finally-block compute ttft/tpot and record. The try/finally
+        # guarantees the active-count can never leak on exception or early
+        # return — critical, because a stuck counter poisons the dashboard.
+        registry = get_metrics_registry()
+        t_req_start = time.perf_counter()
+        t_first_token: float | None = None
+        n_content_deltas = 0
+        _metrics_error: str | None = None
+        _stream_ok = False
+        await registry.mark_active(inference_mode)
 
         try:
-            yield f"data: {json.dumps({'session_id': session_id})}\n\n"
-        except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
-            return
-
-        # Web search: run inside generator so we can send real-time SSE events
-        search_results = []
-        if will_search:
-            try:
-                yield f"data: {json.dumps({'type': 'search_start'})}\n\n"
-            except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
-                return
-
-            search_results = await web_search.search(request.message)
-            if search_results:
-                search_results = await web_search.enrich_with_full_content(search_results)
-                context_text = web_search.format_results_for_context(search_results)
-                messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
-
-            sources = [{"title": r["title"], "url": r["url"]} for r in search_results]
-            try:
-                yield f"data: {json.dumps({'type': 'search_done', 'sources': sources})}\n\n"
-            except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
-                return
-
-        # Inject evidence summary so the model can self-calibrate confidence
-        evidence_summary = _build_evidence_summary(search_results, rag_chunks)
-        messages[0]["content"] += f"\n\n{evidence_summary}"
-
-        total_chars = sum(
-            len(m["content"]) if isinstance(m.get("content"), str) else sum(
-                len(p.get("text", "")) for p in m.get("content", []) if isinstance(p, dict)
-            )
-            for m in messages
-        )
-        print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
-
-        async for chunk in inference.generate_response_stream(
-            messages=messages,
-            mode=inference_mode,
-        ):
-            try:
-                if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
-                    data = json.loads(chunk[6:])
-                    delta = data.get("choices", [{}])[0].get("delta", {})
-                    if "content" in delta:
-                        full_content.append(delta["content"])
-                    if "reasoning_content" in delta:
-                        full_reasoning.append(delta["reasoning_content"])
-            except (json.JSONDecodeError, IndexError, KeyError):
-                pass
-
             if await http_request.is_disconnected():
-                client_disconnected = True
-                break
+                return
 
             try:
-                yield chunk
+                yield f"data: {json.dumps({'session_id': session_id})}\n\n"
             except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
-                client_disconnected = True
-                break
+                return
 
-        if client_disconnected:
-            return
+            # Web search: run inside generator so we can send real-time SSE events
+            search_results = []
+            if will_search:
+                try:
+                    yield f"data: {json.dumps({'type': 'search_start'})}\n\n"
+                except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+                    return
 
-        # Build final content for DB (strip thinking tags, persist reasoning separately)
-        raw_content = "".join(full_content)
-        content = _strip_thinking(raw_content)
+                search_results = await web_search.search(request.message)
+                if search_results:
+                    search_results = await web_search.enrich_with_full_content(search_results)
+                    context_text = web_search.format_results_for_context(search_results)
+                    messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
 
-        reasoning = "".join(full_reasoning) if full_reasoning else _extract_thinking(raw_content)
-        if not reasoning:
-            reasoning = None
+                sources = [{"title": r["title"], "url": r["url"]} for r in search_results]
+                try:
+                    yield f"data: {json.dumps({'type': 'search_done', 'sources': sources})}\n\n"
+                except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+                    return
 
-        save_content = content if content else ("(no visible response)" if reasoning else None)
-        if save_content:
-            try:
-                assistant_msg = await db.create_message(
-                    session_id=session_id,
-                    user_id=user_id,
-                    role="assistant",
-                    content=save_content,
-                    mode_used=inference_mode,
-                    reasoning_content=reasoning,
+            # Inject evidence summary so the model can self-calibrate confidence
+            evidence_summary = _build_evidence_summary(search_results, rag_chunks)
+            messages[0]["content"] += f"\n\n{evidence_summary}"
+
+            total_chars = sum(
+                len(m["content"]) if isinstance(m.get("content"), str) else sum(
+                    len(p.get("text", "")) for p in m.get("content", []) if isinstance(p, dict)
                 )
+                for m in messages
+            )
+            print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
 
-                # Persist web search source links
-                if assistant_msg and search_results:
-                    await db.create_message_sources(
-                        assistant_msg["id"],
-                        [{"title": r["title"], "url": r["url"]} for r in search_results],
+            async for chunk in inference.generate_response_stream(
+                messages=messages,
+                mode=inference_mode,
+            ):
+                try:
+                    if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
+                        data = json.loads(chunk[6:])
+                        delta = data.get("choices", [{}])[0].get("delta", {})
+                        if "content" in delta:
+                            # Stamp the first-token time exactly once, as early as
+                            # possible — before we forward the chunk — so TTFT
+                            # isn't polluted by our own yield latency.
+                            if t_first_token is None:
+                                t_first_token = time.perf_counter()
+                            n_content_deltas += 1
+                            full_content.append(delta["content"])
+                        if "reasoning_content" in delta:
+                            full_reasoning.append(delta["reasoning_content"])
+                except (json.JSONDecodeError, IndexError, KeyError):
+                    pass
+
+                if await http_request.is_disconnected():
+                    client_disconnected = True
+                    break
+
+                try:
+                    yield chunk
+                except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+                    client_disconnected = True
+                    break
+
+            if client_disconnected:
+                return
+
+            # Build final content for DB (strip thinking tags, persist reasoning separately)
+            raw_content = "".join(full_content)
+            content = _strip_thinking(raw_content)
+
+            reasoning = "".join(full_reasoning) if full_reasoning else _extract_thinking(raw_content)
+            if not reasoning:
+                reasoning = None
+
+            save_content = content if content else ("(no visible response)" if reasoning else None)
+            if save_content:
+                try:
+                    assistant_msg = await db.create_message(
+                        session_id=session_id,
+                        user_id=user_id,
+                        role="assistant",
+                        content=save_content,
+                        mode_used=inference_mode,
+                        reasoning_content=reasoning,
                     )
 
-                _validate_response_sources(save_content, search_results, rag_chunks)
-
-                # Background tasks: summarisation and memory extraction (non-blocking)
-                total_msg_count = len(history) + 1
-                summariser = get_summariser_service()
-                if summariser.should_summarise(total_msg_count + summary_msg_count, summary_msg_count):
-                    asyncio.create_task(
-                        summariser.summarise_session(session_id, user_id)
-                    )
-
-                if memory_service.should_extract(total_msg_count):
-                    recent_for_extraction = hist_messages + [
-                        {"role": "assistant", "content": save_content}
-                    ]
-                    asyncio.create_task(
-                        memory_service.extract_and_store(
-                            session_id, user_id, recent_for_extraction
+                    # Persist web search source links
+                    if assistant_msg and search_results:
+                        await db.create_message_sources(
+                            assistant_msg["id"],
+                            [{"title": r["title"], "url": r["url"]} for r in search_results],
                         )
-                    )
-            except Exception as db_err:
-                print(f"[chat] Failed to save assistant message to DB: {db_err}")
+
+                    _validate_response_sources(save_content, search_results, rag_chunks)
+
+                    # Background tasks: summarisation and memory extraction (non-blocking)
+                    total_msg_count = len(history) + 1
+                    summariser = get_summariser_service()
+                    if summariser.should_summarise(total_msg_count + summary_msg_count, summary_msg_count):
+                        asyncio.create_task(
+                            summariser.summarise_session(session_id, user_id)
+                        )
+
+                    if memory_service.should_extract(total_msg_count):
+                        recent_for_extraction = hist_messages + [
+                            {"role": "assistant", "content": save_content}
+                        ]
+                        asyncio.create_task(
+                            memory_service.extract_and_store(
+                                session_id, user_id, recent_for_extraction
+                            )
+                        )
+                except Exception as db_err:
+                    print(f"[chat] Failed to save assistant message to DB: {db_err}")
+
+            _stream_ok = True
+        except Exception as exc:
+            _metrics_error = type(exc).__name__
+            raise
+        finally:
+            total_ms = (time.perf_counter() - t_req_start) * 1000.0
+            ttft_ms = ((t_first_token - t_req_start) * 1000.0) if t_first_token else None
+            tpot_ms = None
+            if ttft_ms is not None and n_content_deltas > 1:
+                tpot_ms = max(0.0, (total_ms - ttft_ms) / n_content_deltas)
+            await registry.mark_inactive(inference_mode)
+            await registry.record(RequestRecord(
+                ended_at=time.time(),
+                tier=inference_mode,
+                model=None,
+                streaming=True,
+                ok=_stream_ok,
+                ttft_ms=ttft_ms,
+                tpot_ms=tpot_ms,
+                total_ms=total_ms,
+                completion_tokens=n_content_deltas or None,
+                error_type=_metrics_error,
+            ))
 
     return StreamingResponse(
         event_generator(),

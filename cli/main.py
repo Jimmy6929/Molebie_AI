@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 
 from cli import __version__
-from cli.commands import config_cmd, doctor, feature, install, model_cmd, run, status
+from cli.commands import config_cmd, doctor, feature, install, model_cmd, monitor, run, status
 
 app = typer.Typer(
     name="molebie-ai",
@@ -19,6 +19,7 @@ app.command(name="install", help="Interactive setup wizard")(install.install)
 app.command(name="run", help="Start all configured services")(run.run)
 app.command(name="doctor", help="Diagnose environment and setup")(doctor.doctor)
 app.command(name="status", help="Show current config and service state")(status.status)
+app.command(name="monitor", help="Live terminal dashboard (Ctrl-C to quit)")(monitor.monitor)
 
 # Sub-apps
 app.add_typer(config_cmd.app, name="config", help="View and manage configuration")

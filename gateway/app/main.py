@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import auth, chat, documents, health
+from app.routes import auth, chat, documents, health, metrics
 
 
 @asynccontextmanager
@@ -65,8 +65,35 @@ async def lifespan(app: FastAPI):
                 except (ImportError, RuntimeError) as exc:
                     print(f"[reranker] Preload skipped: {exc}")
             asyncio.create_task(asyncio.to_thread(_preload_reranker))
-    yield
-    print(f"Shutting down {settings.app_name}")
+
+    # ── Live monitor probes ───────────────────────────────────────
+    # Start background pollers for /metrics/live. Degrade silently if a
+    # probe can't start (e.g., psutil missing in some minimal envs) —
+    # serving chat traffic is more important than the monitor feature.
+    system_probe = None
+    backend_probe = None
+    try:
+        from app.services.system_probe import get_system_probe
+        system_probe = get_system_probe()
+        await system_probe.start()
+    except Exception as exc:
+        print(f"[monitor] System probe unavailable: {exc}")
+    try:
+        from app.services.backend_probe import get_backend_probe
+        backend_probe = get_backend_probe(settings)
+        await backend_probe.start()
+    except Exception as exc:
+        print(f"[monitor] Backend probe unavailable: {exc}")
+
+    try:
+        yield
+    finally:
+        # Graceful cancel — stop() cancels the task and awaits it.
+        if system_probe is not None:
+            await system_probe.stop()
+        if backend_probe is not None:
+            await backend_probe.stop()
+        print(f"Shutting down {settings.app_name}")
 
 
 def create_app() -> FastAPI:
@@ -100,6 +127,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(documents.router)
+    app.include_router(metrics.router)
 
     return app
 

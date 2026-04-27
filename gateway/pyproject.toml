@@ -19,6 +19,11 @@ dependencies = [
     "sqlite-vec>=0.1.6",
     "bcrypt>=4.1.0",
     "python-multipart>=0.0.6",
+    # Live monitor: host CPU/RAM. GPU telemetry is opt-in (macmon on macOS,
+    # nvidia-ml-py on Linux) and is handled via lazy import in system_probe.
+    "psutil>=5.9",
+    # Linux-only: NVIDIA GPU stats. Optional — probe degrades if missing.
+    "nvidia-ml-py>=12.0 ; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]

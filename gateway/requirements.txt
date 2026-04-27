@@ -29,3 +29,9 @@ trafilatura>=1.8.0
 
 # Environment variables
 python-dotenv==1.0.1
+
+# Live monitor (molebie-ai monitor): host metrics probe.
+# GPU metrics are opt-in and lazy-imported:
+#   - macOS: install `brew install macmon` separately
+#   - Linux (NVIDIA): pip install nvidia-ml-py
+psutil>=5.9
