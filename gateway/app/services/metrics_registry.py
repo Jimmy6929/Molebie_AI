@@ -14,10 +14,9 @@ aggregation is a v2 concern.
 from __future__ import annotations
 
 import asyncio
-import statistics
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 # Reasonable ceiling — 500 requests covers ~4 minutes of steady 2/s traffic,
