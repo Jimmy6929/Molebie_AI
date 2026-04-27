@@ -24,7 +24,6 @@ import httpx
 
 from app.config import Settings
 
-
 _COLD_THRESHOLD_SEC = 5 * 60
 _PROBE_INTERVAL_SEC = 5.0
 _PROBE_TIMEOUT_SEC = 2.0
