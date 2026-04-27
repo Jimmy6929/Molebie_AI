@@ -102,7 +102,7 @@ class GenericCpuProbe(SystemProbe):
             cpu_cores_physical=psutil.cpu_count(logical=False),
             ram_used_gb=mem.used / (1024 ** 3),
             ram_total_gb=mem.total / (1024 ** 3),
-            ram_percent=mem.percent,
+            ram_percent=(mem.used / mem.total * 100.0) if mem.total else 0.0,
         )
 
 
@@ -172,7 +172,7 @@ class MacOSAppleSiliconProbe(SystemProbe):
             cpu_cores_physical=psutil.cpu_count(logical=False),
             ram_used_gb=mem.used / (1024 ** 3),
             ram_total_gb=mem.total / (1024 ** 3),
-            ram_percent=mem.percent,
+            ram_percent=(mem.used / mem.total * 100.0) if mem.total else 0.0,
         )
 
         if self._macmon_path is None:
@@ -228,7 +228,7 @@ class LinuxNvidiaProbe(SystemProbe):
             cpu_cores_physical=psutil.cpu_count(logical=False),
             ram_used_gb=mem.used / (1024 ** 3),
             ram_total_gb=mem.total / (1024 ** 3),
-            ram_percent=mem.percent,
+            ram_percent=(mem.used / mem.total * 100.0) if mem.total else 0.0,
         )
 
         self._try_init_nvml()
