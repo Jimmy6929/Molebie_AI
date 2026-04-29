@@ -243,6 +243,8 @@ class InferenceService:
         max_tokens: int | None = None,
         temperature: float | None = None,
         enable_thinking: bool | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
     ) -> dict[str, Any]:
         """
         Generate a complete response from the LLM.
@@ -324,6 +326,8 @@ class InferenceService:
                              if resolved_enable_thinking else None),
             presence_penalty=self._get_presence_penalty(mode),
             repetition_penalty=self._get_repetition_penalty(mode),
+            tools=tools,
+            tool_choice=tool_choice,
         )
 
         # If thinking call failed and fallback is enabled, try instant
@@ -371,6 +375,8 @@ class InferenceService:
         thinking_budget: int | None = None,
         presence_penalty: float = 0.0,
         repetition_penalty: float = 1.0,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
     ) -> dict[str, Any]:
         """
         Make the actual HTTP call to the inference endpoint.
@@ -405,6 +411,9 @@ class InferenceService:
                     payload["thinking_budget"] = thinking_budget
                     payload["thinking_start_token"] = "<think>"
                     payload["thinking_end_token"] = "</think>"
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = tool_choice or "auto"
                 response = await client.post(
                     f"{endpoint}{api_prefix}/chat/completions",
                     json=payload,
@@ -417,8 +426,9 @@ class InferenceService:
                 usage = data.get("usage", {})
 
                 return {
-                    "content": choice["message"]["content"],
+                    "content": choice["message"].get("content") or "",
                     "reasoning_content": choice["message"].get("reasoning_content"),
+                    "tool_calls": choice["message"].get("tool_calls") or [],
                     "tokens_used": usage.get("total_tokens"),
                     "prompt_tokens": usage.get("prompt_tokens"),
                     "completion_tokens": usage.get("completion_tokens"),

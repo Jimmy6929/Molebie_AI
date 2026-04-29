@@ -177,6 +177,22 @@ class DatabaseService:
         )
         return _row_to_dict(row[0]) if row else None
 
+    async def update_message_content(
+        self,
+        message_id: str,
+        user_id: str,
+        content: str,
+    ) -> None:
+        """Replace a message's content. Used by the citation-validation
+        footnote (task 2.4) to mutate an assistant response in-place after
+        post-processing flags un-cited claims."""
+        db = await self._get_conn()
+        await db.execute(
+            "UPDATE chat_messages SET content = ? WHERE id = ? AND user_id = ?",
+            (content, message_id, user_id),
+        )
+        await db.commit()
+
     async def get_session_messages(
         self,
         session_id: str,

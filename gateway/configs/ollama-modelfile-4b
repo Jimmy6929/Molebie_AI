@@ -1,0 +1,30 @@
+# Molebie — Ollama Modelfile for Qwen3.5-4B (voice / instant tier)
+#
+# Same defaults as the 9B file but a smaller base model. Use the 4B for
+# the instant tier (voice conversation, quick chat) when you also run a
+# 9B for the thinking tier.
+#
+# Usage:
+#   ollama pull qwen3.5:4b
+#   ollama create molebie-4b -f ollama-modelfile-4b
+#
+# Critical: Q3 and below cause noticeable degradation on the 4B. Stay at
+# Q4_K_M or above when you pull GGUFs.
+
+FROM qwen3.5:4b
+
+PARAMETER num_ctx 131072
+PARAMETER num_predict 16384
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER top_k 20
+PARAMETER min_p 0.0
+PARAMETER repeat_penalty 1.0
+PARAMETER presence_penalty 1.5
+
+PARAMETER num_gpu 999
+
+SYSTEM """You are Molebie, a personal AI assistant running locally.
+The application's gateway will replace this with the strict-grounding
+prompt at request time — this default is a no-op fallback only."""

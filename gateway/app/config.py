@@ -100,6 +100,23 @@ class Settings(BaseSettings):
     # See task 1.3 in tasks/hallucination-mitigation/phase-1-foundation.md.
     inference_thinking_auto_disable_for_rag: bool = True
 
+    # ── Self-Consistency (Phase 2 task 2.3) ───────────────────────────
+    # Sample N responses for verifiable queries (factual/numeric/yes-no)
+    # and majority-vote. Reduces hallucinations on the queries small models
+    # are most likely to fabricate on.
+    self_consistency_enabled: bool = False
+    self_consistency_samples: int = 5         # N total samples
+    self_consistency_early_stop: int = 3      # ESC: stop after this many agree
+    self_consistency_max_concurrent: int = 3  # cap parallel inference calls
+
+    # ── Tool Calling (Phase 2 task 2.2) ────────────────────────────────
+    # Off by default: tool calling needs a backend that actually supports
+    # OpenAI-format tools (vLLM with --tool-call-parser hermes, Ollama via
+    # /v1, llama.cpp with --jinja). mlx_vlm support is patchy — verify
+    # against your backend before flipping this on.
+    tool_calling_enabled: bool = False
+    tool_calling_max_iterations: int = 4   # cap the tool-call → execute → call loop
+
     # ── Routing ────────────────────────────────────────────────
     routing_default_mode: str = "thinking"
     routing_thinking_fallback_to_instant: bool = True  # Fallback if thinking is down

@@ -4,6 +4,7 @@ Chat endpoints for the Gateway API.
 
 import asyncio
 import base64
+import json
 import re
 import time
 from datetime import date
@@ -40,7 +41,9 @@ from app.services.database import DatabaseService, get_database_service
 from app.services.inference import InferenceService, get_inference_service
 from app.services.memory import get_memory_service
 from app.services.metrics_registry import RequestRecord, get_metrics_registry
+from app.services.consistency import is_verifiable_query, vote_with_self_consistency
 from app.services.rag import RAGService, compute_retrieval_confidence, get_rag_service
+from app.services.tools import TOOL_SCHEMAS, ToolExecutor
 from app.services.storage import get_storage_service
 from app.services.summarizer import get_summariser_service
 from app.services.web_search import WebSearchService, get_web_search_service
@@ -180,33 +183,116 @@ def _build_evidence_summary(
 
 
 _CITATION_RE = re.compile(r"\[S(\d+)\]")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# Patterns flagging a "specific factual claim" — numbers, URLs, dates.
+# Conservative on purpose: false-positives generate annoying footnotes.
+_NUMBER_RE = re.compile(r"\b\d+(?:[.,]\d+)*\b")
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_DATE_RE = re.compile(
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b(?:19|20)\d{2}\b",
+    re.IGNORECASE,
+)
+_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+_FOOTNOTE_TEXT = (
+    "\n\n*Note: Some claims in this response could not be verified against "
+    "your notes.*"
+)
+
+
+def _has_specific_claim(sentence: str) -> bool:
+    """True when the sentence contains a number, URL, or date — the kinds
+    of facts a small model is most likely to fabricate."""
+    return bool(
+        _NUMBER_RE.search(sentence)
+        or _URL_RE.search(sentence)
+        or _DATE_RE.search(sentence)
+    )
+
+
+def _claim_supported_by_chunk(sentence: str, chunk_content: str) -> bool:
+    """Cheap fuzzy match: do enough content tokens from the sentence appear
+    in the chunk? We strip the [S#] marker and stop-words-ish short tokens
+    via the TOKEN_RE filter (length >= 3, alphanumeric).
+
+    This is intentionally lightweight — anything that needs NLI-grade
+    grounding belongs in Phase 3 (CoVe / SelfCheckGPT), not here.
+    """
+    sentence_clean = _CITATION_RE.sub("", sentence)
+    sent_tokens = {t.lower() for t in _TOKEN_RE.findall(sentence_clean)}
+    if not sent_tokens:
+        return True   # nothing to verify — give the benefit of the doubt
+    chunk_tokens = {t.lower() for t in _TOKEN_RE.findall(chunk_content or "")}
+    if not chunk_tokens:
+        return False
+    overlap = sent_tokens & chunk_tokens
+    # ≥40% of the sentence's content tokens must appear in the cited chunk.
+    # Tuned for short chunks (512 chars) — relax to 0.3 if false-negatives
+    # become noisy in practice.
+    return len(overlap) / max(1, len(sent_tokens)) >= 0.4
 
 
 def _validate_citations(
     response_text: str,
     num_sources: int,
+    rag_chunks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Parse ``[S#]`` citations and check them against the available source
-    count.
+    count + (optionally) the cited chunks themselves.
 
-    Stage A of task 1.9 — pure post-process, no model call. Stage B (force
-    JSON via backend constrained decoding) lives with task 2.2 (tool calls)
-    because that's where structured output actually pays for itself.
+    Phase 1.9 Stage A added the index-validity check. Phase 2.4 adds:
+      * per-cited-claim fuzzy match (does the claim's content actually
+        appear in the chunk it cites?)
+      * unsupported-claim flagging (sentence has a number/URL/date but
+        no [S#] tag → the model probably invented it)
 
-    Returns a dict suitable for logging / metrics: ``cited`` is the set of
-    indices that appeared, ``invalid`` are those that exceed num_sources,
-    ``no_citations`` is True when sources were available but the model
-    cited none.
+    Returns a dict suitable for logging / inference-metadata.
     """
     cited_indices = {int(m) for m in _CITATION_RE.findall(response_text)}
     valid = set(range(1, num_sources + 1))
     invalid = cited_indices - valid
+
+    chunks_by_index: dict[int, dict[str, Any]] = {}
+    if rag_chunks:
+        for i, c in enumerate(rag_chunks, 1):
+            chunks_by_index[i] = c
+
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(response_text) if s.strip()]
+    weak_citations: list[dict[str, Any]] = []
+    unsupported_claims: list[str] = []
+
+    for sentence in sentences:
+        sentence_citations = [int(m) for m in _CITATION_RE.findall(sentence)]
+        if sentence_citations:
+            # If the sentence cites at least one valid source, treat it as
+            # supported when ANY cited chunk overlaps. Catch the case where
+            # the model cites the wrong chunk for a real claim.
+            any_supported = False
+            for idx in sentence_citations:
+                chunk = chunks_by_index.get(idx)
+                if chunk and _claim_supported_by_chunk(sentence, chunk.get("content", "")):
+                    any_supported = True
+                    break
+            if not any_supported:
+                weak_citations.append(
+                    {"sentence": sentence[:160], "cited": sentence_citations}
+                )
+        elif _has_specific_claim(sentence):
+            unsupported_claims.append(sentence[:160])
+
     return {
         "num_sources": num_sources,
         "cited_count": len(cited_indices),
         "cited_indices": sorted(cited_indices),
         "invalid_indices": sorted(invalid),
         "no_citations": num_sources > 0 and not cited_indices,
+        "weak_citations": weak_citations,
+        "unsupported_claims": unsupported_claims,
+        # Heuristic — append the user-visible footnote when there are
+        # un-cited specific facts. Wrong citations are logged but not
+        # surfaced to the user since the fix is for the operator to read.
+        "needs_footnote": bool(unsupported_claims),
     }
 
 
@@ -248,7 +334,9 @@ def _validate_response_sources(
 
     citation_report: dict[str, Any] | None = None
     if rag_chunks:
-        citation_report = _validate_citations(response_text, len(rag_chunks))
+        citation_report = _validate_citations(
+            response_text, len(rag_chunks), rag_chunks=rag_chunks,
+        )
         if citation_report["invalid_indices"]:
             print(
                 f"[chat] Citation warning: invalid [S#] references "
@@ -265,7 +353,106 @@ def _validate_response_sources(
                 f"[chat] Citations OK: {citation_report['cited_count']} of "
                 f"{citation_report['num_sources']} sources referenced"
             )
+        if citation_report["weak_citations"]:
+            print(
+                f"[chat] Citation weak: {len(citation_report['weak_citations'])} "
+                "sentences cite a chunk that doesn't share their key terms"
+            )
+        if citation_report["unsupported_claims"]:
+            print(
+                f"[chat] Citation: {len(citation_report['unsupported_claims'])} "
+                "sentences contain numbers/URLs/dates without a [S#] tag"
+            )
     return citation_report
+
+
+async def _run_tool_loop(
+    inference: Any,
+    executor: ToolExecutor,
+    messages: list[dict[str, Any]],
+    mode: str,
+    enable_thinking: bool | None,
+    max_iterations: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Tool calling: model emits ``tool_calls`` → we execute → feed results
+    back as ``tool`` role messages → call inference again. Loops until the
+    model returns a plain text response or we hit ``max_iterations``.
+
+    Returns ``(final_inference_result, tool_call_log)``. The log captures
+    every (name, args, result) triple so the response payload can surface
+    what the model actually did.
+    """
+    tool_call_log: list[dict[str, Any]] = []
+    working_messages = list(messages)
+
+    for iteration in range(max_iterations):
+        result = await inference.generate_response(
+            messages=working_messages,
+            mode=mode,
+            enable_thinking=enable_thinking,
+            tools=TOOL_SCHEMAS,
+            tool_choice="auto",
+        )
+        tool_calls = result.get("tool_calls") or []
+        if not tool_calls:
+            return result, tool_call_log
+
+        # Append the model's assistant turn (which contains tool_calls)
+        # so the backend's chat template threads tool results correctly.
+        working_messages.append(
+            {
+                "role": "assistant",
+                "content": result.get("content") or "",
+                "tool_calls": tool_calls,
+            }
+        )
+
+        # Execute each tool call, append result as a tool-role message.
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            name = fn.get("name", "")
+            raw_args = fn.get("arguments", "{}")
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+            except json.JSONDecodeError as exc:
+                args = {}
+                tool_result = {"ok": False, "error": f"arguments JSON invalid: {exc}"}
+            else:
+                tool_result = await executor.execute(name, args)
+
+            tool_call_log.append(
+                {"name": name, "args": args, "result": tool_result, "iteration": iteration}
+            )
+            print(f"[chat] Tool call #{iteration}: {name}({args}) → ok={tool_result.get('ok')}")
+
+            working_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "name": name,
+                    "content": json.dumps(tool_result),
+                }
+            )
+
+    # Hit iteration cap — return whatever the last call produced, plus a
+    # sentinel so the caller can flag this in the response metadata.
+    print(f"[chat] Tool loop hit max_iterations={max_iterations}; "
+          "returning last result.")
+    return result, tool_call_log
+
+
+def _maybe_append_footnote(
+    response_text: str,
+    citation_report: dict[str, Any] | None,
+) -> str:
+    """When the citation report flags un-cited factual claims, append the
+    footnote. Idempotent — won't duplicate if the footnote text is already
+    present (defensive against background-task reprocessing)."""
+    if not citation_report or not citation_report.get("needs_footnote"):
+        return response_text
+    if _FOOTNOTE_TEXT.strip() in response_text:
+        return response_text
+    return response_text + _FOOTNOTE_TEXT
 
 
 def _build_system_message(
@@ -572,6 +759,24 @@ async def send_message(
         enable_thinking_override = False
         print(f"[chat] RAG present on {inference_mode} tier — disabling CoT")
 
+    # Decide which inference path to take. Tool calling and self-consistency
+    # are mutually exclusive in this first cut — tool calling produces a
+    # deterministic answer (delegating to a tool) so the vote-and-pick
+    # approach doesn't add value on top, and the cost of stacking both
+    # (N samples × M tool iterations) isn't worth it without measured gain.
+    use_tool_calling = (
+        settings.tool_calling_enabled
+        and not request.conversation_mode
+        and not request.image
+    )
+    use_self_consistency = (
+        not use_tool_calling
+        and settings.self_consistency_enabled
+        and not request.conversation_mode
+        and not request.image
+        and is_verifiable_query(request.message)
+    )
+
     # Generate AI response — instrumented for /metrics/live
     # Non-streaming path: TTFT is approximated as total_ms because we don't
     # see individual tokens. Monitor reads the series with that caveat.
@@ -580,11 +785,57 @@ async def send_message(
     t_start = time.perf_counter()
     _metrics_error: str | None = None
     try:
-        inference_result = await inference.generate_response(
-            messages=messages,
-            mode=inference_mode,
-            enable_thinking=enable_thinking_override,
-        )
+        if use_tool_calling:
+            print(f"[chat] Tool calling enabled — running tool loop "
+                  f"(max_iterations={settings.tool_calling_max_iterations})")
+            executor = ToolExecutor(
+                user_id=user_id,
+                rag_service=rag,
+                web_search_service=web_search,
+                settings=settings,
+            )
+            inference_result, tool_call_log = await _run_tool_loop(
+                inference=inference,
+                executor=executor,
+                messages=messages,
+                mode=inference_mode,
+                enable_thinking=enable_thinking_override,
+                max_iterations=settings.tool_calling_max_iterations,
+            )
+            inference_result["tool_calls_made"] = tool_call_log
+        elif use_self_consistency:
+            print(f"[chat] Self-consistency: voting across "
+                  f"{settings.self_consistency_samples} samples")
+            vote = await vote_with_self_consistency(
+                inference=inference,
+                messages=messages,
+                mode=inference_mode,
+                settings=settings,
+                enable_thinking=enable_thinking_override,
+            )
+            inference_result = {
+                "content": vote["content"],
+                "reasoning_content": None,
+                "tokens_used": None,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "mode_used": inference_mode,
+                "model": settings.get_model_for_mode(inference_mode),
+                "finish_reason": "stop",
+                "fallback_used": False,
+                "self_consistency": {
+                    "samples": len(vote["samples"]),
+                    "vote_counts": vote["vote_counts"],
+                    "confident": vote["confident"],
+                    "early_stopped": vote["early_stopped"],
+                },
+            }
+        else:
+            inference_result = await inference.generate_response(
+                messages=messages,
+                mode=inference_mode,
+                enable_thinking=enable_thinking_override,
+            )
     except Exception as exc:
         _metrics_error = type(exc).__name__
         raise
@@ -636,8 +887,17 @@ async def send_message(
         )
 
     # Log whether the response referenced provided sources, and validate
-    # any [S#] citations against the available source count.
+    # any [S#] citations against the available source count + per-claim
+    # fuzzy match (task 2.4).
     citation_report = _validate_response_sources(clean_content, search_results, rag_chunks)
+    # Surface un-cited factual claims as a user-visible footnote. Mutates
+    # both the in-memory message and the persisted DB content so the next
+    # turn's history reflects what the user actually saw.
+    final_content = _maybe_append_footnote(clean_content, citation_report)
+    if final_content != clean_content:
+        await db.update_message_content(assistant_msg["id"], user_id, final_content)
+        assistant_msg["content"] = final_content
+        clean_content = final_content
 
     # Background tasks: summarisation and memory extraction (non-blocking)
     total_msg_count = len(history) + 1  # +1 for the assistant message just saved

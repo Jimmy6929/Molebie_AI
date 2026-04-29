@@ -1,0 +1,42 @@
+# Molebie — Ollama Modelfile for Qwen3.5-9B (instant + thinking tier)
+#
+# Usage:
+#   ollama pull qwen3.5:9b
+#   ollama create molebie-9b -f ollama-modelfile-9b
+#   ollama serve
+#
+# Then point .env.local at this Ollama instance:
+#   INFERENCE_THINKING_URL=http://localhost:11434
+#   INFERENCE_THINKING_MODEL=molebie-9b
+#   INFERENCE_THINKING_API_PREFIX=/v1
+#
+# Critical: Ollama's default num_ctx is 2048 — the #1 bug in offline RAG.
+# Always override it (we set 131072 below; 128K is the sweet spot, 262K
+# triggers lost-in-the-middle on small models).
+#
+# Recommended environment variables (export before `ollama serve`):
+#   OLLAMA_FLASH_ATTENTION=1
+#   OLLAMA_KV_CACHE_TYPE=q8_0
+#   OLLAMA_NUM_PARALLEL=1
+#   OLLAMA_NEW_ENGINE=true
+
+FROM qwen3.5:9b
+
+# Context + generation
+PARAMETER num_ctx 131072
+PARAMETER num_predict 32768
+
+# Qwen3.5 instant-tier sampling preset (matches gateway/app/config.py)
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER top_k 20
+PARAMETER min_p 0.0
+PARAMETER repeat_penalty 1.0
+PARAMETER presence_penalty 1.5
+
+# GPU offload — let Ollama pick the max it can fit
+PARAMETER num_gpu 999
+
+SYSTEM """You are Molebie, a personal AI assistant running locally.
+The application's gateway will replace this with the strict-grounding
+prompt at request time — this default is a no-op fallback only."""
