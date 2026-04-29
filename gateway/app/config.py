@@ -131,14 +131,29 @@ class Settings(BaseSettings):
 
     # ── RAG / Embeddings ─────────────────────────────────────
     rag_enabled: bool = True
-    embedding_model: str = "Orange/orange-nomic-v1.5-1536"  # override via EMBEDDING_MODEL in .env
+    # Same model family as the generator (Qwen) → tokenizer alignment →
+    # better retrieval. 1024-dim, 32K context, instruction-aware. Outputs
+    # match the schema's vec table dim (must be kept in sync — see
+    # ``embedding_dim`` and scripts/migrate_embedding_dim.py).
+    embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    # Dim of the embedding model's output. Used to create the sqlite-vec
+    # virtual tables. If this changes, run scripts/migrate_embedding_dim.py
+    # then POST /documents/reindex/full.
+    embedding_dim: int = 1024
     embedding_local_only: bool = True  # Use cached model only; avoids HuggingFace Hub check (offline-safe)
     embedding_preload: bool = False  # Load embedding model at startup (trade startup time for faster first chat)
-    rag_match_count: int = 20  # over-fetch for reranking
+    # Bumped from 20: we over-fetch more candidates so the new reranker
+    # has more material to work with; the rerank top-k decides what
+    # actually reaches the prompt.
+    rag_match_count: int = 30
     rag_match_threshold: float = 0.3
     rag_max_context_chars: int = 12000
-    rag_chunk_size: int = 1024
-    rag_chunk_overlap: int = 128
+    # Smaller chunks → less noise per retrieval hit. 512/64 is the
+    # build-plan target; the previous 1024/128 produced overly broad
+    # chunks that diluted reranker scores. After changing these, run
+    # POST /documents/reindex/full to rebuild existing chunks.
+    rag_chunk_size: int = 512
+    rag_chunk_overlap: int = 64
 
     # ── Hybrid Search ─────────────────────────────────────────
     rag_hybrid_enabled: bool = True
@@ -154,8 +169,14 @@ class Settings(BaseSettings):
 
     # ── Cross-Encoder Reranking ───────────────────────────────
     rag_reranker_enabled: bool = True
-    rag_reranker_model: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
-    rag_rerank_top_k: int = 5
+    # Qwen3-Reranker: same family as the generator, beats BGE-reranker-v2-m3
+    # on MTEB-R/CMTEB/MTEB-Code, 32K ctx, Apache 2.0. Loaded via the
+    # AutoModelForCausalLM yes/no-logit path inside RerankerService;
+    # CrossEncoder-style models still work via the same service.
+    rag_reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
+    # Bumped from 5: more chunks reach the prompt for better coverage now
+    # that the reranker is stronger and chunks are smaller (512 vs 1024).
+    rag_rerank_top_k: int = 8
     rag_reranker_preload: bool = False
 
     # ── RAG Metrics ───────────────────────────────────────────

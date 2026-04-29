@@ -179,17 +179,51 @@ def _build_evidence_summary(
     return "\n".join(lines)
 
 
+_CITATION_RE = re.compile(r"\[S(\d+)\]")
+
+
+def _validate_citations(
+    response_text: str,
+    num_sources: int,
+) -> dict[str, Any]:
+    """Parse ``[S#]`` citations and check them against the available source
+    count.
+
+    Stage A of task 1.9 — pure post-process, no model call. Stage B (force
+    JSON via backend constrained decoding) lives with task 2.2 (tool calls)
+    because that's where structured output actually pays for itself.
+
+    Returns a dict suitable for logging / metrics: ``cited`` is the set of
+    indices that appeared, ``invalid`` are those that exceed num_sources,
+    ``no_citations`` is True when sources were available but the model
+    cited none.
+    """
+    cited_indices = {int(m) for m in _CITATION_RE.findall(response_text)}
+    valid = set(range(1, num_sources + 1))
+    invalid = cited_indices - valid
+    return {
+        "num_sources": num_sources,
+        "cited_count": len(cited_indices),
+        "cited_indices": sorted(cited_indices),
+        "invalid_indices": sorted(invalid),
+        "no_citations": num_sources > 0 and not cited_indices,
+    }
+
+
 def _validate_response_sources(
     response_text: str,
     search_results: list[dict[str, Any]],
     rag_chunks: list[dict[str, Any]],
-) -> None:
-    """Log whether the response referenced any of the provided sources.
+) -> dict[str, Any] | None:
+    """Log whether the response referenced any of the provided sources, and —
+    when RAG was used — validate ``[S#]`` citations against the number of
+    available sources.
 
-    This is a lightweight monitoring check — no model calls, just substring matching.
+    Returns the citation-validation dict (or None when no RAG was used) so
+    callers can attach it to inference metadata.
     """
     if not search_results and not rag_chunks:
-        return
+        return None
 
     referenced = False
     lower_response = response_text.lower()
@@ -211,6 +245,27 @@ def _validate_response_sources(
     tag = "sources_referenced" if referenced else "sources_not_referenced"
     source_count = len(search_results) + len(rag_chunks)
     print(f"[chat] Response validation: {tag} (provided: {source_count} sources)")
+
+    citation_report: dict[str, Any] | None = None
+    if rag_chunks:
+        citation_report = _validate_citations(response_text, len(rag_chunks))
+        if citation_report["invalid_indices"]:
+            print(
+                f"[chat] Citation warning: invalid [S#] references "
+                f"{citation_report['invalid_indices']} "
+                f"(only {citation_report['num_sources']} sources available)"
+            )
+        elif citation_report["no_citations"]:
+            print(
+                f"[chat] Citation warning: response cites none of the "
+                f"{citation_report['num_sources']} provided sources"
+            )
+        else:
+            print(
+                f"[chat] Citations OK: {citation_report['cited_count']} of "
+                f"{citation_report['num_sources']} sources referenced"
+            )
+    return citation_report
 
 
 def _build_system_message(
@@ -580,8 +635,9 @@ async def send_message(
             [{"title": r["title"], "url": r["url"]} for r in search_results],
         )
 
-    # Log whether the response referenced provided sources
-    _validate_response_sources(clean_content, search_results, rag_chunks)
+    # Log whether the response referenced provided sources, and validate
+    # any [S#] citations against the available source count.
+    citation_report = _validate_response_sources(clean_content, search_results, rag_chunks)
 
     # Background tasks: summarisation and memory extraction (non-blocking)
     total_msg_count = len(history) + 1  # +1 for the assistant message just saved
@@ -601,8 +657,12 @@ async def send_message(
             )
         )
 
-    # Build inference metadata for the response
+    # Build inference metadata for the response. Merge the citation report
+    # (task 1.9 Stage A) into rag_metrics — it's a free-form dict, so no
+    # schema/model migration is required to surface this to the frontend.
     rag_metrics = rag.get_metrics(rag_chunks) if rag_chunks else None
+    if citation_report is not None:
+        rag_metrics = {**(rag_metrics or {}), "citations": citation_report}
     inference_meta = InferenceMetadata(
         mode_used=inference_result["mode_used"],
         model=inference_result.get("model"),

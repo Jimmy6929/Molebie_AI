@@ -37,6 +37,14 @@ ALLOWED_TYPES: dict[str, str] = {
 }
 
 
+def _filename_to_note_title(filename: str) -> str:
+    """Strip a single file extension to get a clean note title for the
+    embedding-time prefix. Keeps Obsidian-style filenames intact."""
+    if "." in filename:
+        return filename.rsplit(".", 1)[0]
+    return filename
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/upload", response_model=UploadResponse)
@@ -89,14 +97,19 @@ async def upload_document(
     doc_id = doc_row["id"]
 
     # 3. Process: extract → chunk → embed (with optional contextual retrieval)
+    note_title = _filename_to_note_title(filename)
     try:
         await db.update_document_status(doc_id, "processing")
         print(f"[documents] Processing {filename} ({len(data)} bytes, {content_type})")
 
         if settings.rag_contextual_retrieval_enabled:
-            chunk_triples = await processor.process_async(data, content_type)
+            chunk_triples = await processor.process_async(
+                data, content_type, note_title=note_title,
+            )
         else:
-            chunk_triples = processor.process(data, content_type)
+            chunk_triples = processor.process(
+                data, content_type, note_title=note_title,
+            )
 
         print(f"[documents] Processing complete: {len(chunk_triples)} chunk+embedding pairs")
     except Exception as exc:
@@ -117,7 +130,10 @@ async def upload_document(
                 "content": text,
                 "embedding": embedding,
                 "chunk_index": meta.get("chunk_index", 0),
-                "metadata": {"heading": meta.get("heading")},
+                "metadata": {
+                    "heading": meta.get("heading"),
+                    "breadcrumb": meta.get("breadcrumb", []),
+                },
             }
             # Store contextualized version separately if available
             if meta.get("content_contextualized"):
@@ -402,6 +418,139 @@ async def reindex_documents(
         "total_chunks": len(chunks),
         "already_indexed": len(existing_vec_rowids),
         "message": f"Reindexed {inserted} chunks",
+    }
+
+
+# ── Full Reindex Endpoint ───────────────────────────────────────────────
+
+
+@router.post("/reindex/full", tags=["Documents"])
+async def reindex_documents_full(
+    user: JWTPayload = Depends(get_current_user),
+    processor: DocumentProcessor = Depends(get_document_processor),
+):
+    """
+    Full reindex: re-chunk and re-embed every completed document for the
+    current user from its source bytes in storage.
+
+    Use after changing ``rag_chunk_size``, ``rag_chunk_overlap``, or the
+    embedding model. Drops existing chunks per document, re-processes the
+    raw file, and inserts new chunks. Documents that fail re-processing
+    are marked ``failed`` and skipped — the rest still complete.
+
+    Idempotent: running it twice produces the same final state.
+    """
+    settings = get_settings()
+    if not settings.rag_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Reindex requires RAG to be enabled.",
+        )
+
+    db = get_database_service()
+    storage = get_storage_service()
+    user_id = user.user_id
+
+    docs = await db.list_documents(user_id)
+    completed = [d for d in docs if d.get("status") == "completed"]
+    if not completed:
+        return {
+            "reindexed": 0,
+            "failed": 0,
+            "total_chunks": 0,
+            "message": "No completed documents to reindex",
+        }
+
+    reindexed = 0
+    failed: list[dict[str, str]] = []
+    total_chunks = 0
+
+    for doc in completed:
+        doc_id = doc["id"]
+        filename = doc.get("filename") or "document"
+        storage_path = doc.get("storage_path")
+        content_type = doc.get("file_type") or ""
+
+        if not storage_path:
+            failed.append({"id": doc_id, "filename": filename, "reason": "no storage path"})
+            continue
+
+        try:
+            data = storage.download_document(storage_path)
+        except Exception as exc:
+            failed.append({"id": doc_id, "filename": filename, "reason": f"read failed: {exc}"})
+            continue
+
+        await db.update_document_status(doc_id, "processing")
+        note_title = _filename_to_note_title(filename)
+
+        try:
+            if settings.rag_contextual_retrieval_enabled:
+                chunk_triples = await processor.process_async(
+                    data, content_type, note_title=note_title,
+                )
+            else:
+                chunk_triples = processor.process(
+                    data, content_type, note_title=note_title,
+                )
+        except Exception as exc:
+            print(f"[reindex/full] {filename}: processing failed: {exc}")
+            await db.update_document_status(doc_id, "failed")
+            failed.append({"id": doc_id, "filename": filename, "reason": str(exc)})
+            continue
+
+        # Drop old chunks before inserting new ones — keeps the document
+        # row + storage_path intact, swaps only chunks/vectors.
+        try:
+            await db.delete_document_chunks(doc_id, user_id)
+        except Exception as exc:
+            print(f"[reindex/full] {filename}: delete old chunks failed: {exc}")
+            await db.update_document_status(doc_id, "failed")
+            failed.append({"id": doc_id, "filename": filename, "reason": f"delete failed: {exc}"})
+            continue
+
+        chunk_rows = []
+        for text, embedding, meta in chunk_triples:
+            row = {
+                "document_id": doc_id,
+                "user_id": user_id,
+                "content": text,
+                "embedding": embedding,
+                "chunk_index": meta.get("chunk_index", 0),
+                "metadata": {
+                    "heading": meta.get("heading"),
+                    "breadcrumb": meta.get("breadcrumb", []),
+                },
+            }
+            if meta.get("content_contextualized"):
+                row["content_contextualized"] = meta["content_contextualized"]
+            chunk_rows.append(row)
+
+        try:
+            batch_size = 20
+            for i in range(0, len(chunk_rows), batch_size):
+                await db.insert_chunks(chunk_rows[i : i + batch_size])
+        except Exception as exc:
+            print(f"[reindex/full] {filename}: insert chunks failed: {exc}")
+            await db.update_document_status(doc_id, "failed")
+            failed.append({"id": doc_id, "filename": filename, "reason": f"insert failed: {exc}"})
+            continue
+
+        await db.update_document_status(
+            doc_id,
+            "completed",
+            processed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        reindexed += 1
+        total_chunks += len(chunk_rows)
+        print(f"[reindex/full] {filename}: reindexed ({len(chunk_rows)} chunks)")
+
+    return {
+        "reindexed": reindexed,
+        "failed": len(failed),
+        "total_chunks": total_chunks,
+        "failures": failed,
+        "message": f"Reindexed {reindexed} document(s) → {total_chunks} chunks",
     }
 
 

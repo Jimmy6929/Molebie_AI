@@ -398,6 +398,36 @@ class DatabaseService:
 
     # ==================== Document Chunks ====================
 
+    async def delete_document_chunks(
+        self, doc_id: str, user_id: str
+    ) -> int:
+        """Delete chunks (and their vec rows) for a document, leaving the
+        ``documents`` row intact. Used by the full-reindex endpoint to swap
+        chunks without losing the document or its storage path. FTS rows
+        clean themselves up via the AFTER DELETE trigger.
+
+        Returns the number of deleted chunks.
+        """
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT rowid FROM document_chunks WHERE document_id = ? AND user_id = ?",
+            (doc_id, user_id),
+        )
+        if not rows:
+            return 0
+        rowids = [r["rowid"] for r in rows]
+        placeholders = ",".join("?" * len(rowids))
+        await db.execute(
+            f"DELETE FROM document_chunks_vec WHERE rowid IN ({placeholders})",
+            rowids,
+        )
+        await db.execute(
+            "DELETE FROM document_chunks WHERE document_id = ? AND user_id = ?",
+            (doc_id, user_id),
+        )
+        await db.commit()
+        return len(rowids)
+
     async def insert_chunks(self, chunks: list[dict[str, Any]]) -> None:
         """Batch insert chunks into document_chunks, FTS5, and vec tables."""
         if not chunks:

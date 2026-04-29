@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
     from app.schema import init_database
     db_path = await init_database(
         data_dir=settings.data_dir,
+        embedding_dim=settings.embedding_dim,
         auth_mode=getattr(settings, "auth_mode", "single"),
     )
 

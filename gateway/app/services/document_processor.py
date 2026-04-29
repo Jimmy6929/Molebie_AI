@@ -43,51 +43,100 @@ def extract_text(data: bytes, file_type: str) -> str:
 
 # ── Chunking ─────────────────────────────────────────────────────────────
 
-_SEPARATORS = ["\n\n\n", "\n\n", "\n", ". ", " ", ""]
+# Build-plan separators: prefer markdown structure, then paragraphs, then
+# sentences, then words. Note: the heading separators (\n## , \n### ) only
+# trigger inside oversized sections — _split_by_headings already cuts on
+# headings as a first pass.
+_SEPARATORS = ["\n## ", "\n### ", "\n\n", "\n", ". ", " ", ""]
 
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.+)$", re.MULTILINE)
+_CODE_FENCE_RE = re.compile(r"```")
 
 
-def _split_by_headings(text: str) -> list[tuple[str | None, str]]:
-    """Split text on markdown headings (# / ## / ###).
+def _split_by_headings(
+    text: str,
+) -> list[tuple[tuple[str, ...], str]]:
+    """Split text on markdown headings, tracking the full breadcrumb path.
 
-    Returns list of (heading, section_text) tuples.
-    Non-headed text at the start gets heading=None.
+    Returns list of ``(breadcrumb, section_text)`` tuples where ``breadcrumb``
+    is a tuple of header strings from h1 down to the current level
+    (e.g. ``("Setup", "Installation", "Dependencies")``). Non-headed
+    preamble text gets ``breadcrumb=()``.
     """
     matches = list(_HEADING_RE.finditer(text))
     if not matches:
-        return [(None, text)]
+        return [((), text)]
 
-    sections: list[tuple[str | None, str]] = []
+    sections: list[tuple[tuple[str, ...], str]] = []
 
-    # Text before first heading
     if matches[0].start() > 0:
         preamble = text[: matches[0].start()].strip()
         if preamble:
-            sections.append((None, preamble))
+            sections.append(((), preamble))
 
+    # Maintain a stack of (level, heading) for h1/h2/h3 → breadcrumb at each section
+    stack: list[tuple[int, str]] = []
     for i, m in enumerate(matches):
+        level = len(m.group(1))
         heading = m.group(2).strip()
+        # Pop any same-or-deeper levels off the stack before pushing
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        stack.append((level, heading))
+        breadcrumb = tuple(h for _, h in stack)
+
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         body = text[start:end].strip()
         if body:
-            sections.append((heading, body))
+            sections.append((breadcrumb, body))
 
     return sections
 
 
+def _merge_unbalanced_fences(chunks: list[str]) -> list[str]:
+    """Merge consecutive chunks until triple-backtick fences are balanced.
+
+    The recursive splitter doesn't know about code fences, so an oversized
+    fenced block can land split across two chunks. Detect odd fence counts
+    and merge forward — code blocks stay readable, slightly larger chunks
+    are an acceptable tradeoff vs broken syntax.
+    """
+    if not chunks:
+        return chunks
+    merged: list[str] = []
+    buffer: str | None = None
+    for chunk in chunks:
+        candidate = chunk if buffer is None else f"{buffer}\n{chunk}"
+        fences = len(_CODE_FENCE_RE.findall(candidate))
+        if fences % 2 == 1:
+            buffer = candidate           # still unbalanced — keep accumulating
+        else:
+            merged.append(candidate)
+            buffer = None
+    if buffer is not None:               # trailing unbalanced fence — keep as-is
+        merged.append(buffer)
+    return merged
+
+
 def chunk_text_structured(
     text: str,
-    chunk_size: int = 1024,
-    chunk_overlap: int = 128,
+    chunk_size: int = 512,
+    chunk_overlap: int = 64,
 ) -> list[dict[str, Any]]:
-    """Split text into overlapping chunks with heading metadata.
+    """Split text into overlapping chunks with header-breadcrumb metadata.
 
-    For markdown text, splits on section boundaries first, then falls
-    back to recursive splitting for oversized sections.
+    For markdown text, splits on heading boundaries first (tracking the
+    full h1>h2>h3 breadcrumb), then recursively splits oversized sections,
+    then merges chunks that landed mid-code-fence so triple-backtick blocks
+    aren't broken across chunks.
 
-    Returns list of dicts: {"text": str, "chunk_index": int, "heading": Optional[str]}
+    Returns list of dicts:
+      ``{"text": str, "chunk_index": int, "heading": str | None,
+         "breadcrumb": list[str]}``
+
+    ``heading`` is the deepest header (back-compat with existing callers);
+    ``breadcrumb`` is the full path.
     """
     if not text.strip():
         return []
@@ -96,22 +145,26 @@ def chunk_text_structured(
     result: list[dict[str, Any]] = []
     chunk_index = 0
 
-    for heading, section_text in sections:
+    for breadcrumb, section_text in sections:
         raw_chunks: list[str] = []
         _recursive_split(section_text, _SEPARATORS, chunk_size, chunk_overlap, raw_chunks)
-        for chunk in raw_chunks:
-            if chunk.strip():
-                result.append({
-                    "text": chunk.strip(),
-                    "chunk_index": chunk_index,
-                    "heading": heading,
-                })
-                chunk_index += 1
+        balanced_chunks = _merge_unbalanced_fences(raw_chunks)
+        for chunk in balanced_chunks:
+            stripped = chunk.strip()
+            if not stripped:
+                continue
+            result.append({
+                "text": stripped,
+                "chunk_index": chunk_index,
+                "heading": breadcrumb[-1] if breadcrumb else None,
+                "breadcrumb": list(breadcrumb),
+            })
+            chunk_index += 1
 
     return result
 
 
-def chunk_text(text: str, chunk_size: int = 1024, chunk_overlap: int = 128) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 512, chunk_overlap: int = 64) -> list[str]:
     """
     Split text into overlapping chunks using a recursive character splitter.
 
@@ -121,6 +174,24 @@ def chunk_text(text: str, chunk_size: int = 1024, chunk_overlap: int = 128) -> l
     """
     structured = chunk_text_structured(text, chunk_size, chunk_overlap)
     return [c["text"] for c in structured]
+
+
+def _embedding_prefix(
+    breadcrumb: list[str],
+    note_title: str | None,
+) -> str:
+    """Build the contextual prefix prepended before embedding, per task 1.4.
+
+    Format: ``{h1 > h2 > h3} | {note_title}``. Cheap contextual chunking —
+    captures most of the lift of LLM-generated context without paying the
+    per-chunk LLM cost. Returns empty string when no metadata exists.
+    """
+    parts: list[str] = []
+    if breadcrumb:
+        parts.append(" > ".join(breadcrumb))
+    if note_title:
+        parts.append(note_title)
+    return " | ".join(parts)
 
 
 def _recursive_split(
@@ -192,13 +263,21 @@ class DocumentProcessor:
         self.chunk_overlap = settings.rag_chunk_overlap
 
     def process(
-        self, file_data: bytes, file_type: str
+        self,
+        file_data: bytes,
+        file_type: str,
+        note_title: str | None = None,
     ) -> list[tuple[str, list[float], dict[str, Any]]]:
         """
         Extract text, chunk, and embed.
 
+        ``note_title`` (typically the filename without extension) is prepended
+        alongside the heading breadcrumb to the embedding-time text — cheap
+        contextual chunking that improves retrieval without an LLM-per-chunk
+        cost.
+
         Returns list of (chunk_text, embedding_vector, metadata) tuples.
-        metadata includes: {"chunk_index": int, "heading": Optional[str]}
+        metadata includes ``chunk_index``, ``heading``, ``breadcrumb``.
         """
         text = extract_text(file_data, file_type)
         if not text.strip():
@@ -208,12 +287,20 @@ class DocumentProcessor:
         if not structured_chunks:
             raise ValueError("Document produced no text chunks")
 
+        # Build embedding-time texts: prefix each chunk with breadcrumb + title.
+        # The original chunk text (without prefix) is what we store in
+        # `content` and what the model sees at inference time.
         chunk_texts = [c["text"] for c in structured_chunks]
+        embed_texts: list[str] = []
+        for c in structured_chunks:
+            prefix = _embedding_prefix(c.get("breadcrumb", []), note_title)
+            embed_texts.append(f"{prefix}\n\n{c['text']}" if prefix else c["text"])
+
         print(f"[doc_processor] Extracted {len(text)} chars → {len(chunk_texts)} chunks")
 
         print(f"[doc_processor] Generating embeddings for {len(chunk_texts)} chunks...")
         try:
-            embeddings = self.embedding.embed_batch(chunk_texts)
+            embeddings = self.embedding.embed_batch(embed_texts)
         except Exception as exc:
             print(f"[doc_processor] Embedding failed: {type(exc).__name__}: {exc}")
             raise
@@ -223,7 +310,11 @@ class DocumentProcessor:
             (
                 c["text"],
                 emb,
-                {"chunk_index": c["chunk_index"], "heading": c["heading"]},
+                {
+                    "chunk_index": c["chunk_index"],
+                    "heading": c["heading"],
+                    "breadcrumb": c.get("breadcrumb", []),
+                },
             )
             for c, emb in zip(structured_chunks, embeddings, strict=False)
         ]
@@ -233,16 +324,20 @@ class DocumentProcessor:
         file_data: bytes,
         file_type: str,
         full_text: str | None = None,
+        note_title: str | None = None,
     ) -> list[tuple[str, list[float], dict[str, Any]]]:
         """
         Async version of process() that supports contextual retrieval.
 
-        When contextual retrieval is enabled, generates context prefixes
-        for each chunk using the local LLM, then embeds the contextualized
-        version for better retrieval quality.
+        Embedding-time text is built as ``{LLM context}\\n\\n{breadcrumb |
+        note_title}\\n\\n{chunk_text}`` when contextual retrieval is on, or
+        ``{breadcrumb | note_title}\\n\\n{chunk_text}`` otherwise. The
+        breadcrumb prefix is the cheap fallback when LLM context generation
+        is disabled or fails.
 
         Returns list of (chunk_text, embedding_vector, metadata) tuples.
-        metadata includes: chunk_index, heading, and optionally content_contextualized.
+        metadata includes ``chunk_index``, ``heading``, ``breadcrumb``, and
+        optionally ``content_contextualized``.
         """
         text = full_text or extract_text(file_data, file_type)
         if not text.strip():
@@ -253,11 +348,15 @@ class DocumentProcessor:
             raise ValueError("Document produced no text chunks")
 
         chunk_texts = [c["text"] for c in structured_chunks]
+        breadcrumb_prefixes = [
+            _embedding_prefix(c.get("breadcrumb", []), note_title)
+            for c in structured_chunks
+        ]
         print(f"[doc_processor] Extracted {len(text)} chars → {len(chunk_texts)} chunks")
 
-        # Contextual retrieval: generate context prefixes
-        texts_to_embed = chunk_texts
+        # Contextual retrieval: LLM context prefix on top of breadcrumb prefix.
         contextualized_texts: list[str | None] | None = None
+        contexts: list[str | None] = [None] * len(chunk_texts)
 
         if self.settings.rag_contextual_retrieval_enabled:
             try:
@@ -266,21 +365,28 @@ class DocumentProcessor:
                 print(f"[doc_processor] Generating context prefixes for {len(chunk_texts)} chunks...")
                 contexts = await generate_batch(text, chunk_texts, self.settings)
                 contextualized_texts = []
-                texts_to_embed = []
                 for chunk_text, context in zip(chunk_texts, contexts, strict=False):
                     if context:
-                        ctx_text = f"{context}\n\n{chunk_text}"
-                        contextualized_texts.append(ctx_text)
-                        texts_to_embed.append(ctx_text)
+                        contextualized_texts.append(f"{context}\n\n{chunk_text}")
                     else:
                         contextualized_texts.append(None)
-                        texts_to_embed.append(chunk_text)
                 ctx_count = sum(1 for c in contextualized_texts if c)
                 print(f"[doc_processor] Context generated for {ctx_count}/{len(chunk_texts)} chunks")
             except Exception as exc:
                 print(f"[doc_processor] Context generation failed (degrading gracefully): {type(exc).__name__}: {exc}")
                 contextualized_texts = None
-                texts_to_embed = chunk_texts
+
+        # Compose embedding inputs: LLM context (if any), breadcrumb, chunk.
+        texts_to_embed: list[str] = []
+        for i, chunk_text in enumerate(chunk_texts):
+            parts: list[str] = []
+            ctx = contexts[i] if i < len(contexts) else None
+            if ctx:
+                parts.append(ctx)
+            if breadcrumb_prefixes[i]:
+                parts.append(breadcrumb_prefixes[i])
+            parts.append(chunk_text)
+            texts_to_embed.append("\n\n".join(parts))
 
         print(f"[doc_processor] Generating embeddings for {len(texts_to_embed)} chunks...")
         try:
@@ -295,6 +401,7 @@ class DocumentProcessor:
             meta: dict[str, Any] = {
                 "chunk_index": c["chunk_index"],
                 "heading": c["heading"],
+                "breadcrumb": c.get("breadcrumb", []),
             }
             if contextualized_texts and contextualized_texts[i]:
                 meta["content_contextualized"] = contextualized_texts[i]
