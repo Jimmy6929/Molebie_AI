@@ -11,6 +11,7 @@ types work transparently through the same gateway code.
 """
 
 import json
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -18,6 +19,43 @@ from typing import Any
 import httpx
 
 from app.config import Settings, get_settings
+
+
+# Defensive strip: prior `<think>...</think>` blocks must never re-enter the
+# prompt. The chat route already strips on persist, but multi-process pipelines
+# (background tasks, future replay) can re-introduce them — clean once here so
+# the inference layer is always safe regardless of how messages were assembled.
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def _strip_think_in_messages(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a copy of ``messages`` with any stray ``<think>`` blocks removed
+    from string and multimodal-text content. Other parts (images) untouched."""
+    cleaned: list[dict[str, Any]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            new_content = _THINK_BLOCK_RE.sub("", content)
+            if new_content != content:
+                msg = {**msg, "content": new_content}
+        elif isinstance(content, list):
+            new_parts = []
+            mutated = False
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text", "")
+                    new_text = _THINK_BLOCK_RE.sub("", text)
+                    if new_text != text:
+                        mutated = True
+                        new_parts.append({**part, "text": new_text})
+                        continue
+                new_parts.append(part)
+            if mutated:
+                msg = {**msg, "content": new_parts}
+        cleaned.append(msg)
+    return cleaned
 
 
 class InferenceService:
@@ -100,6 +138,14 @@ class InferenceService:
     def _get_top_k(self, mode: str) -> int:
         """Get the default top_k for the given mode."""
         return self.settings.get_top_k_for_mode(mode)
+
+    def _get_presence_penalty(self, mode: str) -> float:
+        """Get presence_penalty for the given mode (clamped at safe ceiling)."""
+        return self.settings.get_presence_penalty_for_mode(mode)
+
+    def _get_repetition_penalty(self, mode: str) -> float:
+        """Get repetition_penalty for the given mode."""
+        return self.settings.get_repetition_penalty_for_mode(mode)
 
     def _get_enable_thinking(self, mode: str) -> bool:
         """Get whether chain-of-thought is enabled for the given mode."""
@@ -196,6 +242,7 @@ class InferenceService:
         mode: str = "instant",
         max_tokens: int | None = None,
         temperature: float | None = None,
+        enable_thinking: bool | None = None,
     ) -> dict[str, Any]:
         """
         Generate a complete response from the LLM.
@@ -212,6 +259,9 @@ class InferenceService:
             mode: 'instant' or 'thinking'
             max_tokens: Override default max tokens for this mode
             temperature: Override default temperature for this mode
+            enable_thinking: Force CoT on/off, overriding the mode default.
+                Pass ``False`` for RAG / tool calls (Qwen3.5 9B otherwise
+                burns thousands of thinking tokens on routine retrievals).
 
         Returns:
             Dict with 'content', 'tokens_used', 'mode_used', 'model',
@@ -219,6 +269,10 @@ class InferenceService:
         """
         start_time = time.monotonic()
         endpoint = self._get_endpoint(mode)
+        resolved_enable_thinking = (
+            self._get_enable_thinking(mode) if enable_thinking is None
+            else enable_thinking
+        )
 
         if not endpoint:
             # If thinking not configured, try fallback to instant
@@ -237,6 +291,8 @@ class InferenceService:
                     timeout=self._get_timeout("instant"),
                     api_prefix=self._get_api_prefix("instant"),
                     enable_thinking=self._get_enable_thinking("instant"),
+                    presence_penalty=self._get_presence_penalty("instant"),
+                    repetition_penalty=self._get_repetition_penalty("instant"),
                 )
                 result["fallback_used"] = True
                 result["original_mode"] = "thinking"
@@ -248,6 +304,9 @@ class InferenceService:
             return result
 
         # Call the endpoint for the requested mode
+        # When CoT is forced off, also drop the thinking_budget — sending
+        # one alongside enable_thinking=False produces an empty <think>
+        # block on some backends that the chat route then has to strip.
         result = await self._call_endpoint(
             endpoint=endpoint,
             model=self._get_model(mode),
@@ -260,8 +319,11 @@ class InferenceService:
             top_k=self._get_top_k(mode),
             timeout=self._get_timeout(mode),
             api_prefix=self._get_api_prefix(mode),
-            enable_thinking=self._get_enable_thinking(mode),
-            thinking_budget=self._get_thinking_budget(mode),
+            enable_thinking=resolved_enable_thinking,
+            thinking_budget=(self._get_thinking_budget(mode)
+                             if resolved_enable_thinking else None),
+            presence_penalty=self._get_presence_penalty(mode),
+            repetition_penalty=self._get_repetition_penalty(mode),
         )
 
         # If thinking call failed and fallback is enabled, try instant
@@ -283,6 +345,8 @@ class InferenceService:
                 timeout=self._get_timeout("instant"),
                 api_prefix=self._get_api_prefix("instant"),
                 enable_thinking=self._get_enable_thinking("instant"),
+                presence_penalty=self._get_presence_penalty("instant"),
+                repetition_penalty=self._get_repetition_penalty("instant"),
             )
             result["fallback_used"] = True
             result["original_mode"] = "thinking"
@@ -305,11 +369,24 @@ class InferenceService:
         api_prefix: str = "/v1",
         enable_thinking: bool = False,
         thinking_budget: int | None = None,
+        presence_penalty: float = 0.0,
+        repetition_penalty: float = 1.0,
     ) -> dict[str, Any]:
         """
         Make the actual HTTP call to the inference endpoint.
-        Works with both mlx_lm (/v1/...) and mlx_vlm (/...) servers.
+
+        Per-backend notes for the sampling fields:
+          * ``presence_penalty`` — accepted by vLLM, mlx_vlm/mlx_lm, Ollama
+            (via /v1), llama.cpp server. Standard OpenAI field.
+          * ``repetition_penalty`` — Qwen-recommended name; accepted by
+            mlx_vlm/mlx_lm and vLLM. llama.cpp server expects
+            ``repeat_penalty`` (set server-side via ``--repeat-penalty``).
+            Backends that don't recognise the field ignore it harmlessly.
+          * ``enable_thinking`` / ``thinking_budget`` — Qwen3.5 + mlx_vlm
+            extension. vLLM exposes via ``chat_template_kwargs``;
+            llama.cpp via ``--chat-template-kwargs``.
         """
+        messages = _strip_think_in_messages(messages)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 payload: dict[str, Any] = {
@@ -319,6 +396,8 @@ class InferenceService:
                     "temperature": temperature,
                     "top_p": top_p,
                     "top_k": top_k,
+                    "presence_penalty": presence_penalty,
+                    "repetition_penalty": repetition_penalty,
                     "stream": False,
                     "enable_thinking": enable_thinking,
                 }
@@ -388,6 +467,7 @@ class InferenceService:
         mode: str = "instant",
         max_tokens: int | None = None,
         temperature: float | None = None,
+        enable_thinking: bool | None = None,
     ) -> AsyncIterator[str]:
         """
         Generate a streaming response from the LLM (SSE format).
@@ -402,6 +482,7 @@ class InferenceService:
         Yields:
             Server-sent event strings in OpenAI format
         """
+        messages = _strip_think_in_messages(messages)
         endpoint = self._get_endpoint(mode)
         model = self._get_model(mode)
         resolved_max_tokens = max_tokens or self._get_max_tokens(mode)
@@ -432,8 +513,15 @@ class InferenceService:
                 return
 
         prefix = self._get_api_prefix(mode)
-        resolved_enable_thinking = self._get_enable_thinking(mode)
-        resolved_thinking_budget = self._get_thinking_budget(mode)
+        resolved_enable_thinking = (
+            self._get_enable_thinking(mode) if enable_thinking is None
+            else enable_thinking
+        )
+        resolved_thinking_budget = (
+            self._get_thinking_budget(mode) if resolved_enable_thinking else None
+        )
+        resolved_presence_penalty = self._get_presence_penalty(mode)
+        resolved_repetition_penalty = self._get_repetition_penalty(mode)
 
         try:
             # Emit mode metadata as first event
@@ -447,6 +535,8 @@ class InferenceService:
                 "temperature": resolved_temperature,
                 "top_p": resolved_top_p,
                 "top_k": resolved_top_k,
+                "presence_penalty": resolved_presence_penalty,
+                "repetition_penalty": resolved_repetition_penalty,
                 "stream": True,
                 "enable_thinking": resolved_enable_thinking,
             }
@@ -502,6 +592,8 @@ class InferenceService:
                                 ),
                                 "top_p": self._get_top_p("instant"),
                                 "top_k": self._get_top_k("instant"),
+                                "presence_penalty": self._get_presence_penalty("instant"),
+                                "repetition_penalty": self._get_repetition_penalty("instant"),
                                 "stream": True,
                                 "enable_thinking": self._get_enable_thinking("instant"),
                             },

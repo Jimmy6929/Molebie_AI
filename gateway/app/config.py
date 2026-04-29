@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     inference_instant_temperature: float = 0.7
     inference_instant_top_p: float = 0.8
     inference_instant_top_k: int = 20
+    # Qwen3.5 non-thinking preset: presence_penalty=1.5 reduces repetition
+    # without the language-mixing seen above 1.5. repetition_penalty=1.0 is
+    # neutral — Qwen ships tuned, so over-penalising hurts coherence.
+    inference_instant_presence_penalty: float = 1.5
+    inference_instant_repetition_penalty: float = 1.0
     inference_instant_timeout: float = 120.0   # seconds
     inference_instant_enable_thinking: bool = False  # no CoT for fast tier
 
@@ -67,6 +72,11 @@ class Settings(BaseSettings):
     inference_thinking_temperature: float = 0.6  # Qwen 3.5 recommended for thinking
     inference_thinking_top_p: float = 0.95
     inference_thinking_top_k: int = 20
+    # Thinking-mode preset: penalties at 0 — repetition control during a CoT
+    # block tends to truncate reasoning. Repetition control belongs on the
+    # final answer, which the strict-grounding template already constrains.
+    inference_thinking_presence_penalty: float = 0.0
+    inference_thinking_repetition_penalty: float = 1.0
     inference_thinking_timeout: float = 300.0    # 5 min — cold start + reasoning
     inference_thinking_enable_thinking: bool = True  # CoT reasoning for deep tier
     inference_thinking_budget: int = 2048            # max tokens for the <think> block
@@ -79,6 +89,16 @@ class Settings(BaseSettings):
     inference_temperature: float = 0.7
     inference_timeout: float = 120.0
     inference_stream: bool = True
+
+    # Hard ceiling on presence_penalty: above 1.5 Qwen3.5 starts mixing
+    # languages mid-response. Applied as a clamp in the helper, not a
+    # validator, so misconfigured .env files don't crash the service.
+    inference_max_presence_penalty: float = 1.5
+
+    # When True, thinking-tier requests with RAG context disable CoT —
+    # 9B "burns thousands of thinking tokens in circles" on retrieval Q&A.
+    # See task 1.3 in tasks/hallucination-mitigation/phase-1-foundation.md.
+    inference_thinking_auto_disable_for_rag: bool = True
 
     # ── Routing ────────────────────────────────────────────────
     routing_default_mode: str = "thinking"
@@ -221,6 +241,22 @@ class Settings(BaseSettings):
         if mode in ("thinking", "thinking_harder"):
             return self.inference_thinking_top_k
         return self.inference_instant_top_k
+
+    def get_presence_penalty_for_mode(self, mode: str) -> float:
+        """Return presence_penalty for the given mode, clamped at the
+        Qwen-safe ceiling (above 1.5 causes language mixing)."""
+        raw = (
+            self.inference_thinking_presence_penalty
+            if mode in ("thinking", "thinking_harder")
+            else self.inference_instant_presence_penalty
+        )
+        return min(raw, self.inference_max_presence_penalty)
+
+    def get_repetition_penalty_for_mode(self, mode: str) -> float:
+        """Return repetition_penalty for the given mode."""
+        if mode in ("thinking", "thinking_harder"):
+            return self.inference_thinking_repetition_penalty
+        return self.inference_instant_repetition_penalty
 
     def get_enable_thinking_for_mode(self, mode: str) -> bool:
         """Return whether to enable chain-of-thought for the given mode."""

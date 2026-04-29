@@ -24,6 +24,65 @@ def _quality_label(similarity: float) -> str:
     return "WEAK MATCH"
 
 
+def _chunk_score(chunk: dict[str, Any]) -> float:
+    """Best-available relevance score for ordering: rerank > rrf > similarity."""
+    if chunk.get("rerank_score") is not None:
+        return float(chunk["rerank_score"])
+    if chunk.get("rrf_score") is not None:
+        return float(chunk["rrf_score"])
+    return float(chunk.get("similarity", 0.0))
+
+
+def compute_retrieval_confidence(chunks: list[dict[str, Any]]) -> str:
+    """Score the retrieved set as NONE / REFUSE / LOW / MODERATE / HIGH.
+
+    Uses the best-available score per chunk (rerank > rrf > similarity).
+
+    Thresholds are calibrated for cross-encoder/ms-marco-MiniLM rerank scores
+    (sigmoid-ish, 0–1 range). When the reranker swaps to Qwen3-Reranker-0.6B
+    in task 1.6, recalibrate against a held-out query set.
+    """
+    if not chunks:
+        return "NONE"
+    scores = [_chunk_score(c) for c in chunks]
+    top_score = max(scores)
+    high_count = sum(1 for s in scores if s > 0.5)
+    if top_score < 0.3:
+        return "REFUSE"            # all chunks effectively irrelevant
+    if high_count < 2:
+        return "LOW"               # one weak hit, easy to over-trust
+    if top_score > 0.7 and high_count >= 3:
+        return "HIGH"
+    return "MODERATE"
+
+
+def _reorder_for_context(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Place highest-relevance chunks at the start AND end of the context,
+    with lower-relevance ones in the middle (U-shape).
+
+    Counters lost-in-the-middle (Liu 2023): models lose >30% accuracy on
+    information placed in the middle of long contexts. This is the same
+    algorithm as LangChain's ``LongContextReorder`` — iterate ascending and
+    alternately prepend/append so the two highest-scored chunks land at
+    index 0 and index -1.
+
+    The version printed in the build plan was buggy (it placed the top
+    score in the middle); this implementation matches the documented
+    intent and is verified by the inline test in the run_smoke_tests
+    block of the foundation tasks.
+    """
+    if len(chunks) < 3:
+        return chunks
+    asc = sorted(chunks, key=_chunk_score)  # lowest first
+    result: list[dict[str, Any]] = []
+    for i, chunk in enumerate(asc):
+        if i % 2 == 0:
+            result.insert(0, chunk)   # even rank-from-bottom → push left
+        else:
+            result.append(chunk)      # odd rank-from-bottom → push right
+    return result
+
+
 def _rrf_fuse(
     vector_results: list[dict[str, Any]],
     text_results: list[dict[str, Any]],
@@ -281,7 +340,13 @@ class RAGService:
             timings.get("t_rewrite_ms", 0) + timings["t_embed_ms"] + timings["t_search_ms"] + timings["t_rerank_ms"], 1
         )
 
-        # Attach timings to results for metrics
+        # Reorder for the lost-in-the-middle effect: highest-scored chunks land
+        # at start AND end of the prompt, lower-scored in the middle.
+        results = _reorder_for_context(results)
+
+        # Attach timings to results for metrics (after reorder so the chunk
+        # that holds them is whichever ends up at index 0 — this dict travels
+        # with the chunks and is consumed by get_metrics()).
         if results:
             results[0]["_rag_timings"] = timings
 
@@ -296,11 +361,12 @@ class RAGService:
         return results
 
     def format_context(self, chunks: list[dict[str, Any]]) -> str:
-        """Format retrieved chunks into a text block for the system message.
+        """Format retrieved chunks for substitution into the strict-grounding
+        system prompt's {rag_context} placeholder.
 
-        Each chunk is labelled with a quality tier (HIGH / MODERATE / WEAK)
-        so the model can calibrate trust accordingly. Headings from metadata
-        are shown when available.
+        Each chunk is labelled ``[S1]``, ``[S2]``, ... so the model can cite
+        sources inline. Quality tiers are intentionally omitted here — the
+        evidence-summary block reports them separately.
         """
         if not chunks:
             return ""
@@ -310,20 +376,15 @@ class RAGService:
         for i, c in enumerate(chunks, 1):
             filename = c.get("filename", "unknown")
             content = c.get("content", "")
-            similarity = c.get("similarity", 0)
-            rrf_score = c.get("rrf_score")
-            label = _quality_label(similarity)
-
-            # Extract heading from metadata
             metadata = c.get("metadata") or {}
             heading = metadata.get("heading")
-            source = f"{filename} > {heading}" if heading else filename
 
-            # Use rrf_score for display when available
-            if rrf_score is not None:
-                entry = f"[{i}] {source} ({label}, relevance: {similarity:.2f}, rrf: {rrf_score:.4f})\n{content}"
-            else:
-                entry = f"[{i}] {source} ({label}, relevance: {similarity:.2f})\n{content}"
+            source_parts = [f"file: {filename}"]
+            if heading:
+                source_parts.append(f"section: {heading}")
+            source_meta = " • ".join(source_parts)
+
+            entry = f"[S{i}] ({source_meta})\n{content}"
 
             if total_chars + len(entry) > self.max_context_chars:
                 break

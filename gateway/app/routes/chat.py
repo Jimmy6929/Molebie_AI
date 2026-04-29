@@ -40,7 +40,7 @@ from app.services.database import DatabaseService, get_database_service
 from app.services.inference import InferenceService, get_inference_service
 from app.services.memory import get_memory_service
 from app.services.metrics_registry import RequestRecord, get_metrics_registry
-from app.services.rag import RAGService, get_rag_service
+from app.services.rag import RAGService, compute_retrieval_confidence, get_rag_service
 from app.services.storage import get_storage_service
 from app.services.summarizer import get_summariser_service
 from app.services.web_search import WebSearchService, get_web_search_service
@@ -57,6 +57,45 @@ def _load_prompt_template(name: str) -> str:
 
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _confidence_directive(
+    confidence: str,
+    chunks: list[dict[str, Any]],
+) -> str | None:
+    """Return a directive to append to the system prompt based on retrieval
+    confidence, or None if no directive is needed.
+
+    REFUSE — chunks present but irrelevant. The strict template's fallback
+    string still triggers; we additionally surface note titles so the user
+    gets a useful pointer instead of a dead end.
+
+    LOW — one weak hit. The model is most likely to over-trust here; the
+    extra reminder lowers fabrication rate without forcing abstention.
+    """
+    if confidence == "REFUSE":
+        seen: list[str] = []
+        for c in chunks:
+            name = c.get("filename")
+            if name and name not in seen:
+                seen.append(name)
+            if len(seen) >= 5:
+                break
+        related = ", ".join(seen) if seen else "(none)"
+        return (
+            "RETRIEVAL CONFIDENCE: REFUSE. The retrieved context does not "
+            "appear relevant to this question. Reply with the exact string "
+            "\"I don't have that in your notes.\" and then say: "
+            f"\"Here are some related topics I found: {related}\"."
+        )
+    if confidence == "LOW":
+        return (
+            "RETRIEVAL CONFIDENCE: LOW. The retrieved context has weak "
+            "relevance. Be especially careful: cite a [S#] source for "
+            "every factual claim, and if you cannot find a direct answer "
+            "in the context, use the exact fallback string."
+        )
+    return None
 
 
 def _build_evidence_summary(
@@ -140,20 +179,6 @@ def _build_evidence_summary(
     return "\n".join(lines)
 
 
-def _rag_quality_header(chunks: list[dict[str, Any]]) -> str:
-    """Build a descriptive header for the RAG context section."""
-    if not chunks:
-        return "DOCUMENT CONTEXT:"
-    top_sim = max(c.get("similarity", 0) for c in chunks)
-    if top_sim > 0.75:
-        quality = "high relevance"
-    elif top_sim > 0.6:
-        quality = "moderate relevance"
-    else:
-        quality = "low relevance"
-    return f"DOCUMENT CONTEXT ({len(chunks)} chunks, {quality}, top match: {top_sim:.2f}):"
-
-
 def _validate_response_sources(
     response_text: str,
     search_results: list[dict[str, Any]],
@@ -192,10 +217,27 @@ def _build_system_message(
     conversation_mode: bool = False,
     summary: str | None = None,
     memories_text: str | None = None,
+    rag_context: str | None = None,
 ) -> dict:
-    template_name = "system_voice" if conversation_mode else "system"
-    prompt_template = _load_prompt_template(template_name)
-    content = prompt_template.format(current_date=date.today().strftime("%A, %B %d, %Y"))
+    """Build the system message.
+
+    When ``rag_context`` is supplied, uses the strict-grounding template
+    (``system_rag.txt``) which forces ``[S#]`` citations and a fixed
+    abstain string. Otherwise uses the general ``system.txt`` (or
+    ``system_voice.txt`` in conversation mode).
+    """
+    today_str = date.today().strftime("%A, %B %d, %Y")
+
+    if rag_context:
+        prompt_template = _load_prompt_template("system_rag")
+        content = prompt_template.format(
+            current_date=today_str,
+            rag_context=rag_context,
+        )
+    else:
+        template_name = "system_voice" if conversation_mode else "system"
+        prompt_template = _load_prompt_template(template_name)
+        content = prompt_template.format(current_date=today_str)
 
     if summary:
         content += f"\n\nCONVERSATION SUMMARY (earlier messages condensed):\n{summary}"
@@ -397,11 +439,37 @@ async def send_message(
         except Exception as exc:
             print(f"[chat] Memory retrieval failed: {exc}")
 
+    # RAG retrieval runs BEFORE system-message build so chunks can be slotted
+    # into the strict-grounding template (system_rag.txt) instead of being
+    # appended after a general prompt — this gives the model unambiguous
+    # citation rules and a defined refusal path.
+    rag_chunks = []
+    if not request.conversation_mode:
+        if not rag.enabled:
+            print("[chat] RAG disabled — skipping document retrieval")
+        elif await rag.user_has_documents(user_id):
+            rag_chunks = await rag.retrieve_context(
+                user_id, request.message, conversation_context=hist_messages,
+            )
+
+    rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
+    rag_confidence = compute_retrieval_confidence(rag_chunks) if rag_chunks else "NONE"
+    if rag_chunks:
+        print(f"[chat] Retrieval confidence: {rag_confidence}")
+
     messages = [_build_system_message(
         request.conversation_mode,
         summary=session_summary,
         memories_text=memories_text,
+        rag_context=rag_context_text,
     )] + hist_messages
+
+    # Confidence-driven directives: REFUSE forces the abstain string + note
+    # titles; LOW reminds the model to cite every claim. HIGH/MODERATE rely
+    # on the strict-grounding template alone.
+    directive = _confidence_directive(rag_confidence, rag_chunks)
+    if directive:
+        messages[0]["content"] += f"\n\n{directive}"
 
     # Session attachments: inject full document text (highest priority context)
     attach_text = await db.fetch_session_attachments_text(session_id, user_id)
@@ -416,21 +484,6 @@ async def send_message(
             search_results = await web_search.enrich_with_full_content(search_results)
             context_text = web_search.format_results_for_context(search_results)
             messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
-
-    # RAG: inject relevant document chunks (skip in conversation mode to avoid embedding load)
-    # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
-    rag_chunks = []
-    if not request.conversation_mode:
-        if not rag.enabled:
-            print("[chat] RAG disabled — skipping document retrieval")
-        elif await rag.user_has_documents(user_id):
-            rag_chunks = await rag.retrieve_context(
-                user_id, request.message, conversation_context=hist_messages,
-            )
-            if rag_chunks:
-                rag_text = rag.format_context(rag_chunks)
-                header = _rag_quality_header(rag_chunks)
-                messages[0]["content"] += f"\n\n{header}\n{rag_text}"
 
     # Inject evidence summary so the model can self-calibrate confidence
     evidence_summary = _build_evidence_summary(search_results, rag_chunks)
@@ -454,6 +507,16 @@ async def send_message(
     else:
         inference_mode = request.mode.value
 
+    # Force CoT off when RAG context is present on the thinking tier — small
+    # Qwen models burn thousands of thinking tokens "in circles" on retrieval
+    # Q&A and the strict-grounding template doesn't need reasoning to follow.
+    enable_thinking_override: bool | None = None
+    if (rag_chunks
+            and inference_mode in ("thinking", "thinking_harder")
+            and settings.inference_thinking_auto_disable_for_rag):
+        enable_thinking_override = False
+        print(f"[chat] RAG present on {inference_mode} tier — disabling CoT")
+
     # Generate AI response — instrumented for /metrics/live
     # Non-streaming path: TTFT is approximated as total_ms because we don't
     # see individual tokens. Monitor reads the series with that caveat.
@@ -465,6 +528,7 @@ async def send_message(
         inference_result = await inference.generate_response(
             messages=messages,
             mode=inference_mode,
+            enable_thinking=enable_thinking_override,
         )
     except Exception as exc:
         _metrics_error = type(exc).__name__
@@ -816,22 +880,8 @@ async def send_message_stream(
         except Exception as exc:
             print(f"[chat] Memory retrieval failed: {exc}")
 
-    messages = [_build_system_message(
-        request.conversation_mode,
-        summary=session_summary,
-        memories_text=memories_text,
-    )] + hist_messages
-
-    # Session attachments: inject full document text (highest priority context)
-    attach_text = await db.fetch_session_attachments_text(session_id, user_id)
-    if attach_text:
-        messages[0]["content"] += f"\n\n{attach_text}"
-
-    # Web search: user controls via toggle button
-    will_search = request.web_search
-
-    # RAG: inject relevant document chunks (skip in conversation mode to avoid embedding load)
-    # Skip RAG entirely when user has no documents to avoid unnecessary embedding model load
+    # RAG retrieval runs BEFORE system-message build so chunks slot into the
+    # strict-grounding template — see send_message() for rationale.
     rag_chunks = []
     if not request.conversation_mode:
         if not rag.enabled:
@@ -840,10 +890,31 @@ async def send_message_stream(
             rag_chunks = await rag.retrieve_context(
                 user_id, request.message, conversation_context=hist_messages,
             )
-            if rag_chunks:
-                rag_text = rag.format_context(rag_chunks)
-                header = _rag_quality_header(rag_chunks)
-                messages[0]["content"] += f"\n\n{header}\n{rag_text}"
+
+    rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
+    rag_confidence = compute_retrieval_confidence(rag_chunks) if rag_chunks else "NONE"
+    if rag_chunks:
+        print(f"[chat] Retrieval confidence: {rag_confidence}")
+
+    messages = [_build_system_message(
+        request.conversation_mode,
+        summary=session_summary,
+        memories_text=memories_text,
+        rag_context=rag_context_text,
+    )] + hist_messages
+
+    # Confidence-driven directives — see send_message() for rationale.
+    directive = _confidence_directive(rag_confidence, rag_chunks)
+    if directive:
+        messages[0]["content"] += f"\n\n{directive}"
+
+    # Session attachments: inject full document text (highest priority context)
+    attach_text = await db.fetch_session_attachments_text(session_id, user_id)
+    if attach_text:
+        messages[0]["content"] += f"\n\n{attach_text}"
+
+    # Web search: user controls via toggle button
+    will_search = request.web_search
 
     # Force thinking tier when image is attached (instant tier is text-only)
     # Voice conversation always uses instant tier (Qwen 3.5 4B); config via INFERENCE_INSTANT_*
@@ -854,6 +925,15 @@ async def send_message_stream(
         inference_mode = "instant"
     else:
         inference_mode = request.mode.value
+
+    # Force CoT off when RAG context is present on the thinking tier — see
+    # send_message() for rationale.
+    enable_thinking_override: bool | None = None
+    if (rag_chunks
+            and inference_mode in ("thinking", "thinking_harder")
+            and settings.inference_thinking_auto_disable_for_rag):
+        enable_thinking_override = False
+        print(f"[chat] RAG present on {inference_mode} tier — disabling CoT")
 
     async def event_generator():
         """Generate SSE events from inference stream."""
@@ -918,6 +998,7 @@ async def send_message_stream(
             async for chunk in inference.generate_response_stream(
                 messages=messages,
                 mode=inference_mode,
+                enable_thinking=enable_thinking_override,
             ):
                 try:
                     if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
