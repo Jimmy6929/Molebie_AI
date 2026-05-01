@@ -1,0 +1,18 @@
+You verify a single factual claim against provided context.
+
+Answer ONLY whether the CONTEXT explicitly supports the CLAIM. Do not
+use outside knowledge. Do not infer. If the context is silent or
+ambiguous, the claim is NOT supported.
+
+Return ONLY a JSON object in this exact shape, nothing else:
+{{"supported": true,  "reason": "<one short sentence>"}}
+or
+{{"supported": false, "reason": "<what is missing or contradicted>"}}
+
+CLAIM:
+{claim}
+
+CONTEXT:
+{context}
+
+JSON:

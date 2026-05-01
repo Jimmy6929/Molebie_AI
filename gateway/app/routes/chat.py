@@ -46,6 +46,9 @@ from app.services.rag import RAGService, compute_retrieval_confidence, get_rag_s
 from app.services.tools import TOOL_SCHEMAS, ToolExecutor
 from app.services.storage import get_storage_service
 from app.services.summarizer import get_summariser_service
+from app.services.judge import get_grounding_judge
+from app.services.selfcheck import get_selfcheck_service
+from app.services.verification import get_chain_of_verification
 from app.services.web_search import WebSearchService, get_web_search_service
 
 
@@ -890,6 +893,128 @@ async def send_message(
     # any [S#] citations against the available source count + per-claim
     # fuzzy match (task 2.4).
     citation_report = _validate_response_sources(clean_content, search_results, rag_chunks)
+
+    # Phase 3.2 — Grounding judge (reranker yes/no head). Cheap gate that
+    # runs before CoVe: ~one reranker forward pass per claim, no LLM
+    # calls. Catches off-topic fabrications fast; CoVe still handles the
+    # harder numeric-substitution cases. Default off.
+    judge_report = None
+    if settings.judge_enabled and rag_chunks:
+        try:
+            from app.services.reranker import get_reranker
+            judge = get_grounding_judge(get_reranker(), settings)
+            judge_result = judge.judge(response=clean_content, rag_chunks=rag_chunks)
+            if judge_result.applied:
+                print(
+                    f"[chat] Judge: {judge_result.flagged_count}/"
+                    f"{judge_result.scored_count} claims below threshold "
+                    f"{judge_result.threshold:.2f}"
+                )
+                clean_content = judge_result.revised_response
+                if judge_result.flagged_count and citation_report is not None:
+                    citation_report["needs_footnote"] = True
+                    citation_report["judge_flagged"] = judge_result.flagged_count
+            else:
+                print(f"[chat] Judge skipped: {judge_result.skipped_reason}")
+            judge_report = {
+                "applied": judge_result.applied,
+                "scored_count": judge_result.scored_count,
+                "flagged_count": judge_result.flagged_count,
+                "threshold": judge_result.threshold,
+                "skipped_reason": judge_result.skipped_reason,
+            }
+        except Exception as exc:
+            # Judge is best-effort — never let it break the chat path.
+            print(f"[chat] Judge raised {type(exc).__name__}: {exc}")
+            judge_report = {"applied": False, "error": f"{type(exc).__name__}"}
+
+    # Phase 3.1 — Chain-of-Verification post-processor. Decomposes long
+    # factual responses into atomic claims, verifies each in a fresh
+    # inference context against the cited chunk, and inserts a [?] marker
+    # next to unsupported claims. Default off (cove_enabled=False) — flips
+    # to ~5–9× extra inference calls on applicable responses, so wait for
+    # eval signal before turning on.
+    cove_report = None
+    if settings.cove_enabled and rag_chunks:
+        cove = get_chain_of_verification(inference, settings)
+        cove_result = await cove.maybe_verify(
+            response=clean_content,
+            query=request.message,
+            rag_chunks=rag_chunks,
+            mode=inference_result.get("mode_used", "instant"),
+        )
+        if cove_result.applied:
+            print(
+                f"[chat] CoVe: {cove_result.unsupported_count}/"
+                f"{cove_result.claims_checked} claims flagged unsupported"
+                + (f", {cove_result.verify_json_failures} JSON failures"
+                   if cove_result.verify_json_failures else "")
+                + (" (rule-based decompose fallback)"
+                   if cove_result.decompose_fallback else "")
+            )
+            clean_content = cove_result.revised_response
+            # Promote unsupported claims to the existing footnote pathway
+            # so the user sees one consolidated note rather than two.
+            if cove_result.unsupported_count and citation_report is not None:
+                citation_report["needs_footnote"] = True
+                citation_report["cove_unsupported"] = cove_result.unsupported_count
+        else:
+            print(f"[chat] CoVe skipped: {cove_result.skipped_reason}")
+        cove_report = {
+            "applied": cove_result.applied,
+            "claims_checked": cove_result.claims_checked,
+            "unsupported_count": cove_result.unsupported_count,
+            "skipped_reason": cove_result.skipped_reason,
+            "decompose_fallback": cove_result.decompose_fallback,
+            "verify_json_failures": cove_result.verify_json_failures,
+        }
+
+    # Phase 3.3 — SelfCheckGPT (reference-free). Fires only when there's
+    # NO RAG context: with chunks, CoVe + Judge are strictly better
+    # because they have ground truth to compare against. Default off —
+    # N extra full-response generations is expensive.
+    selfcheck_report = None
+    if settings.selfcheck_enabled and not rag_chunks:
+        try:
+            selfcheck = get_selfcheck_service(inference, settings)
+            sc_result = await selfcheck.maybe_check(
+                response=clean_content,
+                messages_for_resample=messages,
+                rag_chunks=rag_chunks,
+                mode=inference_result.get("mode_used", "instant"),
+            )
+            if sc_result.applied:
+                print(
+                    f"[chat] SelfCheck ({sc_result.backend}): "
+                    f"{sc_result.flagged_count}/{sc_result.sentences_checked} "
+                    f"sentences inconsistent across {sc_result.samples_used} samples"
+                )
+                clean_content = sc_result.revised_response
+                if sc_result.flagged_count and citation_report is None:
+                    # No citation report exists for non-RAG paths. Build a
+                    # minimal one so _maybe_append_footnote fires.
+                    citation_report = {
+                        "needs_footnote": True,
+                        "selfcheck_flagged": sc_result.flagged_count,
+                    }
+                elif sc_result.flagged_count and citation_report is not None:
+                    citation_report["needs_footnote"] = True
+                    citation_report["selfcheck_flagged"] = sc_result.flagged_count
+            else:
+                print(f"[chat] SelfCheck skipped: {sc_result.skipped_reason}")
+            selfcheck_report = {
+                "applied": sc_result.applied,
+                "samples_used": sc_result.samples_used,
+                "sentences_checked": sc_result.sentences_checked,
+                "flagged_count": sc_result.flagged_count,
+                "threshold": sc_result.threshold,
+                "backend": sc_result.backend,
+                "skipped_reason": sc_result.skipped_reason,
+            }
+        except Exception as exc:
+            print(f"[chat] SelfCheck raised {type(exc).__name__}: {exc}")
+            selfcheck_report = {"applied": False, "error": f"{type(exc).__name__}"}
+
     # Surface un-cited factual claims as a user-visible footnote. Mutates
     # both the in-memory message and the persisted DB content so the next
     # turn's history reflects what the user actually saw.
@@ -923,6 +1048,12 @@ async def send_message(
     rag_metrics = rag.get_metrics(rag_chunks) if rag_chunks else None
     if citation_report is not None:
         rag_metrics = {**(rag_metrics or {}), "citations": citation_report}
+    if cove_report is not None:
+        rag_metrics = {**(rag_metrics or {}), "verification": cove_report}
+    if judge_report is not None:
+        rag_metrics = {**(rag_metrics or {}), "judge": judge_report}
+    if selfcheck_report is not None:
+        rag_metrics = {**(rag_metrics or {}), "selfcheck": selfcheck_report}
     inference_meta = InferenceMetadata(
         mode_used=inference_result["mode_used"],
         model=inference_result.get("model"),
@@ -1378,6 +1509,12 @@ async def send_message_stream(
                         )
 
                     _validate_response_sources(save_content, search_results, rag_chunks)
+                    # NOTE: CoVe (Phase 3.1) is intentionally not wired into
+                    # the streaming path — running it after a stream
+                    # completes would mutate stored DB content vs what the
+                    # user already saw. If we want streaming-CoVe later,
+                    # emit a final SSE event with the verification report
+                    # and let the frontend overlay [?] markers post-hoc.
 
                     # Background tasks: summarisation and memory extraction (non-blocking)
                     total_msg_count = len(history) + 1

@@ -1,0 +1,21 @@
+You decompose a response into atomic factual claims.
+
+A claim is one verifiable factual statement: a name, number, date,
+definition, attribution, or specific fact. Skip opinions, hedges,
+transitions, meta-commentary, and instructions.
+
+Return ONLY a JSON object in this exact shape, nothing else:
+{{"claims": ["claim 1 verbatim", "claim 2 verbatim", ...]}}
+
+Rules:
+- Each claim must be self-contained and parseable on its own.
+- Quote the relevant span as it appears in the response (you may trim
+  surrounding words, but do not paraphrase facts).
+- If the response contains no factual claims, return {{"claims": []}}.
+- At most {max_claims} claims. If there are more, return the most
+  specific ones.
+
+RESPONSE TO DECOMPOSE:
+{response}
+
+JSON:

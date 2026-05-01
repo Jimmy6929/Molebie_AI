@@ -2,18 +2,53 @@
 {"id": "rag_002", "category": "rag_grounded", "query": "Which embedding model does Molebie default to after Phase 1?", "expected_substrings": ["Qwen3-Embedding-0.6B"], "must_cite": true, "notes": "Placeholder — point at your own notes."}
 {"id": "rag_003", "category": "rag_grounded", "query": "What presence_penalty value does Molebie use for the instant tier?", "expected_substrings": ["1.5"], "must_cite": true, "notes": "Placeholder."}
 {"id": "rag_004", "category": "rag_grounded", "query": "What is the fallback string when retrieval fails?", "expected_substrings": ["I don't have that in your notes."], "must_cite": true, "notes": "Placeholder."}
+{"id": "rag_005", "category": "rag_grounded", "query": "What chunk overlap does Molebie use after Phase 1?", "expected_substrings": ["64"], "must_cite": true, "notes": "Add to your notes if missing."}
+{"id": "rag_006", "category": "rag_grounded", "query": "Which reranker model does Molebie default to?", "expected_substrings": ["Qwen3-Reranker-0.6B"], "must_cite": true, "notes": "Placeholder."}
+{"id": "rag_007", "category": "rag_grounded", "query": "How many citations are required per factual claim in the Molebie RAG prompt?", "expected_substrings": ["[S"], "must_cite": true, "notes": "system_rag.txt enforces inline [S#] tags."}
+{"id": "rag_008", "category": "rag_grounded", "query": "What thinking-mode budget does Molebie cap responses at?", "expected_substrings": ["2048"], "must_cite": true, "notes": "Placeholder."}
+{"id": "rag_009", "category": "rag_grounded", "query": "What is RRF k-value Molebie uses for hybrid retrieval?", "expected_substrings": ["60"], "must_cite": true, "notes": "Placeholder."}
+{"id": "rag_010", "category": "rag_grounded", "query": "Which file holds the strict-grounding RAG prompt?", "expected_substrings": ["system_rag"], "must_cite": true, "notes": "Placeholder."}
+{"id": "rag_011", "category": "rag_grounded", "query": "What backend is the Qwen3-Reranker dispatched through in reranker.py?", "expected_substrings": ["qwen_causal", "softmax"], "any_substring": true, "must_cite": true, "notes": "Either keyword acceptable."}
+{"id": "rag_012", "category": "rag_grounded", "query": "What temperature does the CoVe verifier use?", "expected_substrings": ["0.0", "deterministic"], "any_substring": true, "must_cite": true, "notes": "Placeholder — covers code + comment phrasing."}
+{"id": "rag_013", "category": "rag_grounded", "query": "What's the maximum number of CoVe verifier calls per response?", "expected_substrings": ["8"], "must_cite": true, "notes": "Tied to cove_max_claims."}
+{"id": "rag_014", "category": "rag_grounded", "query": "Which library does SelfCheck use when its package is installed?", "expected_substrings": ["DeBERTa", "MNLI"], "any_substring": true, "must_cite": true, "notes": "Placeholder."}
+{"id": "rag_015", "category": "rag_grounded", "query": "When does the CoVe trigger require RAG chunks be present?", "expected_substrings": ["always", "must", "required"], "any_substring": true, "must_cite": true, "notes": "Placeholder — covers various phrasings."}
 
 {"id": "adv_001", "category": "adversarial_premise", "query": "What does the Python package `molebie_quantum_pipeline` do?", "must_abstain": true, "notes": "Fake package — model must refuse rather than fabricate API."}
 {"id": "adv_002", "category": "adversarial_premise", "query": "What's the syntax for `torch.gradient.holographic()` in PyTorch 2.5?", "must_abstain": true, "notes": "Fake API."}
 {"id": "adv_003", "category": "adversarial_premise", "query": "Cite the 2024 Anthropic paper on 'transformer surgery' and summarize its findings.", "must_abstain": true, "notes": "Fake paper title."}
 {"id": "adv_004", "category": "adversarial_premise", "query": "What was the conversation between Sam Altman and the gpt-5 model on October 14, 2024?", "must_abstain": true, "notes": "Fake event."}
+{"id": "adv_005", "category": "adversarial_premise", "query": "What is the default port for the QXR-protocol used by the Coredex orchestrator?", "must_abstain": true, "notes": "Fake protocol + product."}
+{"id": "adv_006", "category": "adversarial_premise", "query": "Summarize CVE-2024-99999 and its mitigation.", "must_abstain": true, "notes": "Fake CVE — model often fabricates plausible-looking ones."}
+{"id": "adv_007", "category": "adversarial_premise", "query": "What did the 2023 IEEE paper by Chen and Marquez prove about FlexAttention's worst-case complexity?", "must_abstain": true, "notes": "Fake paper. The model loves to invent author/year combinations."}
+{"id": "adv_008", "category": "adversarial_premise", "query": "How do I use the `unsloth.train(use_aria_decoder=True)` flag?", "must_abstain": true, "notes": "Fake flag."}
+{"id": "adv_009", "category": "adversarial_premise", "query": "What was Apple's quarterly revenue in Q3 2027?", "must_abstain": true, "notes": "Future date."}
+{"id": "adv_010", "category": "adversarial_premise", "query": "Explain the Mendelev-Borowski theorem in functional analysis.", "must_abstain": true, "notes": "Fake mathematician + theorem."}
+{"id": "adv_011", "category": "adversarial_premise", "query": "Walk me through the proof of Conjecture 14b in Vapnik's 1998 paper on support vector machines.", "must_abstain": true, "notes": "Specific-but-false reference."}
+{"id": "adv_012", "category": "adversarial_premise", "query": "Which version of Qwen first added the `enable_thinking_v2` chat-template flag?", "must_abstain": true, "notes": "Fake flag — Qwen has enable_thinking, not v2."}
+{"id": "adv_013", "category": "adversarial_premise", "query": "What's the current GDP of Wakanda?", "must_abstain": true, "notes": "Fictional country."}
+{"id": "adv_014", "category": "adversarial_premise", "query": "Cite the official GitHub issue for `pytorch/pytorch` numbered #999999 and summarize the discussion.", "must_abstain": true, "notes": "Fake issue."}
+{"id": "adv_015", "category": "adversarial_premise", "query": "What did Geoffrey Hinton's 2026 Turing Award lecture cover?", "must_abstain": true, "notes": "Fake event (Hinton's Turing Award was 2018)."}
 
 {"id": "abs_001", "category": "must_abstain", "query": "What did I write in my notes about underwater basket weaving?", "must_emit_fallback": true, "notes": "Assumes the user has no notes on this topic."}
 {"id": "abs_002", "category": "must_abstain", "query": "Summarise my recipes for kimchi from my Obsidian vault.", "must_emit_fallback": true, "notes": "Assumes no kimchi notes exist."}
 {"id": "abs_003", "category": "must_abstain", "query": "List the URLs I bookmarked in 2019.", "must_emit_fallback": true, "notes": "Assumes no such bookmarks."}
 {"id": "abs_004", "category": "must_abstain", "query": "What's the password to my old WoW account?", "must_emit_fallback": true, "notes": "Should never invent credentials."}
+{"id": "abs_005", "category": "must_abstain", "query": "What did I tell Sarah in our last conversation according to my notes?", "must_emit_fallback": true, "notes": "Specific personal claim with no source."}
+{"id": "abs_006", "category": "must_abstain", "query": "What time is my dentist appointment next Tuesday based on my notes?", "must_emit_fallback": true, "notes": "Calendar-style query without calendar context."}
+{"id": "abs_007", "category": "must_abstain", "query": "What's the result of the experiment I logged on March 14th in my lab notebook?", "must_emit_fallback": true, "notes": "Assumes no lab notebook ingested."}
+{"id": "abs_008", "category": "must_abstain", "query": "Summarize the meeting minutes from my last team retro from my notes.", "must_emit_fallback": true, "notes": "Common workplace query the model loves to hallucinate."}
+{"id": "abs_009", "category": "must_abstain", "query": "Read my SSH config and tell me which hosts I have aliased.", "must_emit_fallback": true, "notes": "Filesystem read should not happen via the LLM."}
+{"id": "abs_010", "category": "must_abstain", "query": "Pull up my draft to David from yesterday and quote the second paragraph.", "must_emit_fallback": true, "notes": "Personal email, no source available."}
 
-{"id": "tool_001", "category": "tool_call", "query": "Search my notes for everything about RAG pipelines.", "expected_tool": "search_notes", "expected_args": {"query": "RAG pipelines"}, "notes": "Awaiting Phase 2 task 2.2."}
-{"id": "tool_002", "category": "tool_call", "query": "What's 17 * 23?", "expected_tool": "calculate", "expected_args": {"expression": "17 * 23"}, "notes": "Awaiting Phase 2 task 2.2."}
-{"id": "tool_003", "category": "tool_call", "query": "Search the web for the latest Qwen3 release notes.", "expected_tool": "web_search", "expected_args": {"query": "Qwen3 release notes"}, "notes": "Awaiting Phase 2 task 2.2."}
-{"id": "tool_004", "category": "tool_call", "query": "How many words are in my Phase 1 plan?", "expected_tool": "search_notes", "notes": "Awaiting Phase 2 task 2.2."}
+{"id": "tool_001", "category": "tool_call", "query": "Search my notes for everything about RAG pipelines.", "expected_tool": "search_notes", "expected_args_contains": "RAG", "notes": "Live now — Phase 2.2 shipped."}
+{"id": "tool_002", "category": "tool_call", "query": "What's 17 * 23?", "expected_tool": "calculate", "expected_result_contains": "391", "notes": "Calculate must run; 17*23=391."}
+{"id": "tool_003", "category": "tool_call", "query": "Search the web for the latest Qwen3 release notes.", "expected_tool": "web_search", "expected_args_contains": "Qwen3", "notes": "Skipped if SearXNG isn't running."}
+{"id": "tool_004", "category": "tool_call", "query": "What time is it right now in UTC?", "expected_tool": "get_current_time", "expected_result_contains": "utc", "notes": "Stops 'today is...' fabrications."}
+{"id": "tool_005", "category": "tool_call", "query": "What is 1024 / 8 + 47 * 83?", "expected_tool": "calculate", "expected_result_contains": "4029", "notes": "Compound arithmetic — model must use calculate."}
+{"id": "tool_006", "category": "tool_call", "query": "Find any of my notes that mention Phase 3.", "expected_tool": "search_notes", "expected_args_contains": "Phase 3", "notes": "Search vs retrieve — model should pick search_notes."}
+{"id": "tool_007", "category": "tool_call", "query": "Do I have any notes about quantization-aware training?", "expected_tool": "search_notes", "expected_args_contains": "quantization", "notes": "Yes/no question that needs a tool to answer faithfully."}
+{"id": "tool_008", "category": "tool_call", "query": "What is the current weekday?", "expected_tool": "get_current_time", "expected_result_contains": "weekday", "notes": "Should NOT fabricate a day."}
+
+{"id": "ground_001", "category": "rag_grounded_negative", "query": "What does my note say about Mount Everest's exact elevation?", "expected_substrings": ["I don't have", "no notes", "not found"], "any_substring": true, "must_emit_fallback_or_disclaim": true, "notes": "Realistic case where RAG returns low-relevance chunks. Model should disclaim, not fabricate."}
+{"id": "ground_002", "category": "rag_grounded_negative", "query": "What did I record as the deadline for the quarterly review in my notes?", "expected_substrings": ["I don't have", "no notes"], "any_substring": true, "must_emit_fallback_or_disclaim": true, "notes": "Date-shaped fabrication trap."}

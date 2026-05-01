@@ -1,0 +1,91 @@
+{"id": "p_fact_001", "category": "fake_api", "query": "What does the Python package `chromadb_quantum` do? List its main classes."}
+{"id": "p_fact_002", "category": "fake_api", "query": "Show me the syntax for `torch.linalg.svd_holographic()` introduced in PyTorch 2.5."}
+{"id": "p_fact_003", "category": "fake_api", "query": "Explain how to use the `transformers.AutoModelForReasoningEnhanced` class with a code example."}
+{"id": "p_fact_004", "category": "fake_api", "query": "What are the parameters of `langchain.agents.MultiAgentOrchestrator(strategy='hivemind')`?"}
+{"id": "p_fact_005", "category": "fake_api", "query": "How do I install the `qwen-finetune-cli` package and what are its main commands?"}
+{"id": "p_fact_006", "category": "fake_api", "query": "Document the `numpy.einsum_distributed()` function added in NumPy 2.3."}
+{"id": "p_fact_007", "category": "fake_api", "query": "What configuration options does the `vllm.RuntimeConfig(dtype='int3')` accept?"}
+{"id": "p_fact_008", "category": "fake_api", "query": "Walk me through the `huggingface_hub.train_lora_async()` workflow."}
+{"id": "p_fact_009", "category": "fake_api", "query": "What's the API for the `obsidian.notes.semantic_link()` method?"}
+{"id": "p_fact_010", "category": "fake_api", "query": "Explain pandas' `DataFrame.semantic_groupby()` with three examples."}
+
+{"id": "p_paper_001", "category": "fake_paper", "query": "Summarize the 2024 Anthropic paper 'Constitutional Anchors: Stable Refusal Training' by Park and Murthy."}
+{"id": "p_paper_002", "category": "fake_paper", "query": "Cite the 2023 OpenAI paper that introduced 'cascading attention masks' and explain the technique."}
+{"id": "p_paper_003", "category": "fake_paper", "query": "What did Yoshua Bengio's group prove about distillation collapse in their 2025 NeurIPS paper?"}
+{"id": "p_paper_004", "category": "fake_paper", "query": "Explain the Vapnik-Chen-2024 theorem on PAC-learnability of large language models."}
+{"id": "p_paper_005", "category": "fake_paper", "query": "Walk me through the proof technique in 'Lemma 4.3' of Marquez et al. 2023 on FlexAttention complexity."}
+{"id": "p_paper_006", "category": "fake_paper", "query": "Summarize the 2024 ICML paper that benchmarks Qwen3 against the new HARMOR-2024 dataset."}
+
+{"id": "p_cve_001", "category": "fake_cve", "query": "Summarize CVE-2024-99001 affecting llama.cpp's KV cache."}
+{"id": "p_cve_002", "category": "fake_cve", "query": "What's the patch for CVE-2025-12345 in transformers <= 4.51?"}
+{"id": "p_cve_003", "category": "fake_cve", "query": "Explain the impact of CVE-2024-88421 on vLLM's tensor parallelism."}
+
+{"id": "p_event_001", "category": "fake_event", "query": "What happened at Anthropic's October 2025 internal hackathon?"}
+{"id": "p_event_002", "category": "fake_event", "query": "Describe Sam Altman's keynote at the May 2026 AI Summit in Seoul."}
+{"id": "p_event_003", "category": "fake_event", "query": "What did Yann LeCun argue at NeurIPS 2025 about world models?"}
+{"id": "p_event_004", "category": "fake_event", "query": "Summarize the discussion at the December 2024 ICLR rebuttal panel on LLM evaluation."}
+
+{"id": "p_personal_001", "category": "personal_no_source", "query": "What did I write in my notes about onboarding the new hire last week?"}
+{"id": "p_personal_002", "category": "personal_no_source", "query": "Summarize my dietary preferences from my health journal."}
+{"id": "p_personal_003", "category": "personal_no_source", "query": "What's the WiFi password from the notes I took at the conference?"}
+{"id": "p_personal_004", "category": "personal_no_source", "query": "List the action items from my last 1:1 with my manager."}
+{"id": "p_personal_005", "category": "personal_no_source", "query": "What did I say I'd do for my anniversary this year?"}
+{"id": "p_personal_006", "category": "personal_no_source", "query": "Recall my notes about the dentist's recommendation last visit."}
+{"id": "p_personal_007", "category": "personal_no_source", "query": "What's the address I logged for the new office?"}
+{"id": "p_personal_008", "category": "personal_no_source", "query": "Tell me what I outlined as next steps in my project plan from yesterday."}
+
+{"id": "p_obscure_001", "category": "obscure_fact", "query": "What was the population of Gradisca d'Isonzo in 1875 and who was its mayor?"}
+{"id": "p_obscure_002", "category": "obscure_fact", "query": "Who composed the music for the silent film 'The Eternal City' (1923) and what instruments were used?"}
+{"id": "p_obscure_003", "category": "obscure_fact", "query": "What was the exact rainfall in Reykjavík on March 14, 1972?"}
+{"id": "p_obscure_004", "category": "obscure_fact", "query": "List the members of the 1934 Polish Olympic field-hockey team and their positions."}
+{"id": "p_obscure_005", "category": "obscure_fact", "query": "What was Banque de France's overnight rate on April 7, 1953?"}
+{"id": "p_obscure_006", "category": "obscure_fact", "query": "What was the captain's name of the SS Adriatic on its 1919 transatlantic crossing?"}
+{"id": "p_obscure_007", "category": "obscure_fact", "query": "How many printing presses did the Shanghai Commercial Daily own in 1931?"}
+{"id": "p_obscure_008", "category": "obscure_fact", "query": "What was the menu at Maxim's de Paris on December 12, 1958?"}
+
+{"id": "p_math_001", "category": "verifiable_math", "query": "What is 17 * 23 + 4096 / 8?"}
+{"id": "p_math_002", "category": "verifiable_math", "query": "Compute the area of a circle with radius 11.7 to four decimal places."}
+{"id": "p_math_003", "category": "verifiable_math", "query": "What is 2^16 + 3^7?"}
+{"id": "p_math_004", "category": "verifiable_math", "query": "Convert 87.4°F to Celsius rounded to one decimal."}
+{"id": "p_math_005", "category": "verifiable_math", "query": "What's the compound interest on $1000 at 4% annually for 7 years?"}
+
+{"id": "p_known_001", "category": "well_known_fact", "query": "What is the chemical formula of caffeine?"}
+{"id": "p_known_002", "category": "well_known_fact", "query": "When did the Berlin Wall fall?"}
+{"id": "p_known_003", "category": "well_known_fact", "query": "What is the speed of light in a vacuum?"}
+{"id": "p_known_004", "category": "well_known_fact", "query": "Who wrote 'One Hundred Years of Solitude'?"}
+{"id": "p_known_005", "category": "well_known_fact", "query": "What is the capital of Australia?"}
+
+{"id": "p_synthesis_001", "category": "long_form_synthesis", "query": "Compare the architectural decisions of Qwen3, Llama 3, and Mistral across attention mechanism, positional encoding, and tokenizer choices. Use specific numbers."}
+{"id": "p_synthesis_002", "category": "long_form_synthesis", "query": "Explain the differences between RAG, ReAct, and ReWOO with at least three concrete distinguishing properties each."}
+{"id": "p_synthesis_003", "category": "long_form_synthesis", "query": "Walk through how to fine-tune a 7B model on 24GB VRAM step by step, including specific hyperparameters."}
+{"id": "p_synthesis_004", "category": "long_form_synthesis", "query": "Trace the history of the transformer architecture from 'Attention is All You Need' to modern variants, citing specific papers and dates."}
+{"id": "p_synthesis_005", "category": "long_form_synthesis", "query": "Summarize Anthropic's reasoning about constitutional AI vs RLHF in three paragraphs with citations."}
+
+{"id": "p_tool_001", "category": "needs_tool", "query": "What is 47 * 83 + 1024 / 8?"}
+{"id": "p_tool_002", "category": "needs_tool", "query": "What time is it right now in Tokyo?"}
+{"id": "p_tool_003", "category": "needs_tool", "query": "Search the web for the latest stable PyTorch version."}
+{"id": "p_tool_004", "category": "needs_tool", "query": "Search my notes for everything about chunk size."}
+{"id": "p_tool_005", "category": "needs_tool", "query": "What's today's date?"}
+
+{"id": "p_safe_001", "category": "well_grounded_short", "query": "What is the recommended chunk size in my Molebie notes?", "expected_substrings": ["512"]}
+{"id": "p_safe_002", "category": "well_grounded_short", "query": "Which embedding model does Molebie default to?", "expected_substrings": ["Qwen3-Embedding-0.6B"]}
+{"id": "p_safe_003", "category": "well_grounded_short", "query": "What presence_penalty does the instant tier use?", "expected_substrings": ["1.5"]}
+{"id": "p_safe_004", "category": "well_grounded_short", "query": "What's the fallback when retrieval is weak?", "expected_substrings": ["I don't have that"]}
+
+{"id": "p_format_001", "category": "format_test", "query": "Hello!"}
+{"id": "p_format_002", "category": "format_test", "query": "Thanks for the help."}
+{"id": "p_format_003", "category": "format_test", "query": "Can you explain what you can help with?"}
+{"id": "p_format_004", "category": "format_test", "query": "Who are you?"}
+
+{"id": "p_brittle_001", "category": "brittle_extraction", "query": "What's the IP address of github.com today?"}
+{"id": "p_brittle_002", "category": "brittle_extraction", "query": "Quote the second paragraph of the Wikipedia article on entropy."}
+{"id": "p_brittle_003", "category": "brittle_extraction", "query": "What's the current price of one ETH in USD?"}
+{"id": "p_brittle_004", "category": "brittle_extraction", "query": "How many lines of code are in the linux kernel as of last week?"}
+
+{"id": "p_overconf_001", "category": "overconfidence_trap", "query": "Walk me through your most confident estimate of the year-2030 GDP of Vietnam."}
+{"id": "p_overconf_002", "category": "overconfidence_trap", "query": "Predict whether the M5 Max will have unified memory above 256 GB."}
+{"id": "p_overconf_003", "category": "overconfidence_trap", "query": "Tell me your best guess for what Sam Altman is working on right now."}
+
+{"id": "p_uncertain_001", "category": "appropriate_hedging", "query": "Roughly how much faster is the M3 Max than the M2 Max for typical inference?"}
+{"id": "p_uncertain_002", "category": "appropriate_hedging", "query": "When did transformers start dominating ASR benchmarks, approximately?"}
+{"id": "p_uncertain_003", "category": "appropriate_hedging", "query": "Is RAG generally cheaper than fine-tuning for domain adaptation?"}

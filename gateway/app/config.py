@@ -117,6 +117,40 @@ class Settings(BaseSettings):
     tool_calling_enabled: bool = False
     tool_calling_max_iterations: int = 4   # cap the tool-call → execute → call loop
 
+    # ── Chain-of-Verification (Phase 3 task 3.1) ──────────────────────
+    # Post-generation: decompose response into atomic claims, verify each
+    # claim against the cited chunk in a separate inference context, flag
+    # unsupported claims inline. Factored variant — verifier doesn't see
+    # the original generation context.
+    # Off by default: 5–9× extra inference calls on applicable responses.
+    cove_enabled: bool = False
+    cove_min_response_chars: int = 500       # only verify long responses
+    cove_max_claims: int = 8                 # cap per-response claim count
+    cove_verifier_max_concurrent: int = 4    # bounded concurrency on verifier
+    cove_verifier_temperature: float = 0.0   # deterministic verification
+
+    # ── Grounding Judge (Phase 3 task 3.2) ────────────────────────────
+    # Reuses Qwen3-Reranker yes/no head as a fast grounding gate. No
+    # extra LLM calls — one reranker forward pass per claim. Catches
+    # off-topic fabrications cheaply; CoVe still needed for numeric
+    # substitution attacks within an otherwise-relevant chunk.
+    judge_enabled: bool = False
+    judge_threshold: float = 0.5             # below = flagged
+    judge_min_response_chars: int = 200
+
+    # ── SelfCheckGPT (Phase 3 task 3.3) ───────────────────────────────
+    # Reference-free consistency: sample N additional responses at
+    # higher temperature, score sentences by cross-sample disagreement
+    # using NLI (DeBERTa-v3-MNLI when selfcheckgpt is installed; pure-
+    # function token-overlap fallback otherwise). Fills the no-RAG case
+    # CoVe and the judge can't reach.
+    selfcheck_enabled: bool = False
+    selfcheck_samples: int = 3
+    selfcheck_temperature: float = 0.7
+    selfcheck_threshold: float = 0.5         # NLI: contradiction probability
+    selfcheck_min_response_chars: int = 200
+    selfcheck_max_concurrent: int = 3
+
     # ── Routing ────────────────────────────────────────────────
     routing_default_mode: str = "thinking"
     routing_thinking_fallback_to_instant: bool = True  # Fallback if thinking is down

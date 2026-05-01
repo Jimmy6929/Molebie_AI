@@ -15,6 +15,7 @@ class EmbeddingService:
     def __init__(self, settings: Settings):
         self.model_name = settings.embedding_model
         self.local_files_only = settings.embedding_local_only
+        self._expected_dim = settings.embedding_dim
         self._model = None
         self._dimension: int | None = None
 
@@ -56,6 +57,21 @@ class EmbeddingService:
             raise
         self._dimension = self._model.get_sentence_embedding_dimension()
         print(f"[embedding] Model loaded — dim={self._dimension}")
+        # Guard against silent vec-table dimension mismatches: if the model
+        # outputs a different dim than the schema expects, sqlite-vec
+        # rejects every query later with "Dimension mismatch for query
+        # vector". Fail loud at load time with a fix-it pointer instead.
+        if self._dimension != self._expected_dim:
+            raise RuntimeError(
+                f"Embedding dimension mismatch: model "
+                f"'{self.model_name}' produces {self._dimension}-dim "
+                f"vectors but EMBEDDING_DIM is {self._expected_dim}. "
+                f"Fix one of: (a) change EMBEDDING_MODEL to a "
+                f"{self._expected_dim}-dim model, (b) set "
+                f"EMBEDDING_DIM={self._dimension} in your env AND run "
+                f"gateway/scripts/migrate_embedding_dim.py + reindex, or "
+                f"(c) revert to the previous model."
+            )
 
     @property
     def dimension(self) -> int:
