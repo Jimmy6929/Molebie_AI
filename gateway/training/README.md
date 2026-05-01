@@ -29,7 +29,7 @@ Every script here exists to enforce that. The data pipeline:
 | File | Purpose |
 |------|---------|
 | `probe.py`             | Probe runner. Reuses `tests/eval/run_baseline.py`'s chat helper. |
-| `probe_set.jsonl`      | 77 seed questions across 15 categories (fake APIs, fake papers, obscure facts, well-known facts, tool-use, etc.). |
+| `probe_set.jsonl`      | 75 seed questions across 15 categories (fake APIs, fake papers, obscure facts, well-known facts, tool-use, etc.). |
 | `label.py`             | Heuristic labelling + canonical-abstention rewriter. |
 | `build_dataset.py`     | Probe records → SFT pairs + ORPO triples + replay mix manifest. |
 | `hyperparams.yaml`     | Build-plan hyperparameters (LoRA r=16, lr=2e-4, 1 epoch, bf16, etc.) + eval gates. |
