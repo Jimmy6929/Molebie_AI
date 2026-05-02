@@ -1,0 +1,359 @@
+<All keys matched successfully>
+<All keys matched successfully>
+[schema] Database already initialized at /tmp/molebie_ablation_data/molebie.db
+ Starting AI Assistant Gateway
+   Database: /tmp/molebie_ablation_data/molebie.db
+   Auth mode: single
+   Debug mode: True
+   Instant tier: http://localhost:8081
+     Model: mlx-community/Qwen3.5-4B-4bit
+   Thinking tier: http://localhost:8080
+     Model: mlx-community/Qwen3.5-9B-MLX-4bit
+   Thinking fallback to instant: True
+   RAG enabled: True
+     Embedding model: Orange/orange-nomic-v1.5-1536
+     Match count: 5, threshold: 0.4
+     Hybrid search: True
+     Contextual retrieval: True
+     Reranker: True (Qwen/Qwen3-Reranker-0.6B)
+[memory] Embedding timed out or failed (), skipping memory retrieval
+[rag] Embedding query (55 chars)...
+[embedding] Loading model: Orange/orange-nomic-v1.5-1536 (local_files_only=True)
+[embedding] Loading model: Orange/orange-nomic-v1.5-1536 (local_files_only=True)
+[embedding] Model loaded — dim=1536
+[embedding] Model loaded — dim=1536
+[rag] Found 5 chunks (top score: 0.0115)
+[reranker] Loading Qwen causal reranker: Qwen/Qwen3-Reranker-0.6B
+Loading weights:   0%|          | 0/310 [00:00<?, ?it/s]Loading weights: 100%|██████████| 310/310 [00:00<00:00, 4932.70it/s]
+[reranker] Qwen reranker loaded (yes_id=9693, no_id=2152)
+[rag] Reranked to top-5 (took 7260ms)
+[rag] Timings: embed=8262ms, search=14ms, rerank=7260ms, total=15537ms
+[chat] Retrieval confidence: MODERATE
+[chat] Sending 2 messages (2293 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (60 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 7158ms)
+[rag] Timings: embed=22ms, search=22ms, rerank=7158ms, total=7202ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2075 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (66 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 6921ms)
+[rag] Timings: embed=16ms, search=16ms, rerank=6921ms, total=6952ms
+[chat] Retrieval confidence: MODERATE
+[chat] Sending 2 messages (2182 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Citation: 2 sentences contain numbers/URLs/dates without a [S#] tag
+[chat] Judge: 0/2 claims below threshold 0.30
+[rag] Embedding query (49 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5981ms)
+[rag] Timings: embed=35ms, search=14ms, rerank=5981ms, total=6030ms
+[chat] Retrieval confidence: MODERATE
+[chat] Sending 2 messages (2765 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (50 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5221ms)
+[rag] Timings: embed=43ms, search=18ms, rerank=5221ms, total=5282ms
+[chat] Retrieval confidence: MODERATE
+[chat] Sending 2 messages (1992 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Citation: 1 sentences contain numbers/URLs/dates without a [S#] tag
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (45 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5790ms)
+[rag] Timings: embed=40ms, search=14ms, rerank=5790ms, total=5844ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2515 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 2 of 5 sources referenced
+[chat] Citation: 1 sentences contain numbers/URLs/dates without a [S#] tag
+[chat] Judge: 0/2 claims below threshold 0.30
+[rag] Embedding query (76 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4620ms)
+[rag] Timings: embed=20ms, search=10ms, rerank=4620ms, total=4650ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2467 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 2 of 5 sources referenced
+[chat] Judge skipped: no_citations
+[rag] Embedding query (56 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4637ms)
+[rag] Timings: embed=13ms, search=8ms, rerank=4637ms, total=4659ms
+[chat] Retrieval confidence: MODERATE
+[chat] Sending 2 messages (2157 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 2 of 5 sources referenced
+[chat] Citation weak: 1 sentences cite a chunk that doesn't share their key terms
+[chat] Judge: 0/2 claims below threshold 0.30
+[rag] Embedding query (54 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4533ms)
+[rag] Timings: embed=19ms, search=15ms, rerank=4533ms, total=4567ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2300 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Citation: 1 sentences contain numbers/URLs/dates without a [S#] tag
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (49 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4629ms)
+[rag] Timings: embed=21ms, search=7ms, rerank=4629ms, total=4658ms
+[chat] Retrieval confidence: MODERATE
+[chat] Sending 2 messages (2597 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (69 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5407ms)
+[rag] Timings: embed=19ms, search=9ms, rerank=5407ms, total=5436ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2656 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Judge: 0/1 claims below threshold 0.30
+[rag] Embedding query (44 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4039ms)
+[rag] Timings: embed=25ms, search=8ms, rerank=4039ms, total=4071ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2526 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (62 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4602ms)
+[rag] Timings: embed=19ms, search=7ms, rerank=4602ms, total=4629ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2637 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Citation: 1 sentences contain numbers/URLs/dates without a [S#] tag
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (63 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4895ms)
+[rag] Timings: embed=15ms, search=14ms, rerank=4895ms, total=4924ms
+[chat] Retrieval confidence: LOW
+[chat] Sending 2 messages (2729 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Judge skipped: no_claims_extracted
+[rag] Embedding query (57 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 3920ms)
+[rag] Timings: embed=20ms, search=8ms, rerank=3920ms, total=3947ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2415 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citations OK: 1 of 5 sources referenced
+[chat] Judge skipped: no_claims_extracted
+[rag] Embedding query (59 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 3788ms)
+[rag] Timings: embed=12ms, search=6ms, rerank=3788ms, total=3805ms
+[chat] Retrieval confidence: HIGH
+[chat] Sending 2 messages (2271 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (68 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4345ms)
+[rag] Timings: embed=20ms, search=8ms, rerank=4345ms, total=4374ms
+[chat] Retrieval confidence: LOW
+[chat] Sending 2 messages (2466 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (82 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4984ms)
+[rag] Timings: embed=18ms, search=7ms, rerank=4984ms, total=5009ms
+[chat] Retrieval confidence: LOW
+[chat] Sending 2 messages (2921 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (85 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5061ms)
+[rag] Timings: embed=13ms, search=9ms, rerank=5061ms, total=5083ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2312 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (79 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 7177ms)
+[rag] Timings: embed=20ms, search=10ms, rerank=7177ms, total=7208ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2796 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (44 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4618ms)
+[rag] Timings: embed=18ms, search=7ms, rerank=4618ms, total=4643ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2321 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (99 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 6853ms)
+[rag] Timings: embed=13ms, search=11ms, rerank=6853ms, total=6876ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (3305 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (61 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 6834ms)
+[rag] Timings: embed=20ms, search=8ms, rerank=6834ms, total=6862ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (3126 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (46 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5251ms)
+[rag] Timings: embed=20ms, search=8ms, rerank=5251ms, total=5279ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2630 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (61 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5748ms)
+[rag] Timings: embed=16ms, search=7ms, rerank=5748ms, total=5772ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2686 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (94 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 6650ms)
+[rag] Timings: embed=18ms, search=11ms, rerank=6650ms, total=6678ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (3021 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (78 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5195ms)
+[rag] Timings: embed=19ms, search=10ms, rerank=5195ms, total=5224ms
+[chat] Retrieval confidence: LOW
+[chat] Sending 2 messages (2781 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (34 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 3972ms)
+[rag] Timings: embed=13ms, search=8ms, rerank=3972ms, total=3993ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2361 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (99 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 3668ms)
+[rag] Timings: embed=23ms, search=8ms, rerank=3668ms, total=3698ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2432 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (59 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5743ms)
+[rag] Timings: embed=18ms, search=8ms, rerank=5743ms, total=5769ms
+[chat] Retrieval confidence: LOW
+[chat] Sending 2 messages (3044 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (61 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 3725ms)
+[rag] Timings: embed=19ms, search=8ms, rerank=3725ms, total=3752ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2447 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (55 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4513ms)
+[rag] Timings: embed=14ms, search=12ms, rerank=4513ms, total=4540ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2596 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (35 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5427ms)
+[rag] Timings: embed=19ms, search=7ms, rerank=5427ms, total=5453ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (3201 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (42 chars)...
+[rag] No matching chunks (threshold=0.4)
+[chat] Sending 2 messages (1155 chars) to inference
+[rag] Embedding query (69 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 4392ms)
+[rag] Timings: embed=12ms, search=7ms, rerank=4392ms, total=4411ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2438 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: no_citations
+[rag] Embedding query (67 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5457ms)
+[rag] Timings: embed=16ms, search=12ms, rerank=5457ms, total=5486ms
+[chat] Retrieval confidence: LOW
+[chat] Sending 2 messages (2703 chars) to inference
+[chat] Response validation: sources_not_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources
+[chat] Judge skipped: response_too_short
+[rag] Embedding query (78 chars)...
+[rag] Found 5 chunks (top score: 0.0115)
+[rag] Reranked to top-5 (took 5127ms)
+[rag] Timings: embed=13ms, search=10ms, rerank=5127ms, total=5151ms
+[chat] Retrieval confidence: REFUSE
+[chat] Sending 2 messages (2722 chars) to inference
+[chat] Response validation: sources_referenced (provided: 5 sources)
+[chat] Citation warning: response cites none of the 5 provided sources/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-52884-v017od6e'}
+  warnings.warn(

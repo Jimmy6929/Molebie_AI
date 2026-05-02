@@ -24,7 +24,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-ROOT_DIR="$(git -C . rev-parse --show-toplevel 2>/dev/null || cd ../../.. && pwd)"
+ROOT_DIR="$(git -C . rev-parse --show-toplevel 2>/dev/null)"
+[ -n "$ROOT_DIR" ] || ROOT_DIR="$(cd ../../.. && pwd)"
 VENV_PY="${ROOT_DIR}/.venv/bin/python"
 
 PASSWORD="${PASSWORD:-smoketest}"
@@ -50,6 +51,22 @@ COMMON_ENV=(
   "EMBEDDING_LOCAL_ONLY=true"
 )
 
+# `env -i` clears the inherited env, which strips the user's INFERENCE_*
+# / EMBEDDING_MODEL / RAG_* settings from .env.local. Forward those through
+# explicitly so the gateway talks to the real MLX backends instead of mock.
+# Per-run extras (passed to start_gateway) still win since they're appended last.
+FORWARDED_ENV=()
+ENV_LOCAL="${ROOT_DIR}/.env.local"
+if [ -f "$ENV_LOCAL" ]; then
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line// }" ]] && continue
+    case "$line" in
+      INFERENCE_*|EMBEDDING_MODEL=*|RAG_*) FORWARDED_ENV+=("$line") ;;
+    esac
+  done < "$ENV_LOCAL"
+fi
+
 start_gateway() {
   local label="$1"; shift
   local extra=("$@")
@@ -57,7 +74,8 @@ start_gateway() {
   echo "═══ Boot: ${label} ═══"
   pkill -f "uvicorn app.main:app --host 127.0.0.1 --port ${PORT}" 2>/dev/null || true
   sleep 1
-  env -i PATH="$PATH" HOME="$HOME" \
+  env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="${ROOT_DIR}/gateway" \
+    "${FORWARDED_ENV[@]}" \
     "${COMMON_ENV[@]}" "${extra[@]}" \
     "${VENV_PY}" -m uvicorn app.main:app \
       --host 127.0.0.1 --port "$PORT" --log-level warning \
@@ -105,6 +123,22 @@ print(
 )
 PY
 }
+
+# ── Seed corpus (one-time, persists across all 4 configs) ─────────────────
+# Without this, /tmp/molebie_ablation_data is empty → CoVe/Judge gates
+# short-circuit on every query because no RAG chunks exist. The seeded
+# docs cover the rag_grounded golden-set questions.
+echo
+echo "═══ Seed corpus ═══"
+start_gateway "seed" \
+  COVE_ENABLED=false JUDGE_ENABLED=false SELFCHECK_ENABLED=false
+"${VENV_PY}" seed_corpus.py --gateway "$GATEWAY" --password "$PASSWORD" || {
+  echo "  Seed failed; aborting"
+  pkill -f "uvicorn app.main:app --host 127.0.0.1 --port ${PORT}" 2>/dev/null || true
+  exit 1
+}
+pkill -f "uvicorn app.main:app --host 127.0.0.1 --port ${PORT}" 2>/dev/null || true
+sleep 2
 
 # ── Run 1: baseline (no Phase 3) ──────────────────────────────────────────
 start_gateway "baseline" \
