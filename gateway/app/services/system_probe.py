@@ -73,12 +73,29 @@ class SystemProbe:
             self._task = None
 
     async def _run(self, interval: float) -> None:
+        # Heartbeat — record each poll as a subsystem call so the operator
+        # sees constant motion in the Subsystems panel even when no chat
+        # request is in flight. Imported lazily to avoid a circular import
+        # at module load time.
+        from app.services.metrics_registry import get_metrics_registry
+        registry = get_metrics_registry()
         while not self._stopping:
+            t0 = time.monotonic()
+            ok = True
             try:
                 snap = await asyncio.to_thread(self.poll_once)
                 self._latest = snap
             except Exception as exc:
+                ok = False
                 self._latest = SystemSnapshot(ts=time.time(), note=f"probe error: {exc}")
+            try:
+                await registry.record_subsystem(
+                    "probe.system",
+                    (time.monotonic() - t0) * 1000.0,
+                    ok=ok,
+                )
+            except Exception:
+                pass
             await asyncio.sleep(interval)
 
     def poll_once(self) -> SystemSnapshot:        # pragma: no cover - overridden

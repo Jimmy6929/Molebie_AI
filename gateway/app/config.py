@@ -95,6 +95,15 @@ class Settings(BaseSettings):
     # validator, so misconfigured .env files don't crash the service.
     inference_max_presence_penalty: float = 1.5
 
+    # Which OpenAI-compatible backend the inference URLs point at. Controls
+    # only the on-the-wire field name for repetition penalty:
+    #   * "auto" / "mlx" / "vllm" / "ollama" → ``repetition_penalty``
+    #   * "llamacpp"                          → ``repeat_penalty``
+    # Default "auto" sends both names so a tuned value is honoured by either
+    # server family. Set explicitly when running a llama.cpp-only deployment
+    # to keep the wire payload minimal.
+    inference_backend_flavor: str = "auto"
+
     # When True, thinking-tier requests with RAG context disable CoT —
     # 9B "burns thousands of thinking tokens in circles" on retrieval Q&A.
     # See task 1.3 in tasks/hallucination-mitigation/phase-1-foundation.md.

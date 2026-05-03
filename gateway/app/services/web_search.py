@@ -20,6 +20,7 @@ except ImportError:  # graceful fallback if not installed
     trafilatura = None  # type: ignore[assignment]
 
 from app.config import Settings, get_settings
+from app.services.metrics_registry import get_metrics_registry
 
 _TRIVIAL_PATTERNS = re.compile(
     r"^("
@@ -190,6 +191,11 @@ class WebSearchService:
 
     async def _classify_with_llm(self, message: str) -> bool:
         """Ask the instant model whether this message needs a web search."""
+        metrics = get_metrics_registry()
+        async with metrics.subsystem_timer("web.classify"):
+            return await self._classify_with_llm_inner(message)
+
+    async def _classify_with_llm_inner(self, message: str) -> bool:
         try:
             from app.services.inference import get_inference_service
 
@@ -269,7 +275,12 @@ class WebSearchService:
 
         Returns an empty list on any failure so chat can proceed without search.
         """
+        metrics = get_metrics_registry()
         limit = num_results or self.max_results
+        async with metrics.subsystem_timer("web.query", note=query[:60]):
+            return await self._search_inner(query, limit)
+
+    async def _search_inner(self, query: str, limit: int) -> list[dict[str, Any]]:
         try:
             # Short connect timeout (1s) so we fail fast when offline;
             # the read timeout stays at the configured value for slow searches.
@@ -327,6 +338,11 @@ class WebSearchService:
         """Fetch full-page content from *url* and extract clean text."""
         if trafilatura is None:
             return None
+        metrics = get_metrics_registry()
+        async with metrics.subsystem_timer("web.fetch", note=_extract_domain(url)):
+            return await self._fetch_page_content_inner(url)
+
+    async def _fetch_page_content_inner(self, url: str) -> str | None:
         try:
             async with httpx.AsyncClient(timeout=self.full_content_timeout) as client:
                 resp = await client.get(

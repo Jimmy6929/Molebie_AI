@@ -7,15 +7,45 @@ user isolation via WHERE user_id = ? in every query.
 
 import json
 import struct
+import time
 import uuid
 from datetime import datetime, timezone
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import Any
 
 import aiosqlite
 
 from app.config import Settings, get_settings
 from app.schema import get_connection
+
+
+def _timed_db(name: str):
+    """Decorator: record latency of an async DatabaseService method as a
+    `db.<name>` subsystem call. Lazy-imports the registry to avoid a
+    circular import at module load. Failures in the metrics path never
+    affect the wrapped call's return value or exception."""
+    def decorator(fn):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            t0 = time.monotonic()
+            ok = True
+            try:
+                return await fn(*args, **kwargs)
+            except Exception:
+                ok = False
+                raise
+            finally:
+                try:
+                    from app.services.metrics_registry import get_metrics_registry
+                    await get_metrics_registry().record_subsystem(
+                        f"db.{name}",
+                        (time.monotonic() - t0) * 1000.0,
+                        ok=ok,
+                    )
+                except Exception:
+                    pass
+        return wrapper
+    return decorator
 
 
 def _now() -> str:
@@ -72,6 +102,7 @@ class DatabaseService:
         )
         return _row_to_dict(row[0]) if row else None
 
+    @_timed_db("get_session")
     async def get_session(
         self, session_id: str, user_id: str, **_kwargs
     ) -> dict[str, Any] | None:
@@ -82,6 +113,7 @@ class DatabaseService:
         )
         return _row_to_dict(rows[0]) if rows else None
 
+    @_timed_db("list_sessions")
     async def list_sessions(
         self, user_id: str, limit: int = 50, **_kwargs
     ) -> list[dict[str, Any]]:
@@ -146,6 +178,7 @@ class DatabaseService:
 
     # ==================== Messages ====================
 
+    @_timed_db("create_message")
     async def create_message(
         self,
         session_id: str,
@@ -193,6 +226,7 @@ class DatabaseService:
         )
         await db.commit()
 
+    @_timed_db("get_session_messages")
     async def get_session_messages(
         self,
         session_id: str,
@@ -483,6 +517,7 @@ class DatabaseService:
                 )
         await db.commit()
 
+    @_timed_db("user_has_document_chunks")
     async def user_has_document_chunks(self, user_id: str) -> bool:
         db = await self._get_conn()
         rows = await db.execute_fetchall(

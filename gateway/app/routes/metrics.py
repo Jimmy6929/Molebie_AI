@@ -12,6 +12,12 @@ Design calls baked in:
     prompt-preview path behind an explicit header gate.
   * **Cheap.** Reads cached probe snapshots; does not trigger any
     blocking work. Safe to poll at 2 Hz.
+
+Schema versioning: `meta.schema_version` is the single guardrail letting
+the gateway and CLI evolve independently. Bump this constant in
+metrics_registry.SCHEMA_VERSION when adding fields the CLI must know
+about; the monitor checks the value once per snapshot and degrades
+gracefully if it's older or newer than expected.
 """
 
 from __future__ import annotations
@@ -21,7 +27,8 @@ import time
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.services.backend_probe import get_backend_probe
-from app.services.metrics_registry import get_metrics_registry
+from app.services.metrics_registry import SCHEMA_VERSION, get_metrics_registry
+from app.services.storage_probe import get_storage_probe
 from app.services.system_probe import get_system_probe
 
 router = APIRouter(prefix="/metrics", tags=["Metrics"])
@@ -43,12 +50,44 @@ async def get_live_metrics(request: Request) -> dict:
     """Return a single snapshot of gateway + system + backend state."""
     _require_loopback(request)
 
-    registry_snap = await get_metrics_registry().snapshot()
+    registry = get_metrics_registry()
+    registry_snap = await registry.snapshot()
     sys_snap = get_system_probe().latest()
     backend_snap = get_backend_probe().latest()
 
+    # V2 reads — degrade silently if the storage probe wasn't started
+    # (e.g. data_dir misconfigured at boot). Empty dicts let the CLI
+    # render "—" placeholders rather than crash.
+    subsystems_snap = await registry.subsystems_snapshot()
+    pipeline_snap = await registry.pipeline_snapshot()
+    tasks_snap = await registry.tasks_snapshot()
+    models_snap = await registry.models_snapshot()
+    in_flight_snap = await registry.in_flight_snapshot()
+    try:
+        storage = get_storage_probe().latest()
+        storage_dict = {
+            "db_path": storage.db_path,
+            "db_size_bytes": storage.db_size_bytes,
+            "documents": {
+                "count": storage.documents_count,
+                "chunks": storage.chunks_count,
+            },
+            "sessions": {
+                "count": storage.sessions_count,
+                "messages": storage.messages_count,
+            },
+            "memories": {"count": storage.memories_count},
+            "note": storage.note,
+        }
+    except RuntimeError:
+        storage_dict = {}
+
     return {
         "ts": time.time(),
+        "meta": {
+            "schema_version": SCHEMA_VERSION,
+            "uptime_sec": registry_snap["uptime_sec"],
+        },
         "system": {
             "cpu_percent": sys_snap.cpu_percent,
             "cpu_cores": sys_snap.cpu_cores,
@@ -87,4 +126,10 @@ async def get_live_metrics(request: Request) -> dict:
             "tpot_series": registry_snap["tpot_series"],
             "recent_events": registry_snap["recent_events"],
         },
+        "subsystems": subsystems_snap,
+        "pipeline": pipeline_snap,
+        "tasks": tasks_snap,
+        "models": models_snap,
+        "storage": storage_dict,
+        "in_flight": in_flight_snap,
     }

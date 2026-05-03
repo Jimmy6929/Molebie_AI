@@ -13,6 +13,7 @@ from typing import Any
 from app.config import Settings, get_settings
 from app.services.database import DatabaseService, get_database_service
 from app.services.embedding import EmbeddingService, get_embedding_service
+from app.services.metrics_registry import get_metrics_registry
 
 
 def _quality_label(similarity: float) -> str:
@@ -158,10 +159,12 @@ class RAGService:
         threshold: float,
     ) -> list[dict[str, Any]]:
         """Run a single vector similarity search against document_chunks."""
+        metrics = get_metrics_registry()
         try:
-            return await self.db.vector_search_chunks(
-                user_id, query_embedding, threshold, count
-            )
+            async with metrics.subsystem_timer("rag.vector_search"):
+                return await self.db.vector_search_chunks(
+                    user_id, query_embedding, threshold, count
+                )
         except Exception as exc:
             print(f"[rag] Similarity search failed: {type(exc).__name__}: {exc}")
             return []
@@ -175,18 +178,23 @@ class RAGService:
         threshold: float,
     ) -> list[dict[str, Any]]:
         """Run hybrid search (vector + full-text) with RRF fusion."""
+        metrics = get_metrics_registry()
         try:
-            vector_results, text_results = await asyncio.gather(
-                self.db.vector_search_chunks(user_id, query_embedding, threshold, count),
-                self.db.fts_search_chunks(user_id, query_text, count),
-            )
-            return _rrf_fuse(
-                vector_results,
-                text_results,
-                k=self.rrf_k,
-                vector_weight=self.vector_weight,
-                text_weight=self.text_weight,
-            )[:count]
+            async def _vec():
+                async with metrics.subsystem_timer("rag.vector_search"):
+                    return await self.db.vector_search_chunks(user_id, query_embedding, threshold, count)
+            async def _fts():
+                async with metrics.subsystem_timer("rag.fts_search"):
+                    return await self.db.fts_search_chunks(user_id, query_text, count)
+            vector_results, text_results = await asyncio.gather(_vec(), _fts())
+            async with metrics.subsystem_timer("rag.rrf_fuse"):
+                return _rrf_fuse(
+                    vector_results,
+                    text_results,
+                    k=self.rrf_k,
+                    vector_weight=self.vector_weight,
+                    text_weight=self.text_weight,
+                )[:count]
         except Exception as exc:
             print(f"[rag] Hybrid search failed: {type(exc).__name__}: {exc}")
             print("[rag] Falling back to vector-only search")
@@ -283,13 +291,16 @@ class RAGService:
         thresh = threshold or self.match_threshold
         timings: dict[str, float] = {}
 
+        metrics = get_metrics_registry()
+
         # Step 0: Query rewriting (contextual expansion)
         search_query = query
         if (self.settings.rag_query_rewrite_enabled
                 and conversation_context
                 and len(conversation_context) >= 2):
             t_rw = time.monotonic()
-            search_query = await self._rewrite_query(query, conversation_context)
+            async with metrics.subsystem_timer("rag.rewrite"):
+                search_query = await self._rewrite_query(query, conversation_context)
             timings["t_rewrite_ms"] = round((time.monotonic() - t_rw) * 1000, 1)
         else:
             timings["t_rewrite_ms"] = 0
@@ -297,7 +308,15 @@ class RAGService:
         # Step 1: Embed query
         t0 = time.monotonic()
         print(f"[rag] Embedding query ({len(search_query)} chars)...")
-        query_embedding = self.embedding.embed(search_query)
+        async with metrics.subsystem_timer("rag.embed", note=f"{len(search_query)} chars"):
+            query_embedding = self.embedding.embed(search_query)
+        # Embedding model is loaded by now — declare it (idempotent).
+        await metrics.set_model_state(
+            "embedding",
+            loaded=True,
+            url=self.settings.embedding_model,
+            status="loaded",
+        )
         timings["t_embed_ms"] = round((time.monotonic() - t0) * 1000, 1)
 
         # Step 2: Search
@@ -325,8 +344,23 @@ class RAGService:
             try:
                 from app.services.reranker import get_reranker
                 reranker = get_reranker()
-                results = reranker.rerank(
-                    query, results, top_k=self.settings.rag_rerank_top_k
+                top_score: float | None = None
+                async with metrics.subsystem_timer(
+                    "rag.rerank",
+                    note=f"top-{self.settings.rag_rerank_top_k} from {len(results)}",
+                ):
+                    results = reranker.rerank(
+                        query, results, top_k=self.settings.rag_rerank_top_k
+                    )
+                if results:
+                    top_score = results[0].get("rerank_score")
+                # Reranker model is loaded by now — declare it (idempotent).
+                await metrics.set_model_state(
+                    "reranker",
+                    loaded=True,
+                    url=self.settings.rag_reranker_model,
+                    status="loaded",
+                    extra={"top_score": top_score} if top_score is not None else None,
                 )
                 timings["t_rerank_ms"] = round((time.monotonic() - t2) * 1000, 1)
                 print(f"[rag] Reranked to top-{len(results)} (took {timings['t_rerank_ms']:.0f}ms)")

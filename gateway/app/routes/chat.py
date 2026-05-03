@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import re
+import secrets
 import time
 from datetime import date
 from functools import lru_cache
@@ -50,6 +51,19 @@ from app.services.judge import get_grounding_judge
 from app.services.selfcheck import get_selfcheck_service
 from app.services.verification import get_chain_of_verification
 from app.services.web_search import WebSearchService, get_web_search_service
+
+
+async def _run_tracked_task(name: str, coro):
+    """Wrap a fire-and-forget coroutine with mark_task lifecycle so the
+    Tasks panel in the live monitor reflects what's happening."""
+    registry = get_metrics_registry()
+    await registry.mark_task(name, "start")
+    try:
+        await coro
+        await registry.mark_task(name, "done")
+    except Exception as exc:
+        print(f"[chat] Background task {name} failed: {type(exc).__name__}: {exc}")
+        await registry.mark_task(name, "fail")
 
 
 @lru_cache(maxsize=4)
@@ -687,15 +701,22 @@ async def send_message(
     # RAG retrieval runs BEFORE system-message build so chunks can be slotted
     # into the strict-grounding template (system_rag.txt) instead of being
     # appended after a general prompt — this gives the model unambiguous
-    # citation rules and a defined refusal path.
+    # citation rules and a defined refusal path. RAG failures degrade to
+    # no-context retrieval rather than failing the whole request — the
+    # model can still answer from memory + chat history.
     rag_chunks = []
     if not request.conversation_mode:
         if not rag.enabled:
             print("[chat] RAG disabled — skipping document retrieval")
         elif await rag.user_has_documents(user_id):
-            rag_chunks = await rag.retrieve_context(
-                user_id, request.message, conversation_context=hist_messages,
-            )
+            try:
+                rag_chunks = await rag.retrieve_context(
+                    user_id, request.message, conversation_context=hist_messages,
+                )
+            except Exception as exc:
+                print(f"[chat] RAG retrieval failed — continuing without context: "
+                      f"{type(exc).__name__}: {exc}")
+                rag_chunks = []
 
     rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
     rag_confidence = compute_retrieval_confidence(rag_chunks) if rag_chunks else "NONE"
@@ -898,12 +919,21 @@ async def send_message(
     # runs before CoVe: ~one reranker forward pass per claim, no LLM
     # calls. Catches off-topic fabrications fast; CoVe still handles the
     # harder numeric-substitution cases. Default off.
+    _post_metrics = get_metrics_registry()
     judge_report = None
     if settings.judge_enabled and rag_chunks:
         try:
             from app.services.reranker import get_reranker
             judge = get_grounding_judge(get_reranker(), settings)
+            t_judge = time.perf_counter()
             judge_result = judge.judge(response=clean_content, rag_chunks=rag_chunks)
+            await _post_metrics.record_subsystem(
+                "verify.judge",
+                latency_ms=(time.perf_counter() - t_judge) * 1000.0,
+                ok=True,
+                note=f"{judge_result.flagged_count}/{judge_result.scored_count} flagged"
+                     if judge_result.applied else "skipped",
+            )
             if judge_result.applied:
                 print(
                     f"[chat] Judge: {judge_result.flagged_count}/"
@@ -977,12 +1007,13 @@ async def send_message(
     if settings.selfcheck_enabled and not rag_chunks:
         try:
             selfcheck = get_selfcheck_service(inference, settings)
-            sc_result = await selfcheck.maybe_check(
-                response=clean_content,
-                messages_for_resample=messages,
-                rag_chunks=rag_chunks,
-                mode=inference_result.get("mode_used", "instant"),
-            )
+            async with _post_metrics.subsystem_timer("verify.selfcheck"):
+                sc_result = await selfcheck.maybe_check(
+                    response=clean_content,
+                    messages_for_resample=messages,
+                    rag_chunks=rag_chunks,
+                    mode=inference_result.get("mode_used", "instant"),
+                )
             if sc_result.applied:
                 print(
                     f"[chat] SelfCheck ({sc_result.backend}): "
@@ -1028,19 +1059,21 @@ async def send_message(
     total_msg_count = len(history) + 1  # +1 for the assistant message just saved
     summariser = get_summariser_service()
     if summariser.should_summarise(total_msg_count + summary_msg_count, summary_msg_count):
-        asyncio.create_task(
-            summariser.summarise_session(session_id, user_id)
-        )
+        asyncio.create_task(_run_tracked_task(
+            "task.summary",
+            summariser.summarise_session(session_id, user_id),
+        ))
 
     if memory_service.should_extract(total_msg_count):
         recent_for_extraction = hist_messages + [
             {"role": "assistant", "content": clean_content}
         ]
-        asyncio.create_task(
+        asyncio.create_task(_run_tracked_task(
+            "task.memory_extract",
             memory_service.extract_and_store(
                 session_id, user_id, recent_for_extraction
-            )
-        )
+            ),
+        ))
 
     # Build inference metadata for the response. Merge the citation report
     # (task 1.9 Stage A) into rag_metrics — it's a free-form dict, so no
@@ -1331,16 +1364,44 @@ async def send_message_stream(
         except Exception as exc:
             print(f"[chat] Memory retrieval failed: {exc}")
 
+    # Per-request id for the live pipeline panel (so the monitor can show
+    # one timeline per chat turn). Short hex — 8 chars is plenty for the
+    # bounded 50-event window we keep in the registry.
+    req_id = secrets.token_hex(4)
+    pipeline_metrics = get_metrics_registry()
+    await pipeline_metrics.pipeline_event(req_id, "request.start", status="ok",
+                                           note="streaming")
+
     # RAG retrieval runs BEFORE system-message build so chunks slot into the
-    # strict-grounding template — see send_message() for rationale.
+    # strict-grounding template — see send_message() for rationale. RAG
+    # failures (bad embedding model, missing reranker, etc.) must NEVER
+    # break the chat stream — degrade to no-context retrieval and let the
+    # model answer without RAG. The pipeline event records the failure so
+    # the operator can see what broke without losing the user's response.
     rag_chunks = []
     if not request.conversation_mode:
         if not rag.enabled:
             print("[chat] RAG disabled — skipping document retrieval")
         elif await rag.user_has_documents(user_id):
-            rag_chunks = await rag.retrieve_context(
-                user_id, request.message, conversation_context=hist_messages,
-            )
+            t_rag = time.perf_counter()
+            try:
+                rag_chunks = await rag.retrieve_context(
+                    user_id, request.message, conversation_context=hist_messages,
+                )
+                _ms = (time.perf_counter() - t_rag) * 1000.0
+                await pipeline_metrics.pipeline_event(
+                    req_id, "rag.retrieve", ms=_ms, status="ok",
+                    note=f"{len(rag_chunks)} chunks",
+                )
+            except Exception as exc:
+                _ms = (time.perf_counter() - t_rag) * 1000.0
+                print(f"[chat] RAG retrieval failed — continuing without context: "
+                      f"{type(exc).__name__}: {exc}")
+                await pipeline_metrics.pipeline_event(
+                    req_id, "rag.retrieve", ms=_ms, status="fail",
+                    note=f"{type(exc).__name__}: {str(exc)[:80]}",
+                )
+                rag_chunks = []
 
     rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
     rag_confidence = compute_retrieval_confidence(rag_chunks) if rag_chunks else "NONE"
@@ -1399,6 +1460,7 @@ async def send_message_stream(
         # return — critical, because a stuck counter poisons the dashboard.
         registry = get_metrics_registry()
         t_req_start = time.perf_counter()
+        t_req_start_wall = time.time()
         t_first_token: float | None = None
         n_content_deltas = 0
         _metrics_error: str | None = None
@@ -1422,11 +1484,17 @@ async def send_message_stream(
                 except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
                     return
 
+                t_ws = time.perf_counter()
                 search_results = await web_search.search(request.message)
                 if search_results:
                     search_results = await web_search.enrich_with_full_content(search_results)
                     context_text = web_search.format_results_for_context(search_results)
                     messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
+                _ms_ws = (time.perf_counter() - t_ws) * 1000.0
+                await registry.pipeline_event(
+                    req_id, "web.search", ms=_ms_ws, status="ok",
+                    note=f"{len(search_results)} results",
+                )
 
                 sources = [{"title": r["title"], "url": r["url"]} for r in search_results]
                 try:
@@ -1445,6 +1513,22 @@ async def send_message_stream(
                 for m in messages
             )
             print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
+            await registry.pipeline_event(
+                req_id, f"inference.{inference_mode}", status="running",
+                note=f"{total_chars} chars in",
+            )
+            await registry.set_in_flight(
+                req_id=req_id,
+                stage=f"inference.{inference_mode}",
+                started_at=t_req_start_wall,
+                tokens=0,
+                note=f"{total_chars} chars in",
+            )
+            # Push a live token-count update at most every ~0.5s so the
+            # in-flight panel stays current without thrashing the lock on
+            # every delta during fast streams.
+            _last_inflight_push = time.perf_counter()
+            _INFLIGHT_PUSH_EVERY_SEC = 0.5
 
             async for chunk in inference.generate_response_stream(
                 messages=messages,
@@ -1468,6 +1552,24 @@ async def send_message_stream(
                 except (json.JSONDecodeError, IndexError, KeyError):
                     pass
 
+                # Periodic in-flight refresh so the live panel shows a rising
+                # token counter during long thinking-mode streams.
+                _now = time.perf_counter()
+                if _now - _last_inflight_push >= _INFLIGHT_PUSH_EVERY_SEC:
+                    _last_inflight_push = _now
+                    _ttft = ((t_first_token - t_req_start) * 1000.0) if t_first_token else None
+                    try:
+                        await registry.set_in_flight(
+                            req_id=req_id,
+                            stage=f"inference.{inference_mode}",
+                            started_at=t_req_start_wall,
+                            tokens=n_content_deltas,
+                            ttft_ms=_ttft,
+                            note=f"{n_content_deltas} deltas",
+                        )
+                    except Exception:
+                        pass
+
                 if await http_request.is_disconnected():
                     client_disconnected = True
                     break
@@ -1479,7 +1581,16 @@ async def send_message_stream(
                     break
 
             if client_disconnected:
+                await registry.pipeline_event(
+                    req_id, f"inference.{inference_mode}", status="fail",
+                    note="client disconnected",
+                )
                 return
+            _inf_ms = (time.perf_counter() - t_req_start) * 1000.0
+            await registry.pipeline_event(
+                req_id, f"inference.{inference_mode}", ms=_inf_ms, status="ok",
+                note=f"{n_content_deltas} deltas",
+            )
 
             # Build final content for DB (strip thinking tags, persist reasoning separately)
             raw_content = "".join(full_content)
@@ -1520,19 +1631,21 @@ async def send_message_stream(
                     total_msg_count = len(history) + 1
                     summariser = get_summariser_service()
                     if summariser.should_summarise(total_msg_count + summary_msg_count, summary_msg_count):
-                        asyncio.create_task(
-                            summariser.summarise_session(session_id, user_id)
-                        )
+                        asyncio.create_task(_run_tracked_task(
+                            "task.summary",
+                            summariser.summarise_session(session_id, user_id),
+                        ))
 
                     if memory_service.should_extract(total_msg_count):
                         recent_for_extraction = hist_messages + [
                             {"role": "assistant", "content": save_content}
                         ]
-                        asyncio.create_task(
+                        asyncio.create_task(_run_tracked_task(
+                            "task.memory_extract",
                             memory_service.extract_and_store(
                                 session_id, user_id, recent_for_extraction
-                            )
-                        )
+                            ),
+                        ))
                 except Exception as db_err:
                     print(f"[chat] Failed to save assistant message to DB: {db_err}")
 
@@ -1547,6 +1660,7 @@ async def send_message_stream(
             if ttft_ms is not None and n_content_deltas > 1:
                 tpot_ms = max(0.0, (total_ms - ttft_ms) / n_content_deltas)
             await registry.mark_inactive(inference_mode)
+            await registry.clear_in_flight()
             await registry.record(RequestRecord(
                 ended_at=time.time(),
                 tier=inference_mode,
@@ -1656,21 +1770,27 @@ async def text_to_speech(
 
     settings = get_settings()
     kokoro_url = settings.kokoro_tts_url
+    registry = get_metrics_registry()
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{kokoro_url}/v1/audio/speech",
-                json={
-                    "model": "kokoro",
-                    "input": request.text,
-                    "voice": request.voice,
-                    "speed": request.speed,
-                    "response_format": "mp3",
-                },
-            )
-            resp.raise_for_status()
+        async with registry.subsystem_timer(
+            "tts.synth", note=f"voice={request.voice} {len(request.text)} chars",
+        ):
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{kokoro_url}/v1/audio/speech",
+                    json={
+                        "model": "kokoro",
+                        "input": request.text,
+                        "voice": request.voice,
+                        "speed": request.speed,
+                        "response_format": "mp3",
+                    },
+                )
+                resp.raise_for_status()
+        await registry.set_model_state("tts", url=kokoro_url, status="up")
     except httpx.ConnectError:
+        await registry.set_model_state("tts", url=kokoro_url, status="down")
         raise HTTPException(status_code=503, detail="Kokoro TTS service not reachable. Is it running?")
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=f"Kokoro TTS error: {exc.response.status_code}")

@@ -28,6 +28,38 @@ from app.config import Settings, get_settings
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 
+def _apply_sampling_params(
+    payload: dict[str, Any],
+    presence_penalty: float,
+    repetition_penalty: float,
+    flavor: str = "auto",
+) -> None:
+    """Add sampling penalty fields to ``payload`` only when non-default.
+
+    Default values (``presence_penalty=0.0``, ``repetition_penalty=1.0``)
+    are sampler no-ops on every OpenAI-compatible backend, so omitting them
+    keeps the wire format identical to a request without penalties — which
+    matters because some backends (notably mlx_vlm with ``enable_thinking``
+    + ``thinking_budget``) flip sampler / streaming-buffer paths on field
+    presence, not just value.
+
+    The ``flavor`` argument controls naming for repetition penalty:
+      * ``auto``                    → emit ``repetition_penalty`` AND
+                                      ``repeat_penalty`` (covers all backends)
+      * ``mlx`` / ``vllm`` / ``ollama`` → ``repetition_penalty``
+      * ``llamacpp``                → ``repeat_penalty``
+
+    Idempotent and safe to call once per payload.
+    """
+    if presence_penalty:                                # 0.0 → falsy → omit
+        payload["presence_penalty"] = presence_penalty
+    if repetition_penalty and repetition_penalty != 1.0:
+        if flavor in ("auto", "mlx", "vllm", "ollama"):
+            payload["repetition_penalty"] = repetition_penalty
+        if flavor in ("auto", "llamacpp"):
+            payload["repeat_penalty"] = repetition_penalty
+
+
 def _strip_think_in_messages(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -146,6 +178,10 @@ class InferenceService:
     def _get_repetition_penalty(self, mode: str) -> float:
         """Get repetition_penalty for the given mode."""
         return self.settings.get_repetition_penalty_for_mode(mode)
+
+    def _get_backend_flavor(self) -> str:
+        """Get the configured backend flavor for parameter naming."""
+        return self.settings.inference_backend_flavor
 
     def _get_enable_thinking(self, mode: str) -> bool:
         """Get whether chain-of-thought is enabled for the given mode."""
@@ -402,11 +438,15 @@ class InferenceService:
                     "temperature": temperature,
                     "top_p": top_p,
                     "top_k": top_k,
-                    "presence_penalty": presence_penalty,
-                    "repetition_penalty": repetition_penalty,
                     "stream": False,
                     "enable_thinking": enable_thinking,
                 }
+                _apply_sampling_params(
+                    payload,
+                    presence_penalty=presence_penalty,
+                    repetition_penalty=repetition_penalty,
+                    flavor=self._get_backend_flavor(),
+                )
                 if thinking_budget is not None:
                     payload["thinking_budget"] = thinking_budget
                     payload["thinking_start_token"] = "<think>"
@@ -534,8 +574,18 @@ class InferenceService:
         resolved_repetition_penalty = self._get_repetition_penalty(mode)
 
         try:
-            # Emit mode metadata as first event
-            meta = {"mode": mode, "model": model, "fallback_used": fallback_used}
+            # Emit mode metadata as first event. ``enable_thinking`` here
+            # reflects what we actually sent to the backend — distinct from
+            # the user's UI mode, which can be "thinking" while CoT is
+            # disabled (e.g. RAG auto-disable). The frontend uses this to
+            # decide whether mid-stream content might be inside a <think>
+            # block whose opener was stripped by the chat template.
+            meta = {
+                "mode": mode,
+                "model": model,
+                "fallback_used": fallback_used,
+                "enable_thinking": resolved_enable_thinking,
+            }
             yield f"data: {json.dumps({'metadata': meta})}\n\n"
 
             stream_payload: dict[str, Any] = {
@@ -545,11 +595,15 @@ class InferenceService:
                 "temperature": resolved_temperature,
                 "top_p": resolved_top_p,
                 "top_k": resolved_top_k,
-                "presence_penalty": resolved_presence_penalty,
-                "repetition_penalty": resolved_repetition_penalty,
                 "stream": True,
                 "enable_thinking": resolved_enable_thinking,
             }
+            _apply_sampling_params(
+                stream_payload,
+                presence_penalty=resolved_presence_penalty,
+                repetition_penalty=resolved_repetition_penalty,
+                flavor=self._get_backend_flavor(),
+            )
             if resolved_thinking_budget is not None:
                 stream_payload["thinking_budget"] = resolved_thinking_budget
                 stream_payload["thinking_start_token"] = "<think>"
@@ -581,32 +635,38 @@ class InferenceService:
                     "mode": "instant",
                     "model": self.instant_model,
                     "fallback_used": True,
+                    "enable_thinking": self._get_enable_thinking("instant"),
                 }
                 yield f"data: {json.dumps({'metadata': fallback_meta})}\n\n"
 
                 try:
+                    fb_payload: dict[str, Any] = {
+                        "model": self.instant_model,
+                        "messages": messages,
+                        "max_tokens": (max_tokens
+                                       or self._get_max_tokens("instant")),
+                        "temperature": (
+                            temperature if temperature is not None
+                            else self._get_temperature("instant")
+                        ),
+                        "top_p": self._get_top_p("instant"),
+                        "top_k": self._get_top_k("instant"),
+                        "stream": True,
+                        "enable_thinking": self._get_enable_thinking("instant"),
+                    }
+                    _apply_sampling_params(
+                        fb_payload,
+                        presence_penalty=self._get_presence_penalty("instant"),
+                        repetition_penalty=self._get_repetition_penalty("instant"),
+                        flavor=self._get_backend_flavor(),
+                    )
                     async with httpx.AsyncClient(
                         timeout=self._get_timeout("instant")
                     ) as client:
                         async with client.stream(
                             "POST",
                             f"{self.instant_url}{fb_prefix}/chat/completions",
-                            json={
-                                "model": self.instant_model,
-                                "messages": messages,
-                                "max_tokens": (max_tokens
-                                               or self._get_max_tokens("instant")),
-                                "temperature": (
-                                    temperature if temperature is not None
-                                    else self._get_temperature("instant")
-                                ),
-                                "top_p": self._get_top_p("instant"),
-                                "top_k": self._get_top_k("instant"),
-                                "presence_penalty": self._get_presence_penalty("instant"),
-                                "repetition_penalty": self._get_repetition_penalty("instant"),
-                                "stream": True,
-                                "enable_thinking": self._get_enable_thinking("instant"),
-                            },
+                            json=fb_payload,
                             headers=self._get_headers(),
                         ) as response:
                             response.raise_for_status()
@@ -689,7 +749,7 @@ class InferenceService:
         the frontend renders it the same way as a normal assistant message."""
         err = self._error_response(mode, endpoint, reason, detail)
 
-        meta = {"mode": mode, "model": "error", "fallback_used": False}
+        meta = {"mode": mode, "model": "error", "fallback_used": False, "enable_thinking": False}
         yield f"data: {json.dumps({'metadata': meta})}\n\n"
 
         words = err["content"].split(" ")
@@ -764,7 +824,7 @@ class InferenceService:
         mock = await self._mock_response(messages, mode)
 
         # Emit metadata
-        meta = {"mode": mode, "model": "mock", "fallback_used": False}
+        meta = {"mode": mode, "model": "mock", "fallback_used": False, "enable_thinking": False}
         yield f"data: {json.dumps({'metadata': meta})}\n\n"
 
         words = mock["content"].split()

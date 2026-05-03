@@ -139,15 +139,22 @@ export async function sendMessageStream(
   const decoder = new TextDecoder();
   let sseBuffer = "";
 
-  // Format A: server sends delta.reasoning_content (some API providers)
+  // Format A: server sends delta.reasoning_content (vLLM with --enable-reasoning,
+  // some Ollama configs). Reasoning streams in a dedicated field.
   let reasoningField = "";
   let reasoningFieldUsed = false;
-  let reasoningFieldDone = false;
 
-  // Format B/C: thinking in delta.content (mlx_vlm strips <think> to "")
+  // Format B/C: thinking arrives in delta.content. Format B has explicit
+  // <think>...</think> tags; Format C has only the closing </think> because
+  // the backend's chat template consumed the opening token.
   let rawContent = "";
-  let firstContentSeen = false;
-  let firstContentWasEmpty = false;
+
+  // Backend metadata: distinct from the user's UI mode, ``enable_thinking``
+  // here reflects what the backend actually told the model to do — the
+  // chat route can disable CoT (RAG auto-disable) even when the user
+  // picked "thinking". Default true on thinking modes so the optimistic
+  // Format-C wrap still fires if metadata never arrives (older backends).
+  let backendEnableThinking = mode !== "instant";
 
   function processLine(line: string) {
     if (!line.startsWith("data: ") || line.includes("[DONE]")) return;
@@ -161,6 +168,11 @@ export async function sendMessageStream(
 
     if (data.session_id && !data.choices) {
       onSessionId(data.session_id);
+      return;
+    }
+
+    if (data.metadata && typeof data.metadata.enable_thinking === "boolean") {
+      backendEnableThinking = data.metadata.enable_thinking;
       return;
     }
 
@@ -185,19 +197,11 @@ export async function sendMessageStream(
       reasoningFieldUsed = true;
     }
 
-    if (ct !== undefined && ct !== null) {
-      if (!firstContentSeen) {
-        firstContentSeen = true;
-        firstContentWasEmpty = ct === "";
-      }
-      if (ct) rawContent += ct;
-      if (reasoningFieldUsed && ct.length > 0 && !reasoningFieldDone) {
-        reasoningFieldDone = true;
-      }
+    if (typeof ct === "string" && ct.length > 0) {
+      rawContent += ct;
     }
 
-    const assembled = synthesize();
-    onChunk(assembled);
+    onChunk(synthesize());
   }
 
   function stripThinkingTags(text: string): string {
@@ -226,32 +230,35 @@ export async function sendMessageStream(
       return clean.trimStart();
     }
 
-    // Format A: reasoning_content field present
+    // Format A: reasoning streamed in delta.reasoning_content. Always emit
+    // a closed <think> block so partial reasoning surfaces immediately.
     if (reasoningFieldUsed) {
-      return (
-        "<think>" +
-        reasoningField +
-        (reasoningFieldDone ? "</think>" : "") +
-        rawContent
-      );
+      return `<think>${reasoningField}</think>${rawContent}`;
     }
 
-    // Format B: explicit <think> tags in content — pass through for parser
+    // Format B: explicit <think> in content — pass through; thinkParser
+    // handles the unclosed-tag case for mid-stream rendering.
     if (rawContent.includes("<think>")) {
       return rawContent;
     }
 
-    // Format C: mlx_vlm stripped <think> to "", but </think> appears literally
+    // Format C: opening <think> consumed by the chat template (mlx_vlm).
+    // Once </think> appears the prefix was reasoning — re-inject the opener
+    // so the parser routes thinking and response correctly.
     const closeIdx = rawContent.indexOf("</think>");
-
-    if (closeIdx !== -1 && firstContentWasEmpty) {
+    if (closeIdx !== -1) {
       const thinkText = rawContent.slice(0, closeIdx).trim();
       const respText = rawContent.slice(closeIdx + "</think>".length);
-      return (thinkText ? "<think>" + thinkText + "</think>" : "") + respText;
+      return (thinkText ? `<think>${thinkText}</think>` : "") + respText;
     }
 
-    if (firstContentWasEmpty && rawContent.trim() && closeIdx === -1) {
-      return "<think>" + rawContent;
+    // Mid-stream, thinking mode active, no opener seen and no closer yet:
+    // optimistically wrap so the panel populates in real time. Only fires
+    // when the backend confirmed CoT is actually enabled — otherwise the
+    // RAG auto-disable path (chat.py:1383) would falsely wrap a plain
+    // response as thinking content.
+    if (backendEnableThinking && rawContent.trim()) {
+      return `<think>${rawContent}`;
     }
 
     return rawContent;

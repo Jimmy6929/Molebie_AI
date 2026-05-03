@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.services.metrics_registry import get_metrics_registry
 
 
 # ── Regex (mirror chat.py — keep behaviour consistent) ─────────────────────
@@ -337,8 +338,10 @@ class ChainOfVerification:
                 applied=False, revised_response=response, skipped_reason=reason,
             )
 
+        metrics = get_metrics_registry()
         try:
-            claims, fallback = await self._decompose(response, mode=mode)
+            async with metrics.subsystem_timer("verify.cove.decompose"):
+                claims, fallback = await self._decompose(response, mode=mode)
         except Exception as exc:
             return VerificationReport(
                 applied=False, revised_response=response,
@@ -351,9 +354,13 @@ class ChainOfVerification:
                 decompose_fallback=fallback,
             )
 
-        verdicts, json_failures = await self._verify_claims(
-            claims, rag_chunks or [], mode=mode,
-        )
+        async with metrics.subsystem_timer(
+            "verify.cove.verify",
+            note=f"{len(claims)} claims",
+        ):
+            verdicts, json_failures = await self._verify_claims(
+                claims, rag_chunks or [], mode=mode,
+            )
         revised = annotate_response(response, verdicts)
         unsupported = sum(1 for v in verdicts if not v.supported)
         return VerificationReport(
