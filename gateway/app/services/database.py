@@ -575,15 +575,19 @@ class DatabaseService:
     async def fetch_session_attachments_text(
         self, session_id: str, user_id: str
     ) -> str:
-        """Fetch session documents formatted for system prompt injection."""
+        """Fetch session documents formatted for system prompt injection.
+
+        Tagged ``[A1]``, ``[A2]``, ... so attachments share the unified
+        EVIDENCE citation namespace with notes (``[S#]``) and web (``[W#]``).
+        """
         rows = await self.list_session_documents(session_id, user_id)
         if not rows:
             return ""
-        parts = ["ATTACHED DOCUMENTS (read by user request — use this as primary context):"]
+        parts = ["ADDITIONAL EVIDENCE — ATTACHMENTS (uploaded by user this session):"]
         for idx, row in enumerate(rows, 1):
             content = row.get("content", "")
             filename = row.get("filename", "document")
-            parts.append(f"\n[{idx}] {filename} ({len(content):,} chars)")
+            parts.append(f"\n[A{idx}] {filename} ({len(content):,} chars)")
             parts.append(content)
         return "\n".join(parts)
 

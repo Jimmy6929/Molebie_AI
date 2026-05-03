@@ -206,9 +206,12 @@ def test_retrieval_confidence():
     section("Phase 1.8 — retrieval confidence buckets")
     from app.services.rag import compute_retrieval_confidence
 
+    # REFUSE was removed in the over-refusal fix — weak hits now route to LOW
+    # (lookup mode, cite-when-used) rather than triggering a user-visible
+    # refusal. Verify the new four-tier ladder.
     cases = [
         ("NONE", []),
-        ("REFUSE", [{"rerank_score": 0.1}, {"rerank_score": 0.05}]),
+        ("LOW", [{"rerank_score": 0.1}, {"rerank_score": 0.05}]),
         ("LOW", [{"rerank_score": 0.4}, {"rerank_score": 0.45}, {"rerank_score": 0.2}]),
         ("HIGH", [{"rerank_score": 0.9}, {"rerank_score": 0.7}, {"rerank_score": 0.6}]),
         ("MODERATE", [{"rerank_score": 0.55}, {"rerank_score": 0.6}, {"rerank_score": 0.4}]),

@@ -35,9 +35,14 @@ def _chunk_score(chunk: dict[str, Any]) -> float:
 
 
 def compute_retrieval_confidence(chunks: list[dict[str, Any]]) -> str:
-    """Score the retrieved set as NONE / REFUSE / LOW / MODERATE / HIGH.
+    """Score the retrieved set as NONE / LOW / MODERATE / HIGH.
 
     Uses the best-available score per chunk (rerank > rrf > similarity).
+
+    REFUSE was removed: low scores route to generative mode silently rather
+    than emitting a user-visible refusal. Cross-encoder rerankers commonly
+    return 0.25–0.35 for weak-positives; the old 0.3 floor mis-tiered them
+    and produced the "I cannot answer" dead-end for general questions.
 
     Thresholds are calibrated for cross-encoder/ms-marco-MiniLM rerank scores
     (sigmoid-ish, 0–1 range). When the reranker swaps to Qwen3-Reranker-0.6B
@@ -48,13 +53,11 @@ def compute_retrieval_confidence(chunks: list[dict[str, Any]]) -> str:
     scores = [_chunk_score(c) for c in chunks]
     top_score = max(scores)
     high_count = sum(1 for s in scores if s > 0.5)
-    if top_score < 0.3:
-        return "REFUSE"            # all chunks effectively irrelevant
-    if high_count < 2:
-        return "LOW"               # one weak hit, easy to over-trust
-    if top_score > 0.7 and high_count >= 3:
+    if top_score >= 0.7 and high_count >= 3:
         return "HIGH"
-    return "MODERATE"
+    if top_score >= 0.5:
+        return "MODERATE"
+    return "LOW"
 
 
 def _reorder_for_context(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -50,7 +50,7 @@ from app.services.summarizer import get_summariser_service
 from app.services.judge import get_grounding_judge
 from app.services.selfcheck import get_selfcheck_service
 from app.services.verification import get_chain_of_verification
-from app.services.web_search import WebSearchService, get_web_search_service
+from app.services.web_search import WebSearchService, get_web_search_service, looks_like_search_query
 
 
 async def _run_tracked_task(name: str, coro):
@@ -79,41 +79,87 @@ def _load_prompt_template(name: str) -> str:
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
+# High-precision patterns that indicate the user explicitly wants notes-lookup
+# behavior — overrides the confidence-based template choice into strict-RAG
+# mode even when retrieval confidence is REFUSE/NONE. Kept narrow on purpose:
+# this is a *not* a generic intent classifier, only an escape hatch for queries
+# that literally say "from my notes" / "what did I write".
+_EXPLICIT_LOOKUP_PATTERNS = [
+    re.compile(r"\bin my notes\b", re.IGNORECASE),
+    re.compile(r"\bfrom my notes\b", re.IGNORECASE),
+    re.compile(r"\bwhat did i write\b", re.IGNORECASE),
+    re.compile(r"\bdid i (write|mention|note|say)\b", re.IGNORECASE),
+    re.compile(r"\bfind (the )?notes?\b", re.IGNORECASE),
+]
+
+
+def _explicit_lookup_phrasing(message: str) -> bool:
+    """True iff the user message uses one of the high-precision lookup
+    phrasings. Used to override into strict notes-lookup mode regardless of
+    retrieval confidence.
+    """
+    if not message:
+        return False
+    return any(p.search(message) for p in _EXPLICIT_LOOKUP_PATTERNS)
+
+
+def _routing_mode(confidence: str, explicit_lookup: bool) -> str:
+    """Pick the prompt template for a (confidence, explicit-lookup) tuple.
+
+    HIGH/MODERATE/LOW retrieval → ``lookup`` (system_rag.txt, strict).
+    NONE retrieval → ``generative`` (system_generative.txt, permissive).
+    ``explicit_lookup=True`` overrides into lookup mode so the user's
+    explicit "from my notes" intent wins regardless of confidence.
+
+    Note: REFUSE was removed in the over-refusal fix — low-relevance
+    retrievals now route as LOW (lookup) not REFUSE (silent fallback).
+    """
+    if explicit_lookup:
+        return "lookup"
+    if confidence in ("HIGH", "MODERATE", "LOW"):
+        return "lookup"
+    return "generative"   # NONE
+
+
 def _confidence_directive(
     confidence: str,
     chunks: list[dict[str, Any]],
+    mode: str = "lookup",
+    use_tool_calling: bool = False,
+    factual_query: bool = False,
 ) -> str | None:
-    """Return a directive to append to the system prompt based on retrieval
-    confidence, or None if no directive is needed.
+    """Return a directive to append to the system prompt, or None.
 
-    REFUSE — chunks present but irrelevant. The strict template's fallback
-    string still triggers; we additionally surface note titles so the user
-    gets a useful pointer instead of a dead end.
+    Two cases need a directive on top of the base template:
 
-    LOW — one weak hit. The model is most likely to over-trust here; the
-    extra reminder lowers fabrication rate without forcing abstention.
+    1. Generative mode + NONE confidence + factual query + tools enabled:
+       nudge the model to offer a web search before answering. (Without
+       this nudge a 7B local model often defaults to "I cannot access X"
+       even when web_search is in its tool list.) For non-factual / casual
+       turns, no directive — the system prompt already handles "answer
+       directly, no preamble".
+
+    2. Lookup mode + LOW confidence: remind the model that the retrieval
+       was weak — cite [S#] only when actually used, and say so plainly
+       if the evidence doesn't answer the question.
+
+    Crucially, the literal word "REFUSE" never appears in any directive —
+    the model was previously mimicking that token from its own prompt.
     """
-    if confidence == "REFUSE":
-        seen: list[str] = []
-        for c in chunks:
-            name = c.get("filename")
-            if name and name not in seen:
-                seen.append(name)
-            if len(seen) >= 5:
-                break
-        related = ", ".join(seen) if seen else "(none)"
+    if mode == "generative" and confidence == "NONE":
+        if use_tool_calling and factual_query:
+            return (
+                "The user's notes don't cover this. If you're confident, "
+                "answer from general knowledge. If you're uncertain on "
+                "specifics, offer to search the web before answering "
+                "(e.g. \"Want me to look this up online?\")."
+            )
+        return None
+    if confidence == "LOW" and mode == "lookup":
         return (
-            "RETRIEVAL CONFIDENCE: REFUSE. The retrieved context does not "
-            "appear relevant to this question. Reply with the exact string "
-            "\"I don't have that in your notes.\" and then say: "
-            f"\"Here are some related topics I found: {related}\"."
-        )
-    if confidence == "LOW":
-        return (
-            "RETRIEVAL CONFIDENCE: LOW. The retrieved context has weak "
-            "relevance. Be especially careful: cite a [S#] source for "
-            "every factual claim, and if you cannot find a direct answer "
-            "in the context, use the exact fallback string."
+            "The retrieved evidence has weak relevance. Cite [S#] only for "
+            "claims you actually drew from it; if it doesn't answer the "
+            "question, say so plainly and offer alternatives."
         )
     return None
 
@@ -124,18 +170,22 @@ def _build_evidence_summary(
 ) -> str:
     """Generate an evidence meta-block for the system message.
 
-    Tells the model what evidence is available — including content depth,
-    source types, and retrieval completeness — so it can self-calibrate
-    confidence before answering.
+    Reports what evidence is available — content depth, source types,
+    retrieval completeness — so the model can self-calibrate confidence.
+    Does NOT instruct the model how to use that evidence; that's the
+    template's job. Mixing the two layers caused the documented conflict
+    between "Use ONLY context" (template) and "Use all available evidence"
+    (this block) — the model would burn thinking tokens reconciling them.
+
+    Returns an empty string when there is nothing to report — callers
+    must guard the append. Previously this returned a "No web... No
+    matches..." block that primed the model to think in [S#]/[W#] tags
+    even on casual turns with no retrieval.
     """
     if not search_results and not rag_chunks:
-        return (
-            "EVIDENCE SUMMARY:\n"
-            "• No web results. No document matches.\n"
-            "• No sources available. Answer from your own knowledge — be upfront about it."
-        )
+        return ""
 
-    lines = ["EVIDENCE SUMMARY:"]
+    lines = ["AVAILABLE EVIDENCE (informational — use only if it answers the question):"]
 
     # ── Web results ──
     if search_results:
@@ -191,10 +241,7 @@ def _build_evidence_summary(
     else:
         completeness = "NONE"
 
-    lines.append(
-        f"• Retrieval: {completeness}\n"
-        "  Use all available evidence to give the best possible answer."
-    )
+    lines.append(f"• Retrieval: {completeness}")
 
     return "\n".join(lines)
 
@@ -317,15 +364,25 @@ def _validate_response_sources(
     response_text: str,
     search_results: list[dict[str, Any]],
     rag_chunks: list[dict[str, Any]],
+    routing_mode: str = "lookup",
 ) -> dict[str, Any] | None:
     """Log whether the response referenced any of the provided sources, and —
-    when RAG was used — validate ``[S#]`` citations against the number of
-    available sources.
+    when RAG was used in lookup mode — validate ``[S#]`` citations against the
+    number of available sources.
 
-    Returns the citation-validation dict (or None when no RAG was used) so
-    callers can attach it to inference metadata.
+    Returns the citation-validation dict (or None when no RAG was used or we're
+    in generative mode) so callers can attach it to inference metadata.
+
+    Generative-mode skip rationale: in generative mode we explicitly tell the
+    model that notes-citation isn't required (notes are background, general
+    knowledge is permitted). Running ``_validate_citations`` against [S#] tags
+    would mis-flag legitimate uncited claims as "unsupported" and append a
+    misleading "could not be verified against your notes" footnote.
     """
     if not search_results and not rag_chunks:
+        return None
+    if routing_mode == "generative":
+        # Still log whether sources were referenced, but skip [S#] validation.
         return None
 
     referenced = False
@@ -416,10 +473,13 @@ async def _run_tool_loop(
 
         # Append the model's assistant turn (which contains tool_calls)
         # so the backend's chat template threads tool results correctly.
+        # Sanitize content via _finalize_assistant_text so any <think>
+        # blocks (closed or truncated-open) don't leak into the next
+        # iteration's prompt.
         working_messages.append(
             {
                 "role": "assistant",
-                "content": result.get("content") or "",
+                "content": _finalize_assistant_text(result.get("content") or ""),
                 "tool_calls": tool_calls,
             }
         )
@@ -472,31 +532,55 @@ def _maybe_append_footnote(
     return response_text + _FOOTNOTE_TEXT
 
 
+_TOOLS_HINT = (
+    "TOOLS AVAILABLE: web_search (live web), search_notes (your saved notes), "
+    "calculate (arithmetic), get_current_time (current date/time). "
+    "Call them when needed; do not claim you cannot search the web — you can."
+)
+
+
 def _build_system_message(
     conversation_mode: bool = False,
     summary: str | None = None,
     memories_text: str | None = None,
-    rag_context: str | None = None,
+    evidence: str | None = None,
+    confidence: str = "NONE",
+    explicit_lookup: bool = False,
+    use_tool_calling: bool = False,
 ) -> dict:
-    """Build the system message.
+    """Build the system message with confidence-driven prompt routing.
 
-    When ``rag_context`` is supplied, uses the strict-grounding template
-    (``system_rag.txt``) which forces ``[S#]`` citations and a fixed
-    abstain string. Otherwise uses the general ``system.txt`` (or
-    ``system_voice.txt`` in conversation mode).
+    Routing rule (see ``_routing_mode``):
+      - HIGH/MODERATE/LOW retrieval → ``system_rag.txt`` (strict, cite-when-used)
+      - NONE retrieval → ``system_generative.txt`` (permissive, general
+        knowledge + web allowed)
+      - ``explicit_lookup=True`` overrides into strict mode regardless of
+        confidence so the user's explicit "from my notes" intent wins.
+
+    When ``use_tool_calling`` is True (and not voice mode), a one-line
+    "TOOLS AVAILABLE" hint is appended. Local Qwen-class models otherwise
+    have no prior that the tool list shipped over the wire is real and
+    will refuse with "I cannot access X".
+
+    Conversation (voice) mode bypasses routing/tools entirely and uses
+    ``system_voice.txt``.
     """
     today_str = date.today().strftime("%A, %B %d, %Y")
+    evidence_text = evidence if evidence else "(no retrieved evidence — none of the user's notes match this query closely)"
 
-    if rag_context:
-        prompt_template = _load_prompt_template("system_rag")
+    if conversation_mode:
+        prompt_template = _load_prompt_template("system_voice")
+        content = prompt_template.format(current_date=today_str)
+    else:
+        mode = _routing_mode(confidence, explicit_lookup)
+        template_name = "system_rag" if mode == "lookup" else "system_generative"
+        prompt_template = _load_prompt_template(template_name)
         content = prompt_template.format(
             current_date=today_str,
-            rag_context=rag_context,
+            evidence=evidence_text,
         )
-    else:
-        template_name = "system_voice" if conversation_mode else "system"
-        prompt_template = _load_prompt_template(template_name)
-        content = prompt_template.format(current_date=today_str)
+        if use_tool_calling:
+            content += f"\n\n{_TOOLS_HINT}"
 
     if summary:
         content += f"\n\nCONVERSATION SUMMARY (earlier messages condensed):\n{summary}"
@@ -561,6 +645,27 @@ def _strip_thinking(content: str) -> str:
     if close_idx != -1:
         return content[close_idx + len("</think>"):].strip()
     return content.strip()
+
+
+def _finalize_assistant_text(raw: str) -> str:
+    """Single chokepoint for any text leaving inference toward DB / UI / next-turn.
+
+    1. Closes orphan ``<think>`` openers (truncation at max_tokens leaves these
+       — without a closing tag the regex in ``_strip_thinking`` can't match
+       and the raw reasoning would leak to the user).
+    2. Strips ``<think>...</think>`` blocks.
+    3. Trims.
+
+    Idempotent — safe to call twice. Use this at every site where assistant
+    content crosses into a place that mustn't see reasoning: user-visible
+    output, DB persistence, or the prior-turn context fed to the next
+    inference call (notably the tool loop's working_messages).
+    """
+    if not raw:
+        return ""
+    if "<think>" in raw and "</think>" not in raw:
+        raw = raw + "</think>"
+    return _strip_thinking(raw)
 
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -720,20 +825,42 @@ async def send_message(
 
     rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
     rag_confidence = compute_retrieval_confidence(rag_chunks) if rag_chunks else "NONE"
-    if rag_chunks:
-        print(f"[chat] Retrieval confidence: {rag_confidence}")
+    explicit_lookup = _explicit_lookup_phrasing(request.message)
+    routing_mode = _routing_mode(rag_confidence, explicit_lookup)
+    if rag_chunks or explicit_lookup:
+        print(f"[chat] Retrieval confidence: {rag_confidence} → mode: {routing_mode}"
+              + (" (explicit lookup phrasing)" if explicit_lookup else ""))
+
+    # Compute tool-calling availability up-front so it can be advertised in
+    # the system prompt (otherwise the model has no prior that web_search /
+    # search_notes / etc. are real and refuses with "I cannot access X").
+    use_tool_calling = (
+        settings.tool_calling_enabled
+        and not request.conversation_mode
+        and not request.image
+    )
 
     messages = [_build_system_message(
         request.conversation_mode,
         summary=session_summary,
         memories_text=memories_text,
-        rag_context=rag_context_text,
+        evidence=rag_context_text,
+        confidence=rag_confidence,
+        explicit_lookup=explicit_lookup,
+        use_tool_calling=use_tool_calling,
     )] + hist_messages
 
-    # Confidence-driven directives: REFUSE forces the abstain string + note
-    # titles; LOW reminds the model to cite every claim. HIGH/MODERATE rely
-    # on the strict-grounding template alone.
-    directive = _confidence_directive(rag_confidence, rag_chunks)
+    # Confidence-driven directives: in generative mode on a factual gap with
+    # tools available, nudge the model to offer a web search; in lookup mode
+    # with LOW confidence, remind it to cite-when-used and admit gaps. HIGH/
+    # MODERATE/casual turns rely on the base template alone.
+    directive = _confidence_directive(
+        rag_confidence,
+        rag_chunks,
+        mode=routing_mode,
+        use_tool_calling=use_tool_calling,
+        factual_query=looks_like_search_query(request.message),
+    )
     if directive:
         messages[0]["content"] += f"\n\n{directive}"
 
@@ -742,18 +869,20 @@ async def send_message(
     if attach_text:
         messages[0]["content"] += f"\n\n{attach_text}"
 
-    # Web search: inject real-time results into context
+    # Web search: inject real-time results into context (continues the EVIDENCE
+    # block under the [W#] namespace — see web_search.format_results_for_context).
     search_results = []
     if request.web_search:
         search_results = await web_search.search(request.message)
         if search_results:
             search_results = await web_search.enrich_with_full_content(search_results)
             context_text = web_search.format_results_for_context(search_results)
-            messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
+            messages[0]["content"] += f"\n\n{context_text}"
 
     # Inject evidence summary so the model can self-calibrate confidence
     evidence_summary = _build_evidence_summary(search_results, rag_chunks)
-    messages[0]["content"] += f"\n\n{evidence_summary}"
+    if evidence_summary:
+        messages[0]["content"] += f"\n\n{evidence_summary}"
 
     total_chars = sum(
         len(m["content"]) if isinstance(m.get("content"), str) else sum(
@@ -788,11 +917,8 @@ async def send_message(
     # deterministic answer (delegating to a tool) so the vote-and-pick
     # approach doesn't add value on top, and the cost of stacking both
     # (N samples × M tool iterations) isn't worth it without measured gain.
-    use_tool_calling = (
-        settings.tool_calling_enabled
-        and not request.conversation_mode
-        and not request.image
-    )
+    # ``use_tool_calling`` is computed earlier (before the system message
+    # build) so the TOOLS AVAILABLE hint can be advertised to the model.
     use_self_consistency = (
         not use_tool_calling
         and settings.self_consistency_enabled
@@ -887,7 +1013,7 @@ async def send_message(
     # Store assistant response (strip thinking blocks, persist reasoning separately)
     raw = inference_result["content"]
     reasoning = inference_result.get("reasoning_content") or _extract_thinking(raw)
-    clean_content = _strip_thinking(raw)
+    clean_content = _finalize_assistant_text(raw)
     assistant_msg = await db.create_message(
         session_id=session_id,
         user_id=user_id,
@@ -913,7 +1039,9 @@ async def send_message(
     # Log whether the response referenced provided sources, and validate
     # any [S#] citations against the available source count + per-claim
     # fuzzy match (task 2.4).
-    citation_report = _validate_response_sources(clean_content, search_results, rag_chunks)
+    citation_report = _validate_response_sources(
+        clean_content, search_results, rag_chunks, routing_mode=routing_mode
+    )
 
     # Phase 3.2 — Grounding judge (reranker yes/no head). Cheap gate that
     # runs before CoVe: ~one reranker forward pass per claim, no LLM
@@ -1405,18 +1533,34 @@ async def send_message_stream(
 
     rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
     rag_confidence = compute_retrieval_confidence(rag_chunks) if rag_chunks else "NONE"
-    if rag_chunks:
-        print(f"[chat] Retrieval confidence: {rag_confidence}")
+    explicit_lookup = _explicit_lookup_phrasing(request.message)
+    routing_mode = _routing_mode(rag_confidence, explicit_lookup)
+    if rag_chunks or explicit_lookup:
+        print(f"[chat] Retrieval confidence: {rag_confidence} → mode: {routing_mode}"
+              + (" (explicit lookup phrasing)" if explicit_lookup else ""))
 
+    # Streaming path doesn't use tool_calling (no tool loop on stream), so the
+    # TOOLS AVAILABLE hint is suppressed here — advertising tools the model
+    # can't call would be worse than staying silent. The tool-loop
+    # (non-streaming) path advertises and uses them together.
     messages = [_build_system_message(
         request.conversation_mode,
         summary=session_summary,
         memories_text=memories_text,
-        rag_context=rag_context_text,
+        evidence=rag_context_text,
+        confidence=rag_confidence,
+        explicit_lookup=explicit_lookup,
+        use_tool_calling=False,
     )] + hist_messages
 
     # Confidence-driven directives — see send_message() for rationale.
-    directive = _confidence_directive(rag_confidence, rag_chunks)
+    directive = _confidence_directive(
+        rag_confidence,
+        rag_chunks,
+        mode=routing_mode,
+        use_tool_calling=False,
+        factual_query=looks_like_search_query(request.message),
+    )
     if directive:
         messages[0]["content"] += f"\n\n{directive}"
 
@@ -1489,7 +1633,7 @@ async def send_message_stream(
                 if search_results:
                     search_results = await web_search.enrich_with_full_content(search_results)
                     context_text = web_search.format_results_for_context(search_results)
-                    messages[0]["content"] += f"\n\nWEB SEARCH RESULTS:\n{context_text}"
+                    messages[0]["content"] += f"\n\n{context_text}"
                 _ms_ws = (time.perf_counter() - t_ws) * 1000.0
                 await registry.pipeline_event(
                     req_id, "web.search", ms=_ms_ws, status="ok",
@@ -1504,7 +1648,8 @@ async def send_message_stream(
 
             # Inject evidence summary so the model can self-calibrate confidence
             evidence_summary = _build_evidence_summary(search_results, rag_chunks)
-            messages[0]["content"] += f"\n\n{evidence_summary}"
+            if evidence_summary:
+                messages[0]["content"] += f"\n\n{evidence_summary}"
 
             total_chars = sum(
                 len(m["content"]) if isinstance(m.get("content"), str) else sum(
@@ -1594,7 +1739,7 @@ async def send_message_stream(
 
             # Build final content for DB (strip thinking tags, persist reasoning separately)
             raw_content = "".join(full_content)
-            content = _strip_thinking(raw_content)
+            content = _finalize_assistant_text(raw_content)
 
             reasoning = "".join(full_reasoning) if full_reasoning else _extract_thinking(raw_content)
             if not reasoning:
@@ -1619,7 +1764,9 @@ async def send_message_stream(
                             [{"title": r["title"], "url": r["url"]} for r in search_results],
                         )
 
-                    _validate_response_sources(save_content, search_results, rag_chunks)
+                    _validate_response_sources(
+                        save_content, search_results, rag_chunks, routing_mode=routing_mode
+                    )
                     # NOTE: CoVe (Phase 3.1) is intentionally not wired into
                     # the streaming path — running it after a stream
                     # completes would mutate stored DB content vs what the

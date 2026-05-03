@@ -119,6 +119,23 @@ _NEWS_DOMAINS = (
 )
 
 
+def looks_like_search_query(message: str) -> bool:
+    """Lightweight rule-based check: does this message look like it would
+    benefit from a web search? Used by the chat routing layer to decide
+    whether to nudge the model toward calling web_search on a confidence
+    gap. Intentionally narrow — temporal/recency/news/real-time signals
+    only — to avoid suggesting search on questions the model can answer
+    from training (e.g. "explain how transformers work")."""
+    if not message:
+        return False
+    cleaned = message.strip().rstrip("?!., ")
+    if len(cleaned) < 2:
+        return False
+    if _TRIVIAL_PATTERNS.match(cleaned):
+        return False
+    return bool(_SEARCH_PATTERNS.search(cleaned.lower()))
+
+
 def _extract_domain(url: str) -> str:
     """Pull hostname from a URL, stripping www. prefix."""
     try:
@@ -396,10 +413,16 @@ class WebSearchService:
         return results
 
     def format_results_for_context(self, results: list[dict[str, Any]]) -> str:
-        """Format search results into a text block for the system message."""
+        """Format search results into a text block for the system message.
+
+        Results are tagged ``[W1]``, ``[W2]``, ... so they share a single
+        citation namespace with notes (``[S#]``) and attachments (``[A#]``).
+        Use as a continuation of the EVIDENCE block — both prompt templates
+        recognize ``[W#]`` as a valid evidence tag.
+        """
         if not results:
             return ""
-        lines = []
+        lines = ["ADDITIONAL EVIDENCE — WEB:"]
         for i, r in enumerate(results, 1):
             title = r.get("title", "Untitled")
             url = r.get("url", "")
@@ -412,7 +435,7 @@ class WebSearchService:
             content_tag = "[Full page content]" if r.get("content_source") == "full_page" else "[Snippet only]"
 
             header = (
-                f"[{i}] {title}\n"
+                f"[W{i}] {title}\n"
                 f"    URL: {url} | Type: {source_type} ({trust}) | Domain: {domain}\n"
                 f"    {content_tag}"
             )
