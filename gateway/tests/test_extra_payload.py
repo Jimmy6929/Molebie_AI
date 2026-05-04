@@ -14,7 +14,6 @@ import pytest
 
 from app.config import Settings
 
-
 # ── Parser: get_extra_payload_for_mode ──────────────────────────────────────
 
 @pytest.mark.parametrize("mode", ["instant", "thinking", "thinking_harder"])

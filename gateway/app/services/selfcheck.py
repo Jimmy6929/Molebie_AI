@@ -38,17 +38,15 @@ from typing import Any
 
 from app.config import Settings
 from app.services.verification import (
-    Claim,
-    UNSUPPORTED_MARKER,
-    Verdict,
     _DATE_RE,
     _NUMBER_RE,
     _PROPER_NOUN_PAIR_RE,
     _SENTENCE_SPLIT_RE,
     _URL_RE,
+    Claim,
+    Verdict,
     annotate_response,
 )
-
 
 # ── Sentence selection ────────────────────────────────────────────────────
 

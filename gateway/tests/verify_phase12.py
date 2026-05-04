@@ -363,7 +363,7 @@ def test_verifiable_query_classifier():
     # Normalisation collapses citations / articles / punctuation
     n1 = normalise_answer("The Paris [S1]. ")
     n2 = normalise_answer("Paris")
-    _record(f"normalise collapses 'The Paris [S1].' → 'Paris'", n1 == n2 == "paris", f"{n1!r} vs {n2!r}")
+    _record("normalise collapses 'The Paris [S1].' → 'Paris'", n1 == n2 == "paris", f"{n1!r} vs {n2!r}")
 
 
 def test_self_consistency_voting():
@@ -473,7 +473,7 @@ def test_citation_validation():
     _record(
         "KNOWN LIMITATION: shared generic vocab ('metres') masks mismatch",
         not rep_soft["weak_citations"],
-        f"as expected, no weak flag — phase 3 CoVe/SelfCheck handles this",
+        "as expected, no weak flag — phase 3 CoVe/SelfCheck handles this",
     )
 
     # Footnote idempotency
@@ -683,7 +683,10 @@ def test_cove_verify_parsing():
 def test_cove_annotate():
     section("Phase 3.1 — annotate response with [?] markers")
     from app.services.verification import (
-        Claim, UNSUPPORTED_MARKER, Verdict, annotate_response,
+        UNSUPPORTED_MARKER,
+        Claim,
+        Verdict,
+        annotate_response,
     )
 
     response = "Everest is 8849 metres [S1]. Annapurna is 8091 metres [S2]."
@@ -982,7 +985,8 @@ def test_selfcheck_factual_sentence_filter():
 def test_selfcheck_fallback_scorer():
     section("Phase 3.3 — fallback_inconsistency scorer")
     from app.services.selfcheck import (
-        _distinctive_tokens, fallback_inconsistency,
+        _distinctive_tokens,
+        fallback_inconsistency,
     )
 
     # Distinctive-token extraction

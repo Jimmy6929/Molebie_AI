@@ -20,7 +20,6 @@ import httpx
 
 from app.config import Settings, get_settings
 
-
 # Defensive strip: prior `<think>...</think>` blocks must never re-enter the
 # prompt. The chat route already strips on persist, but multi-process pipelines
 # (background tasks, future replay) can re-introduce them — clean once here so

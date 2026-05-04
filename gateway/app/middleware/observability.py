@@ -29,7 +29,6 @@ from starlette.responses import Response
 
 from app.services.metrics_registry import get_metrics_registry
 
-
 # Routes we never record — they'd create feedback noise (the monitor
 # itself polls /metrics/live at 2 Hz, /health is hit by liveness probes).
 _SKIP_PATHS: set[str] = {"/metrics/live", "/health"}

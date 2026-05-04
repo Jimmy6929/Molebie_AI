@@ -35,7 +35,6 @@ from typing import Any
 from app.config import Settings
 from app.services.metrics_registry import get_metrics_registry
 
-
 # ── Regex (mirror chat.py — keep behaviour consistent) ─────────────────────
 
 _CITATION_RE = re.compile(r"\[S(\d+)\]")

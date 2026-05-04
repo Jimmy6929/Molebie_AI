@@ -23,7 +23,6 @@ from typing import Any
 
 from app.config import Settings
 
-
 # ── Trigger heuristic ───────────────────────────────────────────────────
 
 # Phrases that signal "asks for a specific fact" — lowercase substrings.

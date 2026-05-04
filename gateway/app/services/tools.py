@@ -29,7 +29,6 @@ from typing import Any
 
 from app.config import Settings
 
-
 # ── Schemas (OpenAI-compatible function-tool format) ────────────────────
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [

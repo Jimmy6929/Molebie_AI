@@ -12,8 +12,6 @@ regardless of how the upstream chunked.
 
 import json
 
-import pytest
-
 from app.services.sse_split import split_oversized_sse_delta
 
 

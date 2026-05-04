@@ -38,20 +38,24 @@ from app.models.chat import (
     SessionRenameRequest,
     TTSRequest,
 )
+from app.services.consistency import is_verifiable_query, vote_with_self_consistency
 from app.services.database import DatabaseService, get_database_service
 from app.services.inference import InferenceService, get_inference_service
+from app.services.judge import get_grounding_judge
 from app.services.memory import get_memory_service
 from app.services.metrics_registry import RequestRecord, get_metrics_registry
-from app.services.consistency import is_verifiable_query, vote_with_self_consistency
 from app.services.rag import RAGService, compute_retrieval_confidence, get_rag_service
-from app.services.tools import TOOL_SCHEMAS, ToolExecutor
+from app.services.selfcheck import get_selfcheck_service
+from app.services.sse_split import split_oversized_sse_delta
 from app.services.storage import get_storage_service
 from app.services.summarizer import get_summariser_service
-from app.services.judge import get_grounding_judge
-from app.services.selfcheck import get_selfcheck_service
+from app.services.tools import TOOL_SCHEMAS, ToolExecutor
 from app.services.verification import get_chain_of_verification
-from app.services.sse_split import split_oversized_sse_delta
-from app.services.web_search import WebSearchService, get_web_search_service, looks_like_search_query
+from app.services.web_search import (
+    WebSearchService,
+    get_web_search_service,
+    looks_like_search_query,
+)
 
 
 async def _run_tracked_task(name: str, coro):

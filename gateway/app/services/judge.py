@@ -34,15 +34,12 @@ from typing import Any
 from app.config import Settings
 from app.services.verification import (
     Claim,
-    UNSUPPORTED_MARKER,
     Verdict,
-    _SENTENCE_SPLIT_RE,
     annotate_response,
     attach_sentences,
-    rule_based_decompose,
     route_claim_to_chunk,
+    rule_based_decompose,
 )
-
 
 # ── Dataclasses ────────────────────────────────────────────────────────────
 

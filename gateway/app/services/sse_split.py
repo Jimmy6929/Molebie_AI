@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
 # When a slice ends with ``<`` or ``</`` we extend it by up to this many
 # chars to consume the rest of the tag. Keeps ``</think>`` intact through
 # splitting so the downstream parser doesn't see ``</thi`` then ``nk>``.

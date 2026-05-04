@@ -23,7 +23,6 @@ from typing import Any
 
 from app.config import Settings, get_settings
 
-
 # Qwen3-Reranker uses a fixed instruction template — see the model card.
 _QWEN_INSTRUCTION = (
     "Given a web search query, retrieve relevant passages that answer the query"

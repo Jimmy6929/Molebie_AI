@@ -31,7 +31,6 @@ from app.routes.chat import (
 )
 from app.services.rag import compute_retrieval_confidence
 
-
 # ── _explicit_lookup_phrasing ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("message", [
