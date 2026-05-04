@@ -187,6 +187,12 @@ class InferenceService:
         """Get whether chain-of-thought is enabled for the given mode."""
         return self.settings.get_enable_thinking_for_mode(mode)
 
+    def _get_extra_payload(self, mode: str) -> dict[str, Any]:
+        """Per-tier backend-quirk overrides from INFERENCE_<mode>_EXTRA_PAYLOAD.
+        Merged into the request payload last so operators can push backend
+        quirks to .env without backend-specific code in the gateway."""
+        return self.settings.get_extra_payload_for_mode(mode)
+
     def _get_thinking_budget(self, mode: str) -> int | None:
         """Get the thinking token budget for the given mode, or None."""
         return self.settings.get_thinking_budget_for_mode(mode)
@@ -454,6 +460,10 @@ class InferenceService:
                 if tools:
                     payload["tools"] = tools
                     payload["tool_choice"] = tool_choice or "auto"
+                # Backend-quirk overrides from .env — last write wins so
+                # operators can override gateway defaults (incl. fields
+                # set by the thinking_budget block above).
+                payload.update(self._get_extra_payload(mode))
                 response = await client.post(
                     f"{endpoint}{api_prefix}/chat/completions",
                     json=payload,
@@ -608,6 +618,10 @@ class InferenceService:
                 stream_payload["thinking_budget"] = resolved_thinking_budget
                 stream_payload["thinking_start_token"] = "<think>"
                 stream_payload["thinking_end_token"] = "</think>"
+            # Backend-quirk overrides from .env — last write wins so
+            # operators can flip backend-specific paths (e.g. mlx_vlm's
+            # field-presence-driven streaming buffer) without code.
+            stream_payload.update(self._get_extra_payload(mode))
 
             async with httpx.AsyncClient(timeout=resolved_timeout) as client:
                 async with client.stream(
@@ -660,6 +674,8 @@ class InferenceService:
                         repetition_penalty=self._get_repetition_penalty("instant"),
                         flavor=self._get_backend_flavor(),
                     )
+                    # Fallback uses instant-tier settings, including extras.
+                    fb_payload.update(self._get_extra_payload("instant"))
                     async with httpx.AsyncClient(
                         timeout=self._get_timeout("instant")
                     ) as client:

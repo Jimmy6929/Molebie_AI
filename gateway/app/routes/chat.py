@@ -50,6 +50,7 @@ from app.services.summarizer import get_summariser_service
 from app.services.judge import get_grounding_judge
 from app.services.selfcheck import get_selfcheck_service
 from app.services.verification import get_chain_of_verification
+from app.services.sse_split import split_oversized_sse_delta
 from app.services.web_search import WebSearchService, get_web_search_service, looks_like_search_query
 
 
@@ -1719,10 +1720,23 @@ async def send_message_stream(
                     client_disconnected = True
                     break
 
-                try:
-                    yield chunk
-                except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
-                    client_disconnected = True
+                # Backend-agnostic shape normalization: fan-out split any
+                # oversized upstream chunk into smaller SSE deltas so the
+                # frontend typewriter sees a fine-grained stream regardless
+                # of how the backend chunked. The bookkeeping above
+                # (TTFT stamp, content/reasoning accumulators, in-flight
+                # refresh) intentionally runs ONCE per upstream chunk —
+                # the split is purely a wire-shape transformation.
+                pieces = split_oversized_sse_delta(
+                    chunk, settings.streaming_max_chunk_chars,
+                )
+                for piece in pieces:
+                    try:
+                        yield piece
+                    except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+                        client_disconnected = True
+                        break
+                if client_disconnected:
                     break
 
             if client_disconnected:

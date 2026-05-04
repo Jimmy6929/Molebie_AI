@@ -7,7 +7,9 @@ Supports two-tier inference: Instant (fast, always-on) and Thinking
 and work with any open-source model served via MLX, vLLM, TGI, etc.
 """
 
+import json
 from functools import lru_cache
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -82,6 +84,29 @@ class Settings(BaseSettings):
     inference_thinking_budget: int = 2048            # max tokens for the <think> block
     inference_thinking_harder_max_tokens: int = 28672
     inference_thinking_harder_budget: int = 8192
+
+    # ── Backend-quirk overrides ─────────────────────────────────
+    # Per-tier JSON object merged into the streaming/non-streaming payload
+    # last (overrides gateway defaults). Lets operators push backend quirks
+    # to .env instead of polluting the gateway with backend-specific code.
+    #
+    # Canonical use case: mlx_vlm flips its sampler/streaming-buffer paths
+    # on field PRESENCE, not just value (see inference.py:42-44). To keep
+    # instant tier on the streaming path without enabling CoT, mirror the
+    # thinking-tier fields with budget=0:
+    #   INFERENCE_INSTANT_EXTRA_PAYLOAD={"thinking_budget":0,"thinking_start_token":"<think>","thinking_end_token":"</think>"}
+    inference_instant_extra_payload: str = ""
+    inference_thinking_extra_payload: str = ""
+    inference_thinking_harder_extra_payload: str = ""
+
+    # ── Streaming UX ────────────────────────────────────────────
+    # Maximum characters per outbound SSE delta. Larger upstream chunks are
+    # fan-out split into smaller pieces by the gateway so the frontend
+    # typewriter sees a consistent fine-grained stream regardless of how
+    # the backend chunks. 40 chars ≈ 0.5s of typewriter feed at 80 cps —
+    # ChatGPT-like cadence. Set to a huge number (e.g. 99999) to disable
+    # splitting (kill switch).
+    streaming_max_chunk_chars: int = 40
 
     # Legacy / shared fallback (used when per-mode settings are empty)
     inference_model_name: str = "default"
@@ -353,8 +378,43 @@ class Settings(BaseSettings):
             return self.inference_thinking_budget
         return None
 
+    def get_extra_payload_for_mode(self, mode: str) -> dict[str, Any]:
+        """Parse INFERENCE_<mode>_EXTRA_PAYLOAD into a dict.
+
+        Empty / unset → {}. Malformed JSON or non-object raises ValueError —
+        get_settings() calls this once per mode at startup so .env mistakes
+        fail loudly there, not on every request.
+        """
+        if mode == "thinking_harder":
+            raw = self.inference_thinking_harder_extra_payload
+        elif mode == "thinking":
+            raw = self.inference_thinking_extra_payload
+        else:
+            raw = self.inference_instant_extra_payload
+        if not raw or not raw.strip():
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"INFERENCE_{mode.upper()}_EXTRA_PAYLOAD is not valid JSON: {exc}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"INFERENCE_{mode.upper()}_EXTRA_PAYLOAD must be a JSON object, "
+                f"got {type(parsed).__name__}"
+            )
+        return parsed
+
 
 @lru_cache
 def get_settings() -> Settings:
-    """Get cached settings instance."""
-    return Settings()
+    """Get cached settings instance.
+
+    Eagerly validates the per-tier extra-payload JSON so a malformed .env
+    fails at startup rather than on the first chat request.
+    """
+    settings = Settings()
+    for mode in ("instant", "thinking", "thinking_harder"):
+        settings.get_extra_payload_for_mode(mode)
+    return settings
