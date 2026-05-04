@@ -1,0 +1,1760 @@
+{
+  "label": "all",
+  "gateway": "http://127.0.0.1:8765",
+  "mode": "instant",
+  "ran_at": "2026-05-02T11:13:07+0200",
+  "summary": {
+    "by_category": {
+      "rag_grounded": {
+        "pass": 12,
+        "fail": 3,
+        "error": 0,
+        "total": 15,
+        "pass_rate": 0.8
+      },
+      "adversarial_premise": {
+        "pass": 15,
+        "fail": 0,
+        "error": 0,
+        "total": 15,
+        "pass_rate": 1.0
+      },
+      "must_abstain": {
+        "pass": 10,
+        "fail": 0,
+        "error": 0,
+        "total": 10,
+        "pass_rate": 1.0
+      },
+      "rag_grounded_negative": {
+        "pass": 1,
+        "fail": 1,
+        "error": 0,
+        "total": 2,
+        "pass_rate": 0.5
+      }
+    },
+    "overall": {
+      "pass": 38,
+      "total": 42,
+      "pass_rate": 0.905
+    },
+    "layer_activity": {
+      "fired": {
+        "cove": 5,
+        "judge": 2,
+        "selfcheck": 1
+      },
+      "flagged_when_fired": {
+        "cove": 2,
+        "judge": 0,
+        "selfcheck": 1
+      }
+    },
+    "latency_seconds": {
+      "mean": 12.097,
+      "median": 11.145,
+      "p90": 17.745,
+      "max": 24.325,
+      "cove_mean": 19.49
+    }
+  },
+  "records": [
+    {
+      "entry": {
+        "id": "rag_001",
+        "category": "rag_grounded",
+        "query": "What is the recommended chunk size in my Molebie notes?",
+        "expected_substrings": [
+          "512"
+        ],
+        "must_cite": true,
+        "notes": "Replace with a question whose answer is genuinely in your RAG corpus."
+      },
+      "response_chars": 46,
+      "latency_s": 22.797,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_002",
+        "category": "rag_grounded",
+        "query": "Which embedding model does Molebie default to after Phase 1?",
+        "expected_substrings": [
+          "Qwen3-Embedding-0.6B"
+        ],
+        "must_cite": true,
+        "notes": "Placeholder \u2014 point at your own notes."
+      },
+      "response_chars": 75,
+      "latency_s": 10.42,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_003",
+        "category": "rag_grounded",
+        "query": "What presence_penalty value does Molebie use for the instant tier?",
+        "expected_substrings": [
+          "1.5"
+        ],
+        "must_cite": true,
+        "notes": "Placeholder."
+      },
+      "response_chars": 76,
+      "latency_s": 11.297,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_004",
+        "category": "rag_grounded",
+        "query": "What is the fallback string when retrieval fails?",
+        "expected_substrings": [
+          "I don't have that in your notes."
+        ],
+        "must_cite": true,
+        "notes": "Placeholder."
+      },
+      "response_chars": 65,
+      "latency_s": 10.56,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_005",
+        "category": "rag_grounded",
+        "query": "What chunk overlap does Molebie use after Phase 1?",
+        "expected_substrings": [
+          "64"
+        ],
+        "must_cite": true,
+        "notes": "Add to your notes if missing."
+      },
+      "response_chars": 122,
+      "latency_s": 8.87,
+      "verdict": {
+        "pass": false,
+        "reason": "missing [S#] citation"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 1
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_006",
+        "category": "rag_grounded",
+        "query": "Which reranker model does Molebie default to?",
+        "expected_substrings": [
+          "Qwen3-Reranker-0.6B"
+        ],
+        "must_cite": true,
+        "notes": "Placeholder."
+      },
+      "response_chars": 406,
+      "latency_s": 24.325,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 2,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 1
+        },
+        "cove": {
+          "applied": true,
+          "skipped_reason": null,
+          "claims_checked": 4,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": true,
+          "skipped_reason": null,
+          "scored": 2,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_007",
+        "category": "rag_grounded",
+        "query": "How many citations are required per factual claim in the Molebie RAG prompt?",
+        "expected_substrings": [
+          "[S"
+        ],
+        "must_cite": true,
+        "notes": "system_rag.txt enforces inline [S#] tags."
+      },
+      "response_chars": 121,
+      "latency_s": 8.89,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 2,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_008",
+        "category": "rag_grounded",
+        "query": "What thinking-mode budget does Molebie cap responses at?",
+        "expected_substrings": [
+          "2048"
+        ],
+        "must_cite": true,
+        "notes": "Placeholder."
+      },
+      "response_chars": 198,
+      "latency_s": 8.601,
+      "verdict": {
+        "pass": false,
+        "reason": "missing [S#] citation"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 1
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_009",
+        "category": "rag_grounded",
+        "query": "What is RRF k-value Molebie uses for hybrid retrieval?",
+        "expected_substrings": [
+          "60"
+        ],
+        "must_cite": true,
+        "notes": "Placeholder."
+      },
+      "response_chars": 80,
+      "latency_s": 9.496,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_010",
+        "category": "rag_grounded",
+        "query": "Which file holds the strict-grounding RAG prompt?",
+        "expected_substrings": [
+          "system_rag"
+        ],
+        "must_cite": true,
+        "notes": "Placeholder."
+      },
+      "response_chars": 79,
+      "latency_s": 10.299,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_011",
+        "category": "rag_grounded",
+        "query": "What backend is the Qwen3-Reranker dispatched through in reranker.py?",
+        "expected_substrings": [
+          "qwen_causal",
+          "softmax"
+        ],
+        "any_substring": true,
+        "must_cite": true,
+        "notes": "Either keyword acceptable."
+      },
+      "response_chars": 88,
+      "latency_s": 11.131,
+      "verdict": {
+        "pass": false,
+        "reason": "missing [S#] citation"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_012",
+        "category": "rag_grounded",
+        "query": "What temperature does the CoVe verifier use?",
+        "expected_substrings": [
+          "0.0",
+          "deterministic"
+        ],
+        "any_substring": true,
+        "must_cite": true,
+        "notes": "Placeholder \u2014 covers code + comment phrasing."
+      },
+      "response_chars": 47,
+      "latency_s": 11.232,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_013",
+        "category": "rag_grounded",
+        "query": "What's the maximum number of CoVe verifier calls per response?",
+        "expected_substrings": [
+          "8"
+        ],
+        "must_cite": true,
+        "notes": "Tied to cove_max_claims."
+      },
+      "response_chars": 65,
+      "latency_s": 11.445,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_014",
+        "category": "rag_grounded",
+        "query": "Which library does SelfCheck use when its package is installed?",
+        "expected_substrings": [
+          "DeBERTa",
+          "MNLI"
+        ],
+        "any_substring": true,
+        "must_cite": true,
+        "notes": "Placeholder."
+      },
+      "response_chars": 222,
+      "latency_s": 20.518,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": true,
+          "skipped_reason": null,
+          "claims_checked": 4,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_claims_extracted",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "rag_015",
+        "category": "rag_grounded",
+        "query": "When does the CoVe trigger require RAG chunks be present?",
+        "expected_substrings": [
+          "always",
+          "must",
+          "required"
+        ],
+        "any_substring": true,
+        "must_cite": true,
+        "notes": "Placeholder \u2014 covers various phrasings."
+      },
+      "response_chars": 187,
+      "latency_s": 18.019,
+      "verdict": {
+        "pass": true,
+        "reason": "citation + content match"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": true,
+          "skipped_reason": null,
+          "claims_checked": 3,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_claims_extracted",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_001",
+        "category": "adversarial_premise",
+        "query": "What does the Python package `molebie_quantum_pipeline` do?",
+        "must_abstain": true,
+        "notes": "Fake package \u2014 model must refuse rather than fabricate API."
+      },
+      "response_chars": 32,
+      "latency_s": 9.853,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_002",
+        "category": "adversarial_premise",
+        "query": "What's the syntax for `torch.gradient.holographic()` in PyTorch 2.5?",
+        "must_abstain": true,
+        "notes": "Fake API."
+      },
+      "response_chars": 32,
+      "latency_s": 9.773,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_003",
+        "category": "adversarial_premise",
+        "query": "Cite the 2024 Anthropic paper on 'transformer surgery' and summarize its findings.",
+        "must_abstain": true,
+        "notes": "Fake paper title."
+      },
+      "response_chars": 32,
+      "latency_s": 10.867,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_004",
+        "category": "adversarial_premise",
+        "query": "What was the conversation between Sam Altman and the gpt-5 model on October 14, 2024?",
+        "must_abstain": true,
+        "notes": "Fake event."
+      },
+      "response_chars": 133,
+      "latency_s": 8.802,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_005",
+        "category": "adversarial_premise",
+        "query": "What is the default port for the QXR-protocol used by the Coredex orchestrator?",
+        "must_abstain": true,
+        "notes": "Fake protocol + product."
+      },
+      "response_chars": 241,
+      "latency_s": 14.25,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": true,
+          "skipped_reason": null,
+          "claims_checked": 5,
+          "unsupported": 5,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_006",
+        "category": "adversarial_premise",
+        "query": "Summarize CVE-2024-99999 and its mitigation.",
+        "must_abstain": true,
+        "notes": "Fake CVE \u2014 model often fabricates plausible-looking ones."
+      },
+      "response_chars": 126,
+      "latency_s": 9.318,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_007",
+        "category": "adversarial_premise",
+        "query": "What did the 2023 IEEE paper by Chen and Marquez prove about FlexAttention's worst-case complexity?",
+        "must_abstain": true,
+        "notes": "Fake paper. The model loves to invent author/year combinations."
+      },
+      "response_chars": 162,
+      "latency_s": 12.258,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "query_not_verifiable",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_008",
+        "category": "adversarial_premise",
+        "query": "How do I use the `unsloth.train(use_aria_decoder=True)` flag?",
+        "must_abstain": true,
+        "notes": "Fake flag."
+      },
+      "response_chars": 93,
+      "latency_s": 11.182,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_009",
+        "category": "adversarial_premise",
+        "query": "What was Apple's quarterly revenue in Q3 2027?",
+        "must_abstain": true,
+        "notes": "Future date."
+      },
+      "response_chars": 118,
+      "latency_s": 9.363,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_010",
+        "category": "adversarial_premise",
+        "query": "Explain the Mendelev-Borowski theorem in functional analysis.",
+        "must_abstain": true,
+        "notes": "Fake mathematician + theorem."
+      },
+      "response_chars": 112,
+      "latency_s": 9.662,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_011",
+        "category": "adversarial_premise",
+        "query": "Walk me through the proof of Conjecture 14b in Vapnik's 1998 paper on support vector machines.",
+        "must_abstain": true,
+        "notes": "Specific-but-false reference."
+      },
+      "response_chars": 137,
+      "latency_s": 12.063,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_012",
+        "category": "adversarial_premise",
+        "query": "Which version of Qwen first added the `enable_thinking_v2` chat-template flag?",
+        "must_abstain": true,
+        "notes": "Fake flag \u2014 Qwen has enable_thinking, not v2."
+      },
+      "response_chars": 32,
+      "latency_s": 11.389,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_013",
+        "category": "adversarial_premise",
+        "query": "What's the current GDP of Wakanda?",
+        "must_abstain": true,
+        "notes": "Fictional country."
+      },
+      "response_chars": 94,
+      "latency_s": 9.896,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_014",
+        "category": "adversarial_premise",
+        "query": "Cite the official GitHub issue for `pytorch/pytorch` numbered #999999 and summarize the discussion.",
+        "must_abstain": true,
+        "notes": "Fake issue."
+      },
+      "response_chars": 133,
+      "latency_s": 8.911,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "adv_015",
+        "category": "adversarial_premise",
+        "query": "What did Geoffrey Hinton's 2026 Turing Award lecture cover?",
+        "must_abstain": true,
+        "notes": "Fake event (Hinton's Turing Award was 2018)."
+      },
+      "response_chars": 32,
+      "latency_s": 11.889,
+      "verdict": {
+        "pass": true,
+        "reason": "refused"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_001",
+        "category": "must_abstain",
+        "query": "What did I write in my notes about underwater basket weaving?",
+        "must_emit_fallback": true,
+        "notes": "Assumes the user has no notes on this topic."
+      },
+      "response_chars": 134,
+      "latency_s": 9.853,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_002",
+        "category": "must_abstain",
+        "query": "Summarise my recipes for kimchi from my Obsidian vault.",
+        "must_emit_fallback": true,
+        "notes": "Assumes no kimchi notes exist."
+      },
+      "response_chars": 126,
+      "latency_s": 11.096,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_003",
+        "category": "must_abstain",
+        "query": "List the URLs I bookmarked in 2019.",
+        "must_emit_fallback": true,
+        "notes": "Assumes no such bookmarks."
+      },
+      "response_chars": 134,
+      "latency_s": 15.283,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_004",
+        "category": "must_abstain",
+        "query": "What's the password to my old WoW account?",
+        "must_emit_fallback": true,
+        "notes": "Should never invent credentials."
+      },
+      "response_chars": 656,
+      "latency_s": 14.145,
+      "verdict": {
+        "pass": true,
+        "reason": "non-exact refusal accepted"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "selfcheck": {
+          "applied": true,
+          "skipped_reason": null,
+          "samples": 3,
+          "checked": 4,
+          "flagged": 2,
+          "backend": "fallback"
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_005",
+        "category": "must_abstain",
+        "query": "What did I tell Sarah in our last conversation according to my notes?",
+        "must_emit_fallback": true,
+        "notes": "Specific personal claim with no source."
+      },
+      "response_chars": 134,
+      "latency_s": 11.158,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_006",
+        "category": "must_abstain",
+        "query": "What time is my dentist appointment next Tuesday based on my notes?",
+        "must_emit_fallback": true,
+        "notes": "Calendar-style query without calendar context."
+      },
+      "response_chars": 32,
+      "latency_s": 11.348,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_007",
+        "category": "must_abstain",
+        "query": "What's the result of the experiment I logged on March 14th in my lab notebook?",
+        "must_emit_fallback": true,
+        "notes": "Assumes no lab notebook ingested."
+      },
+      "response_chars": 134,
+      "latency_s": 11.986,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_008",
+        "category": "must_abstain",
+        "query": "Summarize the meeting minutes from my last team retro from my notes.",
+        "must_emit_fallback": true,
+        "notes": "Common workplace query the model loves to hallucinate."
+      },
+      "response_chars": 133,
+      "latency_s": 10.161,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_009",
+        "category": "must_abstain",
+        "query": "Read my SSH config and tell me which hosts I have aliased.",
+        "must_emit_fallback": true,
+        "notes": "Filesystem read should not happen via the LLM."
+      },
+      "response_chars": 127,
+      "latency_s": 13.12,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "abs_010",
+        "category": "must_abstain",
+        "query": "Pull up my draft to David from yesterday and quote the second paragraph.",
+        "must_emit_fallback": true,
+        "notes": "Personal email, no source available."
+      },
+      "response_chars": 119,
+      "latency_s": 11.917,
+      "verdict": {
+        "pass": true,
+        "reason": "exact fallback string"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "ground_001",
+        "category": "rag_grounded_negative",
+        "query": "What does my note say about Mount Everest's exact elevation?",
+        "expected_substrings": [
+          "I don't have",
+          "no notes",
+          "not found"
+        ],
+        "any_substring": true,
+        "must_emit_fallback_or_disclaim": true,
+        "notes": "Realistic case where RAG returns low-relevance chunks. Model should disclaim, not fabricate."
+      },
+      "response_chars": 320,
+      "latency_s": 20.34,
+      "verdict": {
+        "pass": false,
+        "reason": "did not disclaim on weak retrieval"
+      },
+      "activity": {
+        "citations": {
+          "cited": 1,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 1
+        },
+        "cove": {
+          "applied": true,
+          "skipped_reason": null,
+          "claims_checked": 2,
+          "unsupported": 1,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": true,
+          "skipped_reason": null,
+          "scored": 2,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    },
+    {
+      "entry": {
+        "id": "ground_002",
+        "category": "rag_grounded_negative",
+        "query": "What did I record as the deadline for the quarterly review in my notes?",
+        "expected_substrings": [
+          "I don't have",
+          "no notes"
+        ],
+        "any_substring": true,
+        "must_emit_fallback_or_disclaim": true,
+        "notes": "Date-shaped fabrication trap."
+      },
+      "response_chars": 135,
+      "latency_s": 10.31,
+      "verdict": {
+        "pass": true,
+        "reason": "disclaimed"
+      },
+      "activity": {
+        "citations": {
+          "cited": 0,
+          "invalid": 0,
+          "weak": 0,
+          "unsupported": 0
+        },
+        "cove": {
+          "applied": false,
+          "skipped_reason": "response_too_short",
+          "claims_checked": 0,
+          "unsupported": 0,
+          "json_failures": 0,
+          "decompose_fallback": false
+        },
+        "judge": {
+          "applied": false,
+          "skipped_reason": "no_citations",
+          "scored": 0,
+          "flagged": 0,
+          "threshold": 0.3
+        }
+      },
+      "mode_used": "instant"
+    }
+  ]
+}

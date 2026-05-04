@@ -88,10 +88,29 @@ class BackendProbe:
                 BackendSnapshot(tier=tier, url=None, model=None, status="not_configured"),
             )
 
+        # Heartbeat into the Subsystems panel — see system_probe for rationale.
+        from app.services.metrics_registry import get_metrics_registry
+        registry = get_metrics_registry()
+
         while not self._stopping:
             tiers = self._tiers()
+            t0 = time.perf_counter()
+            ok = True
             if tiers:
-                await asyncio.gather(*[self._probe_one(t, url, model) for t, url, model in tiers])
+                try:
+                    await asyncio.gather(*[self._probe_one(t, url, model) for t, url, model in tiers])
+                except Exception:
+                    ok = False
+            try:
+                up_count = sum(1 for s in self._snapshots.values() if s.status == "up")
+                await registry.record_subsystem(
+                    "probe.backend",
+                    (time.perf_counter() - t0) * 1000.0,
+                    ok=ok,
+                    note=f"{up_count}/{len(self._snapshots)} up",
+                )
+            except Exception:
+                pass
             await asyncio.sleep(_PROBE_INTERVAL_SEC)
 
     async def _probe_one(self, tier: str, url: str, model: str) -> None:

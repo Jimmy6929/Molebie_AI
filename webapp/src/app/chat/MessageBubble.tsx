@@ -9,6 +9,7 @@ import "katex/dist/katex.min.css";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { parseThinkingContent } from "@/lib/thinkParser";
+import { useTypewriter } from "@/lib/useTypewriter";
 import type { SearchSource } from "@/lib/gateway";
 
 export interface MessageBubbleProps {
@@ -140,6 +141,11 @@ export default function MessageBubble({
     [parsed.response, sources],
   );
 
+  // Pace the visible reveal so streamed tokens flow in at a steady rate
+  // regardless of upstream jitter; snaps to full content when streaming ends.
+  const visibleResponse = useTypewriter(renderedResponse ?? "", { enabled: streaming });
+  const visibleThinking = useTypewriter(parsed.thinking ?? "", { enabled: streaming });
+
   useEffect(() => {
     if (parsed.isThinking) {
       setThinkOpen(true);
@@ -188,7 +194,7 @@ export default function MessageBubble({
         </div>
 
         {/* Thinking panel */}
-        {!isUser && parsed.thinking && (
+        {!isUser && (parsed.thinking || parsed.isThinking) && (
           <div className="mb-2 rounded-xl bg-black/30 overflow-hidden">
             <button
               onClick={() => setThinkOpen(!thinkOpen)}
@@ -212,7 +218,7 @@ export default function MessageBubble({
             </button>
             {thinkOpen && (
               <div className="px-3 pb-2.5 text-[11px] text-[#aaa] whitespace-pre-wrap leading-relaxed border-t border-white/[0.06]">
-                {parsed.thinking}
+                {visibleThinking}
               </div>
             )}
           </div>
@@ -251,7 +257,7 @@ export default function MessageBubble({
           </div>
         ) : (
           <div className="markdown-body break-words">
-            {renderedResponse ? (
+            {visibleResponse && (
               <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[rehypeKatex]}
@@ -270,9 +276,9 @@ export default function MessageBubble({
                   },
                 }}
               >
-                {renderedResponse}
+                {visibleResponse}
               </ReactMarkdown>
-            ) : null}
+            )}
             {streaming && (
               <span className="inline-block w-2 h-4 bg-[#00ff41] ml-0.5 animate-pulse rounded-sm" />
             )}

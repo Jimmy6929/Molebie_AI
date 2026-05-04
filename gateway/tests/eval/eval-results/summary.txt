@@ -1,0 +1,4 @@
+baseline       pass=37/42 (88.1%) mean=13.847s p90=23.641s cove(f=0,+0) judge(f=0,+0) sc(f=0,+0)
+judge          pass=37/42 (88.1%) mean=11.187s p90=13.437s cove(f=0,+0) judge(f=5,+0) sc(f=0,+0)
+cove           pass=37/42 (88.1%) mean=12.063s p90=17.987s cove(f=6,+5) judge(f=0,+0) sc(f=0,+0)
+all            pass=38/42 (90.5%) mean=12.097s p90=17.745s cove(f=5,+2) judge(f=2,+0) sc(f=1,+1)

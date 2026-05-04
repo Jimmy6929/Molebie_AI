@@ -1,0 +1,87 @@
+# Phase 4 hyperparameters — straight from the build plan.
+#
+# These values come from Unsloth's Qwen3.5 LoRA recipes + the R-Tuning
+# / ORPO papers cited in the build plan. Treat them as a starting
+# point: re-evaluate after each training run with eval_lora.py and
+# tighten whatever hurts the regression metrics.
+#
+# Crucial constraints (also documented in tasks/hallucination-mitigation/
+# build-plan-hallucination-mitigation.md):
+#   - Never train more than 2 epochs (1 is the build-plan default; 2
+#     only with explicit eval-driven justification).
+#   - Never QLoRA on Qwen3.5 — use bf16 LoRA. Unsloth recommends
+#     against 4-bit quantized adapters for this model family.
+#   - Never set presence_penalty > 1.5 even at training time (sampling
+#     param leakage causes language mixing).
+
+# ── Stage 1 — R-Tuning SFT ────────────────────────────────────────────
+sft:
+  base_model: "Qwen/Qwen3.5-9B"          # or 4B if VRAM-constrained
+  adapter_dir: "adapters/sft"
+  lora:
+    r: 16
+    lora_alpha: 16
+    lora_dropout: 0.0
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+    use_gradient_checkpointing: "unsloth"
+    random_state: 3407
+  optim:
+    learning_rate: 2.0e-4
+    num_train_epochs: 1                  # NEVER >2 without eval-driven case
+    warmup_ratio: 0.03
+    lr_scheduler_type: "cosine"
+    optimizer: "adamw_8bit"
+    bf16: true                           # NEVER 4-bit QLoRA on Qwen3.5
+  batch:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 4
+    max_seq_length: 2048
+
+# ── Stage 2 — ORPO factuality ─────────────────────────────────────────
+orpo:
+  base_adapter: "adapters/sft"           # continue from stage 1
+  adapter_dir: "adapters/orpo"
+  beta: 0.1                              # ORPO odds-ratio mixing weight
+  optim:
+    learning_rate: 5.0e-5                # lower than SFT — preferences are sharp
+    num_train_epochs: 1                  # NEVER >2
+    warmup_ratio: 0.03
+    lr_scheduler_type: "cosine"
+    optimizer: "adamw_8bit"
+    bf16: true
+  batch:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 4
+    max_seq_length: 2048
+
+# ── Eval gates ────────────────────────────────────────────────────────
+# If any of these regress relative to the pre-tuning baseline, the LoRA
+# is doing more harm than good — discard it. eval_lora.py enforces.
+gates:
+  truthfulqa_mc2_min_delta: -0.02        # fail if drops > 2pp
+  faithfulness_min: 0.85                 # rag_grounded pass rate
+  refusal_rate_min: 0.70                 # must_abstain pass rate
+  mmlu_pro_min_delta: -0.02              # forgetting check
+  gsm8k_min_delta: -0.02                 # forgetting check
+  ifeval_min_delta: -0.02                # instruction-following check
+
+# ── Hardware paths ────────────────────────────────────────────────────
+# Picked by train_*.sh wrappers. We don't ship the training code itself
+# — Unsloth and mlx-lm have battle-tested implementations. Wrappers
+# pass these hyperparameters through.
+hardware:
+  apple_silicon:
+    backend: "mlx-lm"
+    note: "M3/M4 Max 64GB+. ~12 min per 600 iters on 4B."
+    runner: "train_mlx.sh"
+  linux_cuda:
+    backend: "unsloth"
+    note: "RTX 4090 24GB fits 9B bf16 LoRA at ~22 GB used."
+    runner: "train_unsloth.sh"

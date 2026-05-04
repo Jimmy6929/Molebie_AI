@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
     from app.schema import init_database
     db_path = await init_database(
         data_dir=settings.data_dir,
+        embedding_dim=settings.embedding_dim,
         auth_mode=getattr(settings, "auth_mode", "single"),
     )
 
@@ -72,6 +73,7 @@ async def lifespan(app: FastAPI):
     # serving chat traffic is more important than the monitor feature.
     system_probe = None
     backend_probe = None
+    storage_probe = None
     try:
         from app.services.system_probe import get_system_probe
         system_probe = get_system_probe()
@@ -84,6 +86,12 @@ async def lifespan(app: FastAPI):
         await backend_probe.start()
     except Exception as exc:
         print(f"[monitor] Backend probe unavailable: {exc}")
+    try:
+        from app.services.storage_probe import get_storage_probe
+        storage_probe = get_storage_probe(settings.data_dir)
+        await storage_probe.start()
+    except Exception as exc:
+        print(f"[monitor] Storage probe unavailable: {exc}")
 
     try:
         yield
@@ -93,6 +101,8 @@ async def lifespan(app: FastAPI):
             await system_probe.stop()
         if backend_probe is not None:
             await backend_probe.stop()
+        if storage_probe is not None:
+            await storage_probe.stop()
         print(f"Shutting down {settings.app_name}")
 
 
@@ -121,6 +131,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["X-Session-ID"],
     )
+
+    # Observability middleware — records each request as a subsystem call so
+    # the live monitor shows constant motion at every API hit. Skips
+    # /metrics/live to avoid feedback noise (the monitor polls that route
+    # itself at 2 Hz).
+    from app.middleware.observability import ObservabilityMiddleware
+    app.add_middleware(ObservabilityMiddleware)
 
     # Register routes
     app.include_router(auth.router)

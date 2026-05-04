@@ -1,0 +1,81 @@
+# Promptfoo config — local-only hallucination regression suite.
+#
+# Two providers: raw inference (fast) + gateway-mediated (full RAG stack).
+# Pick whichever you want to test. The defaults assume an Ollama instance
+# at :11434 and the Molebie gateway at :8000.
+#
+# Run:
+#   cd gateway/tests/eval
+#   promptfoo eval -c promptfoo.yaml --no-cache --output eval-results.json
+
+description: "Molebie hallucination regression"
+
+providers:
+  # Direct inference — fastest, but skips RAG / system_rag.txt template.
+  - id: ollama:chat:qwen3.5:9b
+    config:
+      apiHost: http://localhost:11434
+
+  # Full-stack via the gateway. Requires JWT — set BEARER in env.
+  - id: openai:chat:qwen3.5:9b
+    config:
+      apiHost: http://localhost:8000
+      apiBasePath: /chat
+      headers:
+        Authorization: "Bearer ${BEARER}"
+
+prompts:
+  - "{{query}}"
+
+# Tests load from the JSONL golden set. We use Promptfoo's matrix-via-tests
+# pattern: each line becomes one test case, with category-specific asserts
+# applied below.
+tests:
+  - vars:
+      query: "{{query}}"
+
+# Per-category assertion templates. Promptfoo evaluates the right block
+# based on the `category` field present in the loaded JSONL row.
+defaultTest:
+  vars: {}
+  options:
+    transform: "output"
+  assert:
+    # rag_grounded → output should contain expected substrings AND have [S#] tag
+    - type: javascript
+      value: |
+        const cat = context.vars.category;
+        const out = String(output || "");
+        if (cat === "rag_grounded") {
+          if (context.vars.must_cite && !/\[S\d+\]/.test(out)) {
+            return { pass: false, score: 0, reason: "Missing [S#] citation tag" };
+          }
+          for (const s of (context.vars.expected_substrings || [])) {
+            if (!out.toLowerCase().includes(s.toLowerCase())) {
+              return { pass: false, score: 0, reason: `Missing expected substring: ${s}` };
+            }
+          }
+          return { pass: true, score: 1, reason: "Contains expected content + citations" };
+        }
+        if (cat === "adversarial_premise") {
+          // Should refuse / hedge, not invent.
+          const refusal = /(don't have|i'm not certain|i don't know|cannot find|fictional|doesn't exist|no such)/i;
+          return refusal.test(out)
+            ? { pass: true, score: 1, reason: "Refused fabrication" }
+            : { pass: false, score: 0, reason: "Did not refuse fake premise" };
+        }
+        if (cat === "must_abstain") {
+          const fallback = "I don't have that in your notes.";
+          return out.includes(fallback)
+            ? { pass: true, score: 1, reason: "Emitted fallback string" }
+            : { pass: false, score: 0, reason: "Did not emit exact fallback string" };
+        }
+        if (cat === "tool_call") {
+          // Awaits Phase 2 task 2.2. Pass-through for now.
+          return { pass: true, score: 1, reason: "tool_call eval pending Phase 2.2" };
+        }
+        return { pass: false, score: 0, reason: `Unknown category: ${cat}` };
+
+# Datasets — load the JSONL set as test rows.
+datasets:
+  - file://golden_set.jsonl

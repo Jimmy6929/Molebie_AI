@@ -7,15 +7,45 @@ user isolation via WHERE user_id = ? in every query.
 
 import json
 import struct
+import time
 import uuid
 from datetime import datetime, timezone
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import Any
 
 import aiosqlite
 
 from app.config import Settings, get_settings
 from app.schema import get_connection
+
+
+def _timed_db(name: str):
+    """Decorator: record latency of an async DatabaseService method as a
+    `db.<name>` subsystem call. Lazy-imports the registry to avoid a
+    circular import at module load. Failures in the metrics path never
+    affect the wrapped call's return value or exception."""
+    def decorator(fn):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            t0 = time.monotonic()
+            ok = True
+            try:
+                return await fn(*args, **kwargs)
+            except Exception:
+                ok = False
+                raise
+            finally:
+                try:
+                    from app.services.metrics_registry import get_metrics_registry
+                    await get_metrics_registry().record_subsystem(
+                        f"db.{name}",
+                        (time.monotonic() - t0) * 1000.0,
+                        ok=ok,
+                    )
+                except Exception:
+                    pass
+        return wrapper
+    return decorator
 
 
 def _now() -> str:
@@ -72,6 +102,7 @@ class DatabaseService:
         )
         return _row_to_dict(row[0]) if row else None
 
+    @_timed_db("get_session")
     async def get_session(
         self, session_id: str, user_id: str, **_kwargs
     ) -> dict[str, Any] | None:
@@ -82,6 +113,7 @@ class DatabaseService:
         )
         return _row_to_dict(rows[0]) if rows else None
 
+    @_timed_db("list_sessions")
     async def list_sessions(
         self, user_id: str, limit: int = 50, **_kwargs
     ) -> list[dict[str, Any]]:
@@ -146,6 +178,7 @@ class DatabaseService:
 
     # ==================== Messages ====================
 
+    @_timed_db("create_message")
     async def create_message(
         self,
         session_id: str,
@@ -177,6 +210,23 @@ class DatabaseService:
         )
         return _row_to_dict(row[0]) if row else None
 
+    async def update_message_content(
+        self,
+        message_id: str,
+        user_id: str,
+        content: str,
+    ) -> None:
+        """Replace a message's content. Used by the citation-validation
+        footnote (task 2.4) to mutate an assistant response in-place after
+        post-processing flags un-cited claims."""
+        db = await self._get_conn()
+        await db.execute(
+            "UPDATE chat_messages SET content = ? WHERE id = ? AND user_id = ?",
+            (content, message_id, user_id),
+        )
+        await db.commit()
+
+    @_timed_db("get_session_messages")
     async def get_session_messages(
         self,
         session_id: str,
@@ -398,6 +448,36 @@ class DatabaseService:
 
     # ==================== Document Chunks ====================
 
+    async def delete_document_chunks(
+        self, doc_id: str, user_id: str
+    ) -> int:
+        """Delete chunks (and their vec rows) for a document, leaving the
+        ``documents`` row intact. Used by the full-reindex endpoint to swap
+        chunks without losing the document or its storage path. FTS rows
+        clean themselves up via the AFTER DELETE trigger.
+
+        Returns the number of deleted chunks.
+        """
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT rowid FROM document_chunks WHERE document_id = ? AND user_id = ?",
+            (doc_id, user_id),
+        )
+        if not rows:
+            return 0
+        rowids = [r["rowid"] for r in rows]
+        placeholders = ",".join("?" * len(rowids))
+        await db.execute(
+            f"DELETE FROM document_chunks_vec WHERE rowid IN ({placeholders})",
+            rowids,
+        )
+        await db.execute(
+            "DELETE FROM document_chunks WHERE document_id = ? AND user_id = ?",
+            (doc_id, user_id),
+        )
+        await db.commit()
+        return len(rowids)
+
     async def insert_chunks(self, chunks: list[dict[str, Any]]) -> None:
         """Batch insert chunks into document_chunks, FTS5, and vec tables."""
         if not chunks:
@@ -437,6 +517,7 @@ class DatabaseService:
                 )
         await db.commit()
 
+    @_timed_db("user_has_document_chunks")
     async def user_has_document_chunks(self, user_id: str) -> bool:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
@@ -494,15 +575,19 @@ class DatabaseService:
     async def fetch_session_attachments_text(
         self, session_id: str, user_id: str
     ) -> str:
-        """Fetch session documents formatted for system prompt injection."""
+        """Fetch session documents formatted for system prompt injection.
+
+        Tagged ``[A1]``, ``[A2]``, ... so attachments share the unified
+        EVIDENCE citation namespace with notes (``[S#]``) and web (``[W#]``).
+        """
         rows = await self.list_session_documents(session_id, user_id)
         if not rows:
             return ""
-        parts = ["ATTACHED DOCUMENTS (read by user request — use this as primary context):"]
+        parts = ["ADDITIONAL EVIDENCE — ATTACHMENTS (uploaded by user this session):"]
         for idx, row in enumerate(rows, 1):
             content = row.get("content", "")
             filename = row.get("filename", "document")
-            parts.append(f"\n[{idx}] {filename} ({len(content):,} chars)")
+            parts.append(f"\n[A{idx}] {filename} ({len(content):,} chars)")
             parts.append(content)
         return "\n".join(parts)
 

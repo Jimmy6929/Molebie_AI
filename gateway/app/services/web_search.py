@@ -20,6 +20,7 @@ except ImportError:  # graceful fallback if not installed
     trafilatura = None  # type: ignore[assignment]
 
 from app.config import Settings, get_settings
+from app.services.metrics_registry import get_metrics_registry
 
 _TRIVIAL_PATTERNS = re.compile(
     r"^("
@@ -118,6 +119,23 @@ _NEWS_DOMAINS = (
 )
 
 
+def looks_like_search_query(message: str) -> bool:
+    """Lightweight rule-based check: does this message look like it would
+    benefit from a web search? Used by the chat routing layer to decide
+    whether to nudge the model toward calling web_search on a confidence
+    gap. Intentionally narrow — temporal/recency/news/real-time signals
+    only — to avoid suggesting search on questions the model can answer
+    from training (e.g. "explain how transformers work")."""
+    if not message:
+        return False
+    cleaned = message.strip().rstrip("?!., ")
+    if len(cleaned) < 2:
+        return False
+    if _TRIVIAL_PATTERNS.match(cleaned):
+        return False
+    return bool(_SEARCH_PATTERNS.search(cleaned.lower()))
+
+
 def _extract_domain(url: str) -> str:
     """Pull hostname from a URL, stripping www. prefix."""
     try:
@@ -190,6 +208,11 @@ class WebSearchService:
 
     async def _classify_with_llm(self, message: str) -> bool:
         """Ask the instant model whether this message needs a web search."""
+        metrics = get_metrics_registry()
+        async with metrics.subsystem_timer("web.classify"):
+            return await self._classify_with_llm_inner(message)
+
+    async def _classify_with_llm_inner(self, message: str) -> bool:
         try:
             from app.services.inference import get_inference_service
 
@@ -269,7 +292,12 @@ class WebSearchService:
 
         Returns an empty list on any failure so chat can proceed without search.
         """
+        metrics = get_metrics_registry()
         limit = num_results or self.max_results
+        async with metrics.subsystem_timer("web.query", note=query[:60]):
+            return await self._search_inner(query, limit)
+
+    async def _search_inner(self, query: str, limit: int) -> list[dict[str, Any]]:
         try:
             # Short connect timeout (1s) so we fail fast when offline;
             # the read timeout stays at the configured value for slow searches.
@@ -327,6 +355,11 @@ class WebSearchService:
         """Fetch full-page content from *url* and extract clean text."""
         if trafilatura is None:
             return None
+        metrics = get_metrics_registry()
+        async with metrics.subsystem_timer("web.fetch", note=_extract_domain(url)):
+            return await self._fetch_page_content_inner(url)
+
+    async def _fetch_page_content_inner(self, url: str) -> str | None:
         try:
             async with httpx.AsyncClient(timeout=self.full_content_timeout) as client:
                 resp = await client.get(
@@ -380,10 +413,16 @@ class WebSearchService:
         return results
 
     def format_results_for_context(self, results: list[dict[str, Any]]) -> str:
-        """Format search results into a text block for the system message."""
+        """Format search results into a text block for the system message.
+
+        Results are tagged ``[W1]``, ``[W2]``, ... so they share a single
+        citation namespace with notes (``[S#]``) and attachments (``[A#]``).
+        Use as a continuation of the EVIDENCE block — both prompt templates
+        recognize ``[W#]`` as a valid evidence tag.
+        """
         if not results:
             return ""
-        lines = []
+        lines = ["ADDITIONAL EVIDENCE — WEB:"]
         for i, r in enumerate(results, 1):
             title = r.get("title", "Untitled")
             url = r.get("url", "")
@@ -396,7 +435,7 @@ class WebSearchService:
             content_tag = "[Full page content]" if r.get("content_source") == "full_page" else "[Snippet only]"
 
             header = (
-                f"[{i}] {title}\n"
+                f"[W{i}] {title}\n"
                 f"    URL: {url} | Type: {source_type} ({trust}) | Domain: {domain}\n"
                 f"    {content_tag}"
             )

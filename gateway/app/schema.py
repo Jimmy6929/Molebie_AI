@@ -6,6 +6,7 @@ that creates all tables, FTS5 virtual tables, and sqlite-vec virtual tables.
 """
 
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -282,9 +283,32 @@ def _vec_table_sql(embedding_dim: int) -> str:
     """
 
 
+_VEC_DIM_RE = re.compile(r"float\[(\d+)\]")
+
+
+def _detect_vec_dim(conn: sqlite3.Connection) -> int | None:
+    """Read the embedding dim baked into ``document_chunks_vec``'s CREATE SQL.
+
+    Returns the integer dim or None if the table doesn't exist / SQL doesn't
+    match. Used by init_database_sync to surface dim mismatches loudly.
+    """
+    try:
+        cursor = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name=? AND type='table'",
+            ("document_chunks_vec",),
+        )
+        row = cursor.fetchone()
+    except Exception:
+        return None
+    if not row or not row[0]:
+        return None
+    match = _VEC_DIM_RE.search(row[0])
+    return int(match.group(1)) if match else None
+
+
 def init_database_sync(
     data_dir: str,
-    embedding_dim: int = 1536,
+    embedding_dim: int = 1024,
     auth_mode: str = "single",
     default_password_hash: str | None = None,
 ) -> str:
@@ -326,6 +350,20 @@ def init_database_sync(
                     CREATE INDEX IF NOT EXISTS idx_message_sources_message_id ON message_sources(message_id);
                 """)
                 print("[schema] Migrated: added message_sources table")
+
+            # Check vec table dim against the configured embedding_dim. We
+            # don't auto-migrate (DROP+recreate would silently destroy
+            # vectors on an env-var typo); we just surface the mismatch
+            # loudly so the operator runs scripts/migrate_embedding_dim.py.
+            actual_dim = _detect_vec_dim(conn)
+            if actual_dim is not None and actual_dim != embedding_dim:
+                print(
+                    f"[schema] WARNING: vec table dim={actual_dim} but "
+                    f"config embedding_dim={embedding_dim}. Inserts will "
+                    "fail until you run: "
+                    "python -m gateway.scripts.migrate_embedding_dim "
+                    "(then POST /documents/reindex/full)."
+                )
             print(f"[schema] Database already initialized at {db_path}")
             conn.close()
             return db_path
@@ -374,7 +412,7 @@ def init_database_sync(
 
 async def init_database(
     data_dir: str,
-    embedding_dim: int = 1536,
+    embedding_dim: int = 1024,
     auth_mode: str = "single",
     default_password_hash: str | None = None,
 ) -> str:
