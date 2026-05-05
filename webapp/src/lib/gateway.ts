@@ -628,3 +628,198 @@ export async function fetchImage(token: string, imageId: string): Promise<string
   const blob = await res.blob();
   return URL.createObjectURL(blob);
 }
+
+// ── Folder Ingest ────────────────────────────────────────────────────────
+
+export interface FolderManifestEntry {
+  relative_path: string;
+  size: number;
+  content_type: string | null;
+}
+
+export interface FolderAcceptedFile {
+  file_id: string;
+  relative_path: string;
+  size: number;
+}
+
+export interface FolderRejectedFile {
+  relative_path: string;
+  reason: string;
+}
+
+export interface StartFolderJobResponse {
+  job_id: string;
+  accepted_files: FolderAcceptedFile[];
+  rejected_files: FolderRejectedFile[];
+  total_accepted_bytes: number;
+}
+
+export interface UploadFolderBatchResponse {
+  accepted: string[];
+  rejected: FolderRejectedFile[];
+}
+
+export type FolderJobStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface FolderJobSnapshot {
+  job_id: string;
+  status: FolderJobStatus;
+  root_label: string;
+  total_files: number;
+  processed_files: number;
+  failed_files: number;
+  skipped_files: number;
+  total_bytes: number;
+  processed_bytes: number;
+  started_at: string | null;
+  finished_at: string | null;
+  last_event_id: number;
+}
+
+export interface FolderEventCallbacks {
+  onJobStarted?: (data: { job_id: string; total_files: number; total_bytes: number; root_label: string }) => void;
+  onFileStarted?: (data: { file_id: string; relative_path: string; size: number }) => void;
+  onFileCompleted?: (data: { file_id: string; relative_path: string; chunks: number; document_id: string; size: number }) => void;
+  onFileFailed?: (data: { file_id: string; relative_path: string; error: string }) => void;
+  onFileSkipped?: (data: { file_id: string; relative_path: string; reason: string }) => void;
+  onProgress?: (data: {
+    processed_files: number;
+    failed_files: number;
+    skipped_files: number;
+    processed_bytes: number;
+    total_files: number;
+    total_bytes: number;
+  }) => void;
+  onJobCompleted?: (data: { processed_files: number; failed_files: number; skipped_files: number; total_bytes: number; duration_ms: number }) => void;
+  onJobCancelled?: (data: { job_id: string; processed_files: number; failed_files: number }) => void;
+  onJobFailed?: (data: { error: string }) => void;
+  onError?: (err: Event) => void;
+}
+
+export async function startFolderUpload(
+  token: string,
+  rootLabel: string,
+  manifest: FolderManifestEntry[],
+): Promise<StartFolderJobResponse> {
+  return apiCall<StartFolderJobResponse>("/documents/folder/start", token, {
+    method: "POST",
+    body: JSON.stringify({ root_label: rootLabel, files: manifest }),
+  });
+}
+
+export async function uploadFolderBatch(
+  token: string,
+  jobId: string,
+  files: { file: File; relativePath: string }[],
+  onBatchProgress?: (loaded: number, total: number) => void,
+): Promise<UploadFolderBatchResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    for (const { file, relativePath } of files) {
+      formData.append("files", file, relativePath.split("/").pop() || file.name);
+      formData.append("relative_paths", relativePath);
+    }
+
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onBatchProgress) {
+        onBatchProgress(e.loaded, e.total);
+      }
+    });
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (err) {
+          reject(new Error(`Bad JSON: ${err}`));
+        }
+      } else {
+        reject(new Error(`Upload error ${xhr.status}: ${xhr.responseText}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Upload failed — connection error"));
+
+    xhr.open("POST", `${GATEWAY_URL}/documents/folder/${encodeURIComponent(jobId)}/upload`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.send(formData);
+  });
+}
+
+export interface FolderEventStreamHandle {
+  close: () => void;
+}
+
+export function streamFolderEvents(
+  token: string,
+  jobId: string,
+  callbacks: FolderEventCallbacks,
+  lastEventId?: number,
+): FolderEventStreamHandle {
+  const url = new URL(`${GATEWAY_URL}/documents/folder/${encodeURIComponent(jobId)}/events`);
+  url.searchParams.set("token", token);
+  if (typeof lastEventId === "number" && lastEventId > 0) {
+    url.searchParams.set("last_event_id", String(lastEventId));
+  }
+  const es = new EventSource(url.toString());
+
+  const bind = <T,>(name: string, handler?: (d: T) => void) => {
+    es.addEventListener(name, (ev) => {
+      if (!handler) return;
+      try {
+        handler(JSON.parse((ev as MessageEvent).data) as T);
+      } catch {
+        /* malformed event — ignore */
+      }
+    });
+  };
+
+  bind("job_started", callbacks.onJobStarted);
+  bind("file_started", callbacks.onFileStarted);
+  bind("file_completed", callbacks.onFileCompleted);
+  bind("file_failed", callbacks.onFileFailed);
+  bind("file_skipped", callbacks.onFileSkipped);
+  bind("progress", callbacks.onProgress);
+
+  es.addEventListener("job_completed", (ev) => {
+    try { callbacks.onJobCompleted?.(JSON.parse((ev as MessageEvent).data)); } catch { /* ignore */ }
+    es.close();
+  });
+  es.addEventListener("job_cancelled", (ev) => {
+    try { callbacks.onJobCancelled?.(JSON.parse((ev as MessageEvent).data)); } catch { /* ignore */ }
+    es.close();
+  });
+  es.addEventListener("job_failed", (ev) => {
+    try { callbacks.onJobFailed?.(JSON.parse((ev as MessageEvent).data)); } catch { /* ignore */ }
+    es.close();
+  });
+  es.onerror = (err) => {
+    callbacks.onError?.(err);
+    // EventSource auto-reconnects unless we close it. The SSE endpoint sends
+    // Last-Event-ID on reconnect, so the server replays missed events.
+  };
+
+  return { close: () => es.close() };
+}
+
+export async function cancelFolderUpload(token: string, jobId: string): Promise<{ job_id: string; status: string }> {
+  return apiCall<{ job_id: string; status: string }>(
+    `/documents/folder/${encodeURIComponent(jobId)}/cancel`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export async function getActiveFolderJob(token: string): Promise<FolderJobSnapshot | null> {
+  return apiCall<FolderJobSnapshot | null>("/documents/folder/active", token);
+}
+
+export async function getFolderJob(token: string, jobId: string): Promise<FolderJobSnapshot> {
+  return apiCall<FolderJobSnapshot>(`/documents/folder/${encodeURIComponent(jobId)}`, token);
+}

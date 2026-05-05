@@ -14,7 +14,7 @@ from pathlib import Path
 import aiosqlite
 import sqlite_vec
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Default single-user ID (used when AUTH_MODE=single)
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
@@ -118,13 +118,18 @@ CREATE TABLE IF NOT EXISTS documents (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
     created_at TEXT NOT NULL,
-    processed_at TEXT
+    processed_at TEXT,
+    file_hash TEXT,
+    relative_path TEXT,
+    ingest_job_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_documents_user_created
     ON documents(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_documents_user_hash ON documents(user_id, file_hash);
+CREATE INDEX IF NOT EXISTS idx_documents_ingest_job ON documents(ingest_job_id);
 
 -- ============================================
 -- DOCUMENT CHUNKS TABLE
@@ -237,6 +242,72 @@ CREATE TABLE IF NOT EXISTS rag_query_metrics (
 
 CREATE INDEX IF NOT EXISTS idx_rag_query_metrics_user_created
     ON rag_query_metrics(user_id, created_at DESC);
+"""
+
+
+_INGEST_SCHEMA_SQL = """
+-- ============================================
+-- INGEST JOBS TABLE (folder upload)
+-- ============================================
+CREATE TABLE IF NOT EXISTS ingest_jobs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    root_label TEXT NOT NULL,
+    total_files INTEGER NOT NULL DEFAULT 0,
+    processed_files INTEGER NOT NULL DEFAULT 0,
+    failed_files INTEGER NOT NULL DEFAULT 0,
+    skipped_files INTEGER NOT NULL DEFAULT 0,
+    total_bytes INTEGER NOT NULL DEFAULT 0,
+    processed_bytes INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','running','completed','failed','cancelled')),
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_jobs_user_status ON ingest_jobs(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_ingest_jobs_user_created
+    ON ingest_jobs(user_id, created_at DESC);
+
+-- ============================================
+-- INGEST JOB FILES TABLE (per-file progress)
+-- ============================================
+CREATE TABLE IF NOT EXISTS ingest_job_files (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES ingest_jobs(id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    file_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','uploaded','processing','completed','failed','skipped')),
+    error_message TEXT,
+    document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    storage_path TEXT,
+    content_type TEXT,
+    started_at TEXT,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_job_files_job_status
+    ON ingest_job_files(job_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ingest_job_files_job_path
+    ON ingest_job_files(job_id, relative_path);
+
+-- ============================================
+-- INGEST JOB EVENTS TABLE (SSE replay buffer)
+-- ============================================
+CREATE TABLE IF NOT EXISTS ingest_job_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES ingest_jobs(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_job_events_job_id_id
+    ON ingest_job_events(job_id, id);
 """
 
 
@@ -364,12 +435,42 @@ def init_database_sync(
                     "python -m gateway.scripts.migrate_embedding_dim "
                     "(then POST /documents/reindex/full)."
                 )
+
+            # Migrate: folder ingest (file_hash, relative_path, ingest_job_id on documents
+            # plus the three ingest_* tables). Idempotent — safe to re-run.
+            doc_cols = {row[1] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
+            if "file_hash" not in doc_cols:
+                conn.execute("ALTER TABLE documents ADD COLUMN file_hash TEXT")
+            if "relative_path" not in doc_cols:
+                conn.execute("ALTER TABLE documents ADD COLUMN relative_path TEXT")
+            if "ingest_job_id" not in doc_cols:
+                conn.execute("ALTER TABLE documents ADD COLUMN ingest_job_id TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_user_hash "
+                "ON documents(user_id, file_hash)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_ingest_job "
+                "ON documents(ingest_job_id)"
+            )
+
+            ingest_present = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='ingest_jobs'"
+            ).fetchone()
+            if not ingest_present:
+                conn.executescript(_INGEST_SCHEMA_SQL)
+                print("[schema] Migrated: added folder-ingest tables")
+
+            conn.commit()
             print(f"[schema] Database already initialized at {db_path}")
             conn.close()
             return db_path
 
         # Create all tables
         conn.executescript(_SCHEMA_SQL)
+
+        # Create folder-ingest tables
+        conn.executescript(_INGEST_SCHEMA_SQL)
 
         # Create FTS5 virtual table
         conn.executescript(_fts5_sql())

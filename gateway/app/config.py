@@ -272,6 +272,17 @@ class Settings(BaseSettings):
     document_max_file_size: int = 50 * 1024 * 1024  # 50 MB; override via DOCUMENT_MAX_FILE_SIZE
     session_doc_max_chars: int = 12000  # max extracted text per attachment
 
+    # ── Folder Ingest ─────────────────────────────────────────────
+    folder_ingest_enabled: bool = True
+    folder_ingest_max_files: int = 5000
+    folder_ingest_default_ignore: str = (
+        "node_modules,.git,.next,__pycache__,dist,build,.DS_Store,Thumbs.db,"
+        "*.lock,package-lock.json,yarn.lock,poetry.lock,pnpm-lock.yaml,"
+        ".venv,venv,.idea,.vscode,target,.cache"
+    )
+    folder_ingest_progress_interval_sec: float = 2.0
+    folder_ingest_progress_interval_files: int = 5
+
     # ── Conversation Summarisation (8a) ─────────────────────────
     summary_enabled: bool = True
     summary_trigger_threshold: int = 16    # unsummarised messages before compressing

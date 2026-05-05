@@ -374,15 +374,22 @@ class DatabaseService:
         file_type: str,
         file_size: int,
         doc_status: str = "pending",
+        relative_path: str | None = None,
+        file_hash: str | None = None,
+        ingest_job_id: str | None = None,
     ) -> dict[str, Any]:
         db = await self._get_conn()
         did = _uuid()
         now = _now()
         await db.execute(
             "INSERT INTO documents "
-            "(id, user_id, filename, storage_path, file_type, file_size, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (did, user_id, filename, storage_path, file_type, file_size, doc_status, now),
+            "(id, user_id, filename, storage_path, file_type, file_size, status, created_at, "
+            " relative_path, file_hash, ingest_job_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                did, user_id, filename, storage_path, file_type, file_size, doc_status, now,
+                relative_path, file_hash, ingest_job_id,
+            ),
         )
         await db.commit()
         rows = await db.execute_fetchall("SELECT * FROM documents WHERE id = ?", (did,))
@@ -837,6 +844,277 @@ class DatabaseService:
             ),
         )
         await db.commit()
+
+
+    # ==================== Folder Ingest Jobs ====================
+
+    async def create_ingest_job(
+        self,
+        user_id: str,
+        root_label: str,
+        files: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        Create an ingest_jobs row and one ingest_job_files row per accepted file.
+
+        files: list of {relative_path, file_size, content_type}
+
+        Returns the job dict with `accepted_files` populated as
+        [{file_id, relative_path, size}].
+        """
+        db = await self._get_conn()
+        job_id = _uuid()
+        now = _now()
+        total_files = len(files)
+        total_bytes = sum(int(f.get("file_size") or 0) for f in files)
+
+        await db.execute(
+            "INSERT INTO ingest_jobs "
+            "(id, user_id, root_label, total_files, total_bytes, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (job_id, user_id, root_label, total_files, total_bytes, now),
+        )
+
+        accepted: list[dict[str, Any]] = []
+        for f in files:
+            fid = _uuid()
+            rel = f["relative_path"]
+            size = int(f.get("file_size") or 0)
+            ctype = f.get("content_type")
+            await db.execute(
+                "INSERT INTO ingest_job_files "
+                "(id, job_id, relative_path, file_size, content_type, status) "
+                "VALUES (?, ?, ?, ?, ?, 'pending')",
+                (fid, job_id, rel, size, ctype),
+            )
+            accepted.append({"file_id": fid, "relative_path": rel, "size": size})
+
+        await db.commit()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM ingest_jobs WHERE id = ?", (job_id,)
+        )
+        job = _row_to_dict(rows[0])
+        job["accepted_files"] = accepted
+        return job
+
+    async def get_ingest_job(
+        self, job_id: str, user_id: str | None = None
+    ) -> dict[str, Any] | None:
+        db = await self._get_conn()
+        if user_id:
+            rows = await db.execute_fetchall(
+                "SELECT * FROM ingest_jobs WHERE id = ? AND user_id = ?",
+                (job_id, user_id),
+            )
+        else:
+            rows = await db.execute_fetchall(
+                "SELECT * FROM ingest_jobs WHERE id = ?", (job_id,)
+            )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def get_active_ingest_job(self, user_id: str) -> dict[str, Any] | None:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM ingest_jobs "
+            "WHERE user_id = ? AND status IN ('pending','running') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def list_unfinished_ingest_jobs(self) -> list[dict[str, Any]]:
+        """All pending/running jobs across users (used for restart resume)."""
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM ingest_jobs WHERE status IN ('pending','running')"
+        )
+        return [_row_to_dict(r) for r in rows]
+
+    async def set_ingest_job_running(self, job_id: str) -> None:
+        db = await self._get_conn()
+        now = _now()
+        await db.execute(
+            "UPDATE ingest_jobs SET status = 'running', "
+            "started_at = COALESCE(started_at, ?) WHERE id = ?",
+            (now, job_id),
+        )
+        await db.commit()
+
+    async def set_ingest_job_finished(
+        self,
+        job_id: str,
+        new_status: str,
+        error_message: str | None = None,
+    ) -> None:
+        db = await self._get_conn()
+        now = _now()
+        await db.execute(
+            "UPDATE ingest_jobs SET status = ?, finished_at = ?, error_message = ? "
+            "WHERE id = ?",
+            (new_status, now, error_message, job_id),
+        )
+        await db.commit()
+
+    async def set_ingest_job_cancelled(self, job_id: str, user_id: str) -> bool:
+        """Cancel a job if currently pending/running. Returns True if a row was updated."""
+        db = await self._get_conn()
+        cur = await db.execute(
+            "UPDATE ingest_jobs SET status = 'cancelled' "
+            "WHERE id = ? AND user_id = ? AND status IN ('pending','running')",
+            (job_id, user_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+    async def is_ingest_job_cancelled(self, job_id: str) -> bool:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT status FROM ingest_jobs WHERE id = ?", (job_id,)
+        )
+        return bool(rows) and rows[0]["status"] == "cancelled"
+
+    async def bump_ingest_job_counts(
+        self,
+        job_id: str,
+        processed: int = 0,
+        failed: int = 0,
+        skipped: int = 0,
+        processed_bytes: int = 0,
+    ) -> None:
+        db = await self._get_conn()
+        await db.execute(
+            "UPDATE ingest_jobs SET "
+            "processed_files = processed_files + ?, "
+            "failed_files = failed_files + ?, "
+            "skipped_files = skipped_files + ?, "
+            "processed_bytes = processed_bytes + ? "
+            "WHERE id = ?",
+            (processed, failed, skipped, processed_bytes, job_id),
+        )
+        await db.commit()
+
+    async def get_ingest_file(self, file_id: str) -> dict[str, Any] | None:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT f.*, j.user_id AS user_id "
+            "FROM ingest_job_files AS f JOIN ingest_jobs AS j ON j.id = f.job_id "
+            "WHERE f.id = ?",
+            (file_id,),
+        )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def get_ingest_file_by_path(
+        self, job_id: str, relative_path: str
+    ) -> dict[str, Any] | None:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT f.*, j.user_id AS user_id "
+            "FROM ingest_job_files AS f JOIN ingest_jobs AS j ON j.id = f.job_id "
+            "WHERE f.job_id = ? AND f.relative_path = ?",
+            (job_id, relative_path),
+        )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def next_pending_ingest_file(self, job_id: str) -> dict[str, Any] | None:
+        """Return the next file in this job whose bytes have arrived but processing
+        hasn't completed. Status 'uploaded' = bytes saved, ready to process."""
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT f.*, j.user_id AS user_id "
+            "FROM ingest_job_files AS f JOIN ingest_jobs AS j ON j.id = f.job_id "
+            "WHERE f.job_id = ? AND f.status = 'uploaded' "
+            "ORDER BY f.relative_path LIMIT 1",
+            (job_id,),
+        )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def update_ingest_file_status(
+        self,
+        file_id: str,
+        new_status: str,
+        error_message: str | None = None,
+        document_id: str | None = None,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+        file_hash: str | None = None,
+        storage_path: str | None = None,
+        content_type: str | None = None,
+    ) -> None:
+        db = await self._get_conn()
+        sets = ["status = ?"]
+        args: list[Any] = [new_status]
+        if error_message is not None:
+            sets.append("error_message = ?")
+            args.append(error_message)
+        if document_id is not None:
+            sets.append("document_id = ?")
+            args.append(document_id)
+        if started_at is not None:
+            sets.append("started_at = ?")
+            args.append(started_at)
+        if finished_at is not None:
+            sets.append("finished_at = ?")
+            args.append(finished_at)
+        if file_hash is not None:
+            sets.append("file_hash = ?")
+            args.append(file_hash)
+        if storage_path is not None:
+            sets.append("storage_path = ?")
+            args.append(storage_path)
+        if content_type is not None:
+            sets.append("content_type = ?")
+            args.append(content_type)
+        args.append(file_id)
+        await db.execute(
+            f"UPDATE ingest_job_files SET {', '.join(sets)} WHERE id = ?",
+            tuple(args),
+        )
+        await db.commit()
+
+    async def reset_processing_files_to_uploaded(self, job_id: str) -> None:
+        """Resets in-flight processing rows to 'uploaded' so the worker can retry
+        them after a server restart."""
+        db = await self._get_conn()
+        await db.execute(
+            "UPDATE ingest_job_files SET status = 'uploaded' "
+            "WHERE job_id = ? AND status = 'processing'",
+            (job_id,),
+        )
+        await db.commit()
+
+    # ==================== Folder Ingest Events (SSE replay) ====================
+
+    async def insert_ingest_event(
+        self, job_id: str, event_type: str, payload: dict[str, Any]
+    ) -> int:
+        db = await self._get_conn()
+        now = _now()
+        cur = await db.execute(
+            "INSERT INTO ingest_job_events (job_id, event_type, payload, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (job_id, event_type, json.dumps(payload), now),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+    async def list_ingest_events_after(
+        self, job_id: str, after_id: int
+    ) -> list[dict[str, Any]]:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT id, event_type, payload, created_at FROM ingest_job_events "
+            "WHERE job_id = ? AND id > ? ORDER BY id ASC",
+            (job_id, after_id),
+        )
+        return [_row_to_dict(r) for r in rows]
+
+    async def get_ingest_max_event_id(self, job_id: str) -> int:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT COALESCE(MAX(id), 0) AS max_id FROM ingest_job_events WHERE job_id = ?",
+            (job_id,),
+        )
+        return int(rows[0]["max_id"]) if rows else 0
 
 
 _db_service: DatabaseService | None = None

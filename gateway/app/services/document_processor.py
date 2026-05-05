@@ -30,14 +30,28 @@ def extract_text_from_docx(data: bytes) -> str:
     return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
 
+TEXT_FILE_EXTENSIONS = frozenset({
+    ".txt", ".md", ".markdown",
+    ".py", ".js", ".ts", ".tsx", ".jsx",
+    ".json", ".yaml", ".yml", ".toml",
+    ".html", ".htm", ".css", ".sql", ".sh",
+    ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp",
+    ".rb", ".php", ".csv",
+    ".ini", ".cfg", ".conf", ".env",
+})
+
+
 def extract_text(data: bytes, file_type: str) -> str:
-    """Extract plain text from supported file types."""
+    """Extract plain text from supported file types.
+
+    PDF and DOCX use dedicated parsers. All other types — including code/config
+    files added for folder ingest — fall through to UTF-8 decode.
+    """
     ft = file_type.lower()
     if ft in ("application/pdf", "pdf"):
         return extract_text_from_pdf(data)
     if ft in ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"):
         return extract_text_from_docx(data)
-    # TXT / MD — decode as UTF-8
     return data.decode("utf-8", errors="replace")
 
 
