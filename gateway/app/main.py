@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import auth, chat, documents, health, metrics
+from app.routes import auth, chat, documents, folder_ingest, health, metrics
 
 
 @asynccontextmanager
@@ -93,6 +93,11 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         print(f"[monitor] Storage probe unavailable: {exc}")
 
+    # Resume any folder-ingest jobs that were interrupted by a restart.
+    if getattr(settings, "folder_ingest_enabled", False):
+        from app.services.ingest_worker import get_ingest_worker
+        asyncio.create_task(get_ingest_worker().resume_running_jobs())
+
     try:
         yield
     finally:
@@ -145,6 +150,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(documents.router)
     app.include_router(metrics.router)
+    app.include_router(folder_ingest.router)
 
     return app
 

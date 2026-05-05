@@ -19,12 +19,26 @@ import {
   removeSessionAttachment,
   fileToDataUri,
   fetchImage,
+  startFolderUpload,
+  uploadFolderBatch,
+  streamFolderEvents,
+  cancelFolderUpload,
+  getActiveFolderJob,
   type SessionInfo,
   type ChatMessage,
   type SearchSource,
   type DocumentInfo,
   type SessionAttachmentInfo,
+  type FolderEventStreamHandle,
+  type FolderJobStatus,
 } from "@/lib/gateway";
+import {
+  buildManifestFromInput,
+  traverseDataTransferItems,
+  dropContainsFolder,
+  inferRootLabel,
+  type ManifestResult,
+} from "@/lib/folderManifest";
 import {
   useSpeechRecognition,
   useKokoroTTS,
@@ -35,6 +49,7 @@ import { useIsMobile } from "@/lib/useMediaQuery";
 import Sidebar from "./sidebar";
 import MessageBubble from "./MessageBubble";
 import VoiceSettings from "./VoiceSettings";
+import { FolderUploadProgress } from "./FolderUploadProgress";
 
 interface DisplayMessage {
   id: string;
@@ -103,6 +118,24 @@ export default function ChatPage() {
   const [docUploadStep, setDocUploadStep] = useState<"upload" | "extract" | "chunk" | "embed" | "done" | "error">("upload");
   const [docUploadFilename, setDocUploadFilename] = useState("");
   const [docToast, setDocToast] = useState<string | null>(null);
+
+  // ── Folder Ingest ───────────────────────────────────────────────────────
+  type FolderJobUI = {
+    jobId: string;
+    rootLabel: string;
+    status: FolderJobStatus | "uploading";
+    totalFiles: number;
+    totalBytes: number;
+    processedFiles: number;
+    failedFiles: number;
+    skippedFiles: number;
+    processedBytes: number;
+    currentFilename: string | null;
+    errors: { relative_path: string; error: string }[];
+  };
+  const [folderJob, setFolderJob] = useState<FolderJobUI | null>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const folderEsRef = useRef<FolderEventStreamHandle | null>(null);
 
   // ── Session Attachments ("Attach to Chat") ────────────────────────────
   const [attachments, setAttachments] = useState<SessionAttachmentInfo[]>([]);
@@ -263,6 +296,256 @@ export default function ChatPage() {
       console.error("Delete document error:", err);
     }
   }
+
+  // ── Folder upload ───────────────────────────────────────────────────────
+
+  const attachFolderEventStream = useCallback(
+    (jobId: string, lastEventId?: number) => {
+      if (!token) return;
+      folderEsRef.current?.close();
+      folderEsRef.current = streamFolderEvents(
+        token,
+        jobId,
+        {
+          onJobStarted: (d) => {
+            setFolderJob((j) =>
+              j
+                ? { ...j, status: "running", totalFiles: d.total_files, totalBytes: d.total_bytes }
+                : j,
+            );
+          },
+          onFileStarted: (d) => {
+            setFolderJob((j) => (j ? { ...j, currentFilename: d.relative_path } : j));
+          },
+          onFileCompleted: (d) => {
+            setFolderJob((j) =>
+              j
+                ? {
+                    ...j,
+                    processedFiles: j.processedFiles + 1,
+                    processedBytes: j.processedBytes + (d.size ?? 0),
+                  }
+                : j,
+            );
+          },
+          onFileFailed: (d) => {
+            setFolderJob((j) =>
+              j
+                ? {
+                    ...j,
+                    failedFiles: j.failedFiles + 1,
+                    errors: [...j.errors, { relative_path: d.relative_path, error: d.error }],
+                  }
+                : j,
+            );
+          },
+          onFileSkipped: (d) => {
+            setFolderJob((j) =>
+              j
+                ? {
+                    ...j,
+                    skippedFiles: j.skippedFiles + 1,
+                    errors: [
+                      ...j.errors,
+                      { relative_path: d.relative_path, error: `skipped: ${d.reason}` },
+                    ],
+                  }
+                : j,
+            );
+          },
+          onProgress: (d) => {
+            setFolderJob((j) =>
+              j
+                ? {
+                    ...j,
+                    processedFiles: d.processed_files,
+                    failedFiles: d.failed_files,
+                    skippedFiles: d.skipped_files,
+                    processedBytes: d.processed_bytes,
+                    totalFiles: d.total_files,
+                    totalBytes: d.total_bytes,
+                  }
+                : j,
+            );
+          },
+          onJobCompleted: () => {
+            setFolderJob((j) => (j ? { ...j, status: "completed", currentFilename: null } : j));
+            loadDocuments();
+          },
+          onJobCancelled: () => {
+            setFolderJob((j) => (j ? { ...j, status: "cancelled", currentFilename: null } : j));
+            loadDocuments();
+          },
+          onJobFailed: (d) => {
+            setFolderJob((j) =>
+              j
+                ? {
+                    ...j,
+                    status: "failed",
+                    currentFilename: null,
+                    errors: [...j.errors, { relative_path: "(job)", error: d.error }],
+                  }
+                : j,
+            );
+            loadDocuments();
+          },
+          onError: () => {
+            // EventSource auto-reconnects; nothing to do here.
+          },
+        },
+        lastEventId,
+      );
+    },
+    [token, loadDocuments],
+  );
+
+  const startFolderFlow = useCallback(
+    async (manifest: ManifestResult) => {
+      if (!token) return;
+      if (manifest.accepted.length === 0) {
+        const reason = manifest.rejected.length > 0
+          ? `Nothing to upload — ${manifest.rejected.length} file(s) filtered out.`
+          : "No files found in that folder.";
+        setDocToast(reason);
+        setTimeout(() => setDocToast(null), 4000);
+        return;
+      }
+      const totalBytes = manifest.accepted.reduce((s, f) => s + f.size, 0);
+      if (manifest.accepted.length > 500) {
+        const ok = window.confirm(
+          `Upload ${manifest.accepted.length.toLocaleString()} files (${(totalBytes / 1024 / 1024).toFixed(1)} MB)?`,
+        );
+        if (!ok) return;
+      }
+
+      const rootLabel = inferRootLabel(manifest);
+      let job: Awaited<ReturnType<typeof startFolderUpload>>;
+      try {
+        job = await startFolderUpload(
+          token,
+          rootLabel,
+          manifest.accepted.map((f) => ({
+            relative_path: f.relativePath,
+            size: f.size,
+            content_type: f.contentType,
+          })),
+        );
+      } catch (err) {
+        setDocToast(`Folder upload failed: ${err instanceof Error ? err.message : "unknown"}`);
+        setTimeout(() => setDocToast(null), 5000);
+        return;
+      }
+
+      const acceptedSet = new Set(job.accepted_files.map((a) => a.relative_path));
+      const byPath = new Map(manifest.accepted.map((f) => [f.relativePath, f]));
+
+      setFolderJob({
+        jobId: job.job_id,
+        rootLabel,
+        status: "uploading",
+        totalFiles: job.accepted_files.length,
+        totalBytes: job.total_accepted_bytes,
+        processedFiles: 0,
+        failedFiles: 0,
+        skippedFiles: 0,
+        processedBytes: 0,
+        currentFilename: null,
+        errors: job.rejected_files.map((r) => ({
+          relative_path: r.relative_path,
+          error: `rejected: ${r.reason}`,
+        })),
+      });
+
+      // Attach SSE BEFORE uploads begin so we don't miss early events.
+      attachFolderEventStream(job.job_id);
+
+      const BATCH = 4;
+      const accepted = job.accepted_files.filter((a) => acceptedSet.has(a.relative_path));
+      try {
+        for (let i = 0; i < accepted.length; i += BATCH) {
+          const slice = accepted.slice(i, i + BATCH);
+          const payload = slice
+            .map((a) => {
+              const m = byPath.get(a.relative_path);
+              return m ? { file: m.file, relativePath: a.relative_path } : null;
+            })
+            .filter((x): x is { file: File; relativePath: string } => x !== null);
+          if (payload.length > 0) {
+            await uploadFolderBatch(token, job.job_id, payload);
+          }
+        }
+      } catch (err) {
+        setDocToast(`Upload error: ${err instanceof Error ? err.message : "unknown"}`);
+        setTimeout(() => setDocToast(null), 5000);
+      }
+    },
+    [token, attachFolderEventStream],
+  );
+
+  async function handleFolderPick(files: FileList) {
+    const manifest = buildManifestFromInput(files);
+    await startFolderFlow(manifest);
+  }
+
+  async function handleFolderDropEvent(items: DataTransferItemList) {
+    const manifest = await traverseDataTransferItems(items);
+    await startFolderFlow(manifest);
+  }
+
+  async function handleFolderCancel() {
+    if (!token || !folderJob) return;
+    try {
+      await cancelFolderUpload(token, folderJob.jobId);
+    } catch {
+      /* server already reflects cancelled; SSE will deliver job_cancelled */
+    }
+  }
+
+  function handleFolderDismiss() {
+    folderEsRef.current?.close();
+    folderEsRef.current = null;
+    setFolderJob(null);
+  }
+
+  // Auto-reattach to an in-progress folder job on page mount.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const active = await getActiveFolderJob(token);
+        if (cancelled || !active) return;
+        if (active.status !== "pending" && active.status !== "running") return;
+        setFolderJob({
+          jobId: active.job_id,
+          rootLabel: active.root_label,
+          status: active.status,
+          totalFiles: active.total_files,
+          totalBytes: active.total_bytes,
+          processedFiles: active.processed_files,
+          failedFiles: active.failed_files,
+          skippedFiles: active.skipped_files,
+          processedBytes: active.processed_bytes,
+          currentFilename: null,
+          errors: [],
+        });
+        attachFolderEventStream(active.job_id, active.last_event_id);
+      } catch (err) {
+        console.error("Failed to reattach folder job:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, attachFolderEventStream]);
+
+  // Tear down EventSource on unmount.
+  useEffect(() => {
+    return () => {
+      folderEsRef.current?.close();
+      folderEsRef.current = null;
+    };
+  }, []);
 
   // ── Session Attachment handlers ────────────────────────────────────────
 
@@ -745,6 +1028,11 @@ export default function ChatPage() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
+    // Folder drop → recursive ingest. Take precedence over single-file image drop.
+    if (e.dataTransfer.items && dropContainsFolder(e.dataTransfer.items)) {
+      void handleFolderDropEvent(e.dataTransfer.items);
+      return;
+    }
     const file = e.dataTransfer.files?.[0];
     if (file && ALLOWED_IMAGE_TYPES.includes(file.type)) {
       setImageFile(file);
@@ -948,14 +1236,46 @@ export default function ChatPage() {
               <div className="glass rounded-2xl p-3 mb-2 animate-fade-in max-h-48 overflow-y-auto">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[11px] text-[#aaa] font-medium tracking-wide">Brain</span>
-                  <button
-                    onClick={() => docFileInputRef.current?.click()}
-                    disabled={docUploading}
-                    className="text-[10px] px-2 py-1 rounded-lg bg-[#33ccff]/15 text-[#66ddff] hover:bg-[#33ccff]/25 transition-all disabled:opacity-40"
-                  >
-                    {docUploading ? "Processing..." : "+ Upload"}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => folderInputRef.current?.click()}
+                      disabled={
+                        docUploading ||
+                        (folderJob != null &&
+                          (folderJob.status === "pending" ||
+                            folderJob.status === "running" ||
+                            folderJob.status === "uploading"))
+                      }
+                      className="text-[10px] px-2 py-1 rounded-lg bg-[#33ccff]/15 text-[#66ddff] hover:bg-[#33ccff]/25 transition-all disabled:opacity-40"
+                      title="Upload an entire folder (Obsidian vault, repo, etc.)"
+                    >
+                      + Folder
+                    </button>
+                    <button
+                      onClick={() => docFileInputRef.current?.click()}
+                      disabled={docUploading}
+                      className="text-[10px] px-2 py-1 rounded-lg bg-[#33ccff]/15 text-[#66ddff] hover:bg-[#33ccff]/25 transition-all disabled:opacity-40"
+                    >
+                      {docUploading ? "Processing..." : "+ File"}
+                    </button>
+                  </div>
                 </div>
+                {folderJob && (
+                  <FolderUploadProgress
+                    rootLabel={folderJob.rootLabel}
+                    status={folderJob.status}
+                    totalFiles={folderJob.totalFiles}
+                    totalBytes={folderJob.totalBytes}
+                    processedFiles={folderJob.processedFiles}
+                    failedFiles={folderJob.failedFiles}
+                    skippedFiles={folderJob.skippedFiles}
+                    processedBytes={folderJob.processedBytes}
+                    currentFilename={folderJob.currentFilename}
+                    errors={folderJob.errors}
+                    onCancel={handleFolderCancel}
+                    onDismiss={handleFolderDismiss}
+                  />
+                )}
                 {docUploading && (
                   <div className="mb-2 animate-fade-in space-y-1">
                     <p className="text-[10px] text-[#ccc] font-medium truncate">{docUploadFilename}</p>
@@ -1111,6 +1431,23 @@ export default function ChatPage() {
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) handleDocUpload(f);
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                />
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  multiple
+                  // webkitdirectory + directory are non-standard but widely supported.
+                  // React 19 passes through unknown lowercase attributes to the DOM,
+                  // so plain string props work without ts-ignore.
+                  {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+                  onChange={(e) => {
+                    const fs = e.target.files;
+                    if (fs && fs.length > 0) {
+                      void handleFolderPick(fs);
+                    }
                     e.target.value = "";
                   }}
                   className="hidden"
