@@ -22,7 +22,7 @@ python-multipart==0.0.12
 
 # RAG: document parsing
 pypdf>=4.0.0
-python-docx>=1.1.0
+python-docx>=1.2.0
 
 # Web content extraction (full-page retrieval)
 trafilatura>=1.8.0
