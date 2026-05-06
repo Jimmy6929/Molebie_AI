@@ -823,3 +823,81 @@ export async function getActiveFolderJob(token: string): Promise<FolderJobSnapsh
 export async function getFolderJob(token: string, jobId: string): Promise<FolderJobSnapshot> {
   return apiCall<FolderJobSnapshot>(`/documents/folder/${encodeURIComponent(jobId)}`, token);
 }
+
+
+// ─────────────────────────── Vault Sync ───────────────────────────
+
+export interface VaultInfo {
+  id: string;
+  label: string;
+  root_path: string;
+  kind: string;
+  last_sync_at: string | null;
+  index_attachments: boolean;
+  doc_count: number;
+}
+
+export interface VaultListResponse {
+  vaults: VaultInfo[];
+}
+
+export interface SyncClassification {
+  new: number;
+  changed: number;
+  unchanged: number;
+  deleted: number;
+  adopted: number;
+  skipped: number;
+}
+
+export interface SyncVaultResponse {
+  job_id: string | null;
+  classification: SyncClassification;
+  errors: string[];
+}
+
+export async function connectVault(
+  token: string,
+  payload: {
+    label: string;
+    root_path: string;
+    exclude_globs?: string[];
+    index_attachments?: boolean;
+  },
+): Promise<VaultInfo> {
+  return apiCall<VaultInfo>("/documents/vault/connect", token, {
+    method: "POST",
+    body: JSON.stringify({
+      label: payload.label,
+      root_path: payload.root_path,
+      exclude_globs: payload.exclude_globs ?? null,
+      index_attachments: payload.index_attachments ?? true,
+    }),
+  });
+}
+
+export async function listVaults(token: string): Promise<VaultListResponse> {
+  return apiCall<VaultListResponse>("/documents/vault", token);
+}
+
+export async function triggerVaultSync(
+  token: string,
+  vaultId: string,
+): Promise<SyncVaultResponse> {
+  return apiCall<SyncVaultResponse>(
+    `/documents/vault/${encodeURIComponent(vaultId)}/sync`,
+    token,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export async function disconnectVault(
+  token: string,
+  vaultId: string,
+): Promise<{ deleted_documents: number }> {
+  return apiCall<{ deleted_documents: number }>(
+    `/documents/vault/${encodeURIComponent(vaultId)}`,
+    token,
+    { method: "DELETE" },
+  );
+}
