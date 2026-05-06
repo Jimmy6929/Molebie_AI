@@ -5,7 +5,7 @@
 # Core chat, auth, and web search work without these packages.
 # Install separately: pip install -r requirements-ml.txt
 
-torch>=2.0.0
+torch>=2.11.0
 torchvision>=0.19
 sentence-transformers>=3.0.0
 faster-whisper==1.1.1
