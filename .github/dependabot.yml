@@ -1,0 +1,58 @@
+version: 2
+updates:
+  # Python dependencies for the gateway service
+  - package-ecosystem: "pip"
+    directory: "/gateway"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # JavaScript / TypeScript dependencies for the webapp
+  - package-ecosystem: "npm"
+    directory: "/webapp"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions used in workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
