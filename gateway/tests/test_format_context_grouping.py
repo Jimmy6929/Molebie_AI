@@ -7,7 +7,6 @@ then drops entire groups when even parents don't fit. Citation numbering
 stays consecutive — no gaps when a group is dropped.
 """
 
-import pytest
 
 from app.services.rag import (
     RAGService,

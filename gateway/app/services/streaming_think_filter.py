@@ -17,7 +17,6 @@ on the non-streaming path.
 
 from __future__ import annotations
 
-
 _OPEN = "<think>"
 _CLOSE = "</think>"
 

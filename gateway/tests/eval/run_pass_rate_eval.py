@@ -26,12 +26,10 @@ import os
 import re
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 import httpx
-
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://localhost:8000")
 DEFAULT_GOLDEN = Path(__file__).parent / "golden_set.jsonl"
