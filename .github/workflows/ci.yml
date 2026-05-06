@@ -28,7 +28,12 @@ jobs:
         run: |
           cd gateway
           pip install -r requirements.txt -q
-          pip install pytest pytest-asyncio pytest-mock ruff -q
+          pip install pytest pytest-asyncio pytest-mock ruff pip-audit -q
+
+      - name: Audit gateway dependencies for CVEs
+        run: |
+          cd gateway
+          pip-audit -r requirements.txt --disable-pip
 
       - name: Lint gateway
         run: |
