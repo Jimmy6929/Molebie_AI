@@ -168,7 +168,7 @@ class Settings(BaseSettings):
     # extra LLM calls — one reranker forward pass per claim. Catches
     # off-topic fabrications cheaply; CoVe still needed for numeric
     # substitution attacks within an otherwise-relevant chunk.
-    judge_enabled: bool = False
+    judge_enabled: bool = True
     judge_threshold: float = 0.5             # below = flagged
     judge_min_response_chars: int = 200
 
@@ -263,6 +263,29 @@ class Settings(BaseSettings):
     # that the reranker is stronger and chunks are smaller (512 vs 1024).
     rag_rerank_top_k: int = 8
     rag_reranker_preload: bool = False
+    # Score below which a reranked chunk is dropped before
+    # `compute_retrieval_confidence()` runs. When all chunks fall below the
+    # floor the retrieval becomes empty → confidence=NONE → routing falls
+    # back to generative mode. Calibrated against Qwen3-Reranker-0.6B's
+    # softmax([yes,no]) distribution on the golden set; rerun
+    # `gateway/tests/eval/calibrate_thresholds.py` after swapping rerankers.
+    # Calibrated 2026-05 from a 50-query golden-set run on this corpus:
+    # adversarial/must_abstain top-1 scores cluster below 0.35 with rare
+    # outliers up to 0.66; rag_grounded scores are bimodal with a "weak"
+    # cluster at 0.0–0.45 and a "strong" cluster at 0.65–1.0. 0.05 keeps
+    # only the obvious-noise chunks out without collapsing the LOW tier.
+    rag_rerank_floor: float = 0.05
+
+    # ── Parent-Child Neighbor Expansion ───────────────────────
+    # After reranking, also pull chunk_index ± 1 from each retrieved
+    # chunk's source document. Answers that span two adjacent chunks
+    # (chunk_size=512, chunk_overlap=64 → an answer starting near the
+    # end of chunk N often finishes in chunk N+1) need both. Neighbors
+    # share their parent's [S#] citation so the citation count doesn't
+    # inflate. The 12K char budget is still respected: groups exceeding
+    # the budget fall back to parents-only, then are dropped if even
+    # parents don't fit.
+    rag_neighbor_expansion_enabled: bool = True
 
     # ── RAG Metrics ───────────────────────────────────────────
     rag_metrics_enabled: bool = True

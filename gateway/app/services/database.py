@@ -696,6 +696,55 @@ class DatabaseService:
             results.append(d)
         return results
 
+    async def get_chunks_in_range(
+        self,
+        user_id: str,
+        document_id: str,
+        index_lo: int,
+        index_hi: int,
+    ) -> list[dict[str, Any]]:
+        """Fetch all chunks for a document with chunk_index in [index_lo, index_hi].
+
+        Used by parent-child neighbor expansion in RAGService: when a chunk
+        is retrieved, we also pull its neighbors (idx ± 1) so answers that
+        span two adjacent chunks aren't truncated. Leverages the existing
+        ``idx_document_chunks_document_id`` index on (document_id, chunk_index).
+
+        Returns the same row shape as ``vector_search_chunks`` /
+        ``fts_search_chunks`` so downstream code can treat the rows
+        uniformly. Sorted by chunk_index ascending.
+        """
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            """
+            SELECT
+                dc.id AS chunk_id,
+                dc.document_id,
+                d.filename,
+                dc.content,
+                dc.chunk_index,
+                dc.metadata
+            FROM document_chunks AS dc
+            JOIN documents AS d ON d.id = dc.document_id
+            WHERE dc.document_id = ?
+              AND dc.user_id = ?
+              AND dc.chunk_index BETWEEN ? AND ?
+              AND d.status = 'completed'
+            ORDER BY dc.chunk_index ASC
+            """,
+            (document_id, user_id, index_lo, index_hi),
+        )
+        results = []
+        for r in rows:
+            d = _row_to_dict(r)
+            if d.get("metadata") and isinstance(d["metadata"], str):
+                try:
+                    d["metadata"] = json.loads(d["metadata"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            results.append(d)
+        return results
+
     # ==================== User Memories ====================
 
     async def store_memory(
