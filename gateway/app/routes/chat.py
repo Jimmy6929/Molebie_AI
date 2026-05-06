@@ -48,6 +48,7 @@ from app.services.rag import RAGService, compute_retrieval_confidence, get_rag_s
 from app.services.selfcheck import get_selfcheck_service
 from app.services.sse_split import split_oversized_sse_delta
 from app.services.storage import get_storage_service
+from app.services.streaming_think_filter import ThinkBlockFilter
 from app.services.summarizer import get_summariser_service
 from app.services.tools import TOOL_SCHEMAS, ToolExecutor
 from app.services.verification import get_chain_of_verification
@@ -86,9 +87,9 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 # High-precision patterns that indicate the user explicitly wants notes-lookup
 # behavior — overrides the confidence-based template choice into strict-RAG
-# mode even when retrieval confidence is REFUSE/NONE. Kept narrow on purpose:
-# this is a *not* a generic intent classifier, only an escape hatch for queries
-# that literally say "from my notes" / "what did I write".
+# mode even when retrieval confidence is NONE or weak (LOW). Kept narrow on
+# purpose: this is *not* a generic intent classifier, only an escape hatch
+# for queries that literally say "from my notes" / "what did I write".
 _EXPLICIT_LOOKUP_PATTERNS = [
     re.compile(r"\bin my notes\b", re.IGNORECASE),
     re.compile(r"\bfrom my notes\b", re.IGNORECASE),
@@ -111,19 +112,23 @@ def _explicit_lookup_phrasing(message: str) -> bool:
 def _routing_mode(confidence: str, explicit_lookup: bool) -> str:
     """Pick the prompt template for a (confidence, explicit-lookup) tuple.
 
-    HIGH/MODERATE/LOW retrieval → ``lookup`` (system_rag.txt, strict).
-    NONE retrieval → ``generative`` (system_generative.txt, permissive).
+    HIGH/MODERATE retrieval → ``lookup`` (system_rag.txt, strict grounding).
+    LOW/NONE retrieval → ``generative`` (system_generative.txt, permissive).
     ``explicit_lookup=True`` overrides into lookup mode so the user's
     explicit "from my notes" intent wins regardless of confidence.
 
-    Note: REFUSE was removed in the over-refusal fix — low-relevance
-    retrievals now route as LOW (lookup) not REFUSE (silent fallback).
+    Why LOW falls through to generative: forcing strict citation mode on
+    weak retrievals made the model either refuse unnecessarily or cite
+    irrelevant chunks just to satisfy the prompt's RULES. Sending LOW to
+    the generative template lets the model use the chunks as background
+    when they help and answer from general knowledge otherwise — see the
+    LOW+generative directive in ``_confidence_directive``.
     """
     if explicit_lookup:
         return "lookup"
-    if confidence in ("HIGH", "MODERATE", "LOW"):
+    if confidence in ("HIGH", "MODERATE"):
         return "lookup"
-    return "generative"   # NONE
+    return "generative"   # LOW or NONE
 
 
 def _confidence_directive(
@@ -161,10 +166,23 @@ def _confidence_directive(
             )
         return None
     if confidence == "LOW" and mode == "lookup":
+        # Reachable only via the explicit-lookup override (user literally
+        # asked "from my notes"). Strict grounding stays on; just remind
+        # the model the evidence is thin so it doesn't fabricate citations.
         return (
             "The retrieved evidence has weak relevance. Cite [S#] only for "
             "claims you actually drew from it; if it doesn't answer the "
             "question, say so plainly and offer alternatives."
+        )
+    if confidence == "LOW" and mode == "generative":
+        # New default LOW path (post-routing-refinement): use chunks as
+        # background context, fall back to general knowledge when they
+        # don't fit, cite only for facts that actually came from a note.
+        return (
+            "Some related notes were found but may not directly answer "
+            "this question. Use them as background if helpful, but rely "
+            "on general knowledge when they don't fit. Cite [S#] only "
+            "when a specific fact actually came from a note."
         )
     return None
 
@@ -1600,6 +1618,10 @@ async def send_message_stream(
         """Generate SSE events from inference stream."""
         full_content = []
         full_reasoning = []
+        # Strip <think>...</think> from delta.content as it streams so the
+        # user never sees raw reasoning tags. Captured inner text is fed into
+        # full_reasoning so the DB row still has the model's chain of thought.
+        think_filter = ThinkBlockFilter()
         client_disconnected = False
 
         # ── Live-monitor instrumentation ─────────────────────────────
@@ -1685,18 +1707,26 @@ async def send_message_stream(
                 mode=inference_mode,
                 enable_thinking=enable_thinking_override,
             ):
+                rewritten_chunk = chunk
                 try:
                     if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
                         data = json.loads(chunk[6:])
                         delta = data.get("choices", [{}])[0].get("delta", {})
                         if "content" in delta:
-                            # Stamp the first-token time exactly once, as early as
-                            # possible — before we forward the chunk — so TTFT
-                            # isn't polluted by our own yield latency.
-                            if t_first_token is None:
-                                t_first_token = time.perf_counter()
-                            n_content_deltas += 1
-                            full_content.append(delta["content"])
+                            visible, captured_reasoning = think_filter.feed(delta["content"])
+                            if captured_reasoning:
+                                full_reasoning.append(captured_reasoning)
+                            if visible:
+                                # Stamp the first-token time on the first VISIBLE
+                                # delta — TTFT shouldn't include time spent inside
+                                # an opening <think> block.
+                                if t_first_token is None:
+                                    t_first_token = time.perf_counter()
+                                n_content_deltas += 1
+                                full_content.append(visible)
+                            if visible != delta["content"]:
+                                delta["content"] = visible
+                                rewritten_chunk = "data: " + json.dumps(data) + "\n\n"
                         if "reasoning_content" in delta:
                             full_reasoning.append(delta["reasoning_content"])
                 except (json.JSONDecodeError, IndexError, KeyError):
@@ -1732,7 +1762,7 @@ async def send_message_stream(
                 # refresh) intentionally runs ONCE per upstream chunk —
                 # the split is purely a wire-shape transformation.
                 pieces = split_oversized_sse_delta(
-                    chunk, settings.streaming_max_chunk_chars,
+                    rewritten_chunk, settings.streaming_max_chunk_chars,
                 )
                 for piece in pieces:
                     try:
@@ -1742,6 +1772,28 @@ async def send_message_stream(
                         break
                 if client_disconnected:
                     break
+
+            # Drain any partial-tag tail buffered by the think filter.
+            # Visible tail = held-back chars that turned out NOT to be a tag
+            # opener (emit them). Reasoning tail = orphan-think content from
+            # a stream that ended without </think> (persisted only).
+            visible_tail, reasoning_tail = think_filter.flush()
+            if reasoning_tail:
+                full_reasoning.append(reasoning_tail)
+            if visible_tail:
+                full_content.append(visible_tail)
+                if not client_disconnected:
+                    final_chunk = "data: " + json.dumps({
+                        "choices": [{"index": 0, "delta": {"content": visible_tail}}]
+                    }) + "\n\n"
+                    for piece in split_oversized_sse_delta(
+                        final_chunk, settings.streaming_max_chunk_chars,
+                    ):
+                        try:
+                            yield piece
+                        except (BrokenPipeError, ConnectionResetError, RuntimeError, asyncio.CancelledError):
+                            client_disconnected = True
+                            break
 
             if client_disconnected:
                 await registry.pipeline_event(

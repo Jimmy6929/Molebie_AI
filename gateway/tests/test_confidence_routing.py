@@ -64,7 +64,11 @@ def test_explicit_lookup_phrasing_does_not_match_generative(message):
 @pytest.mark.parametrize("confidence,expected", [
     ("HIGH", "lookup"),
     ("MODERATE", "lookup"),
-    ("LOW", "lookup"),
+    # LOW now routes to generative — strict grounding on weak retrievals
+    # produced over-refusal and "cite anything to satisfy the rule"
+    # behaviour. The LOW+generative directive in _confidence_directive
+    # tells the model to use the chunks as background instead.
+    ("LOW", "generative"),
     ("NONE", "generative"),
 ])
 def test_routing_mode_by_confidence(confidence, expected):
@@ -205,9 +209,19 @@ def test_confidence_directive_none_in_generative_no_search_offer_when_tools_off(
     assert directive is None
 
 
-def test_confidence_directive_low_only_active_in_lookup():
-    assert _confidence_directive("LOW", chunks=[], mode="lookup") is not None
-    assert _confidence_directive("LOW", chunks=[], mode="generative") is None
+def test_confidence_directive_low_active_in_both_modes():
+    """LOW now produces a directive in both modes, but with different
+    intent: lookup mode (only reachable via explicit-lookup override)
+    keeps the strict cite-when-used reminder; generative mode (the new
+    default for LOW) tells the model to use chunks as background and
+    fall back to general knowledge."""
+    lookup_directive = _confidence_directive("LOW", chunks=[], mode="lookup")
+    generative_directive = _confidence_directive("LOW", chunks=[], mode="generative")
+    assert lookup_directive is not None
+    assert generative_directive is not None
+    assert lookup_directive != generative_directive
+    assert "background" in generative_directive.lower()
+    assert "general knowledge" in generative_directive.lower()
 
 
 def test_confidence_directive_low_in_lookup_uses_cite_when_used_language():
