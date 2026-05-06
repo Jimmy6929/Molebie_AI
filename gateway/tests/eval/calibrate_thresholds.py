@@ -42,7 +42,6 @@ import statistics
 import sys
 from pathlib import Path
 
-
 _RERANK_LINE = re.compile(r"\[rag\] RERANKER_SCORES (\{.*\})")
 
 
