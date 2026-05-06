@@ -16,6 +16,7 @@ from pathlib import Path
 
 from cli.models.config import InferenceBackend, MolebieConfig
 from cli.services.config_manager import get_project_root
+from cli.services.feature_setup import _ensure_searxng_secret_key
 from cli.services.network_info import get_network_urls
 from cli.services.prerequisite_checker import check_docker, start_docker_daemon
 from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
@@ -369,6 +370,10 @@ class ServiceRunner:
 
             # Docker services run-to-completion
             if svc.is_docker:
+                # SearXNG ships with a placeholder secret_key; replace it with a
+                # per-install token before the container reads settings.yml.
+                if svc.name == "SearXNG":
+                    _ensure_searxng_secret_key(get_project_root())
                 with console.status(f"[info]Starting {svc.name}...[/info]"):
                     started = self._start_and_wait(svc)
                 if started:

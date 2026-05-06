@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import subprocess
 import sys
 import time
@@ -11,6 +12,22 @@ from pathlib import Path
 import httpx
 
 from cli.services import prerequisite_checker
+
+_SEARXNG_SECRET_PLACEHOLDER = "CHANGE_ME_GENERATED_ON_FIRST_RUN"
+
+
+def _ensure_searxng_secret_key(project_root: Path) -> None:
+    """Replace the committed placeholder in searxng/settings.yml with a per-install token."""
+    settings = project_root / "searxng" / "settings.yml"
+    if not settings.exists():
+        return
+    text = settings.read_text(encoding="utf-8")
+    if _SEARXNG_SECRET_PLACEHOLDER not in text:
+        return
+    settings.write_text(
+        text.replace(_SEARXNG_SECRET_PLACEHOLDER, secrets.token_hex(32)),
+        encoding="utf-8",
+    )
 
 
 @dataclass
@@ -46,6 +63,10 @@ def setup_search(project_root: Path) -> FeatureSetupResult:
             success=False,
             message=f"Docker is required for web search (SearXNG): {msg}",
         )
+
+    # Generate a unique secret_key on first install so two self-hosters don't
+    # share session-signing material from the committed placeholder.
+    _ensure_searxng_secret_key(project_root)
 
     # Remove stale container if it exists (prevents name-conflict errors on re-install)
     subprocess.run(

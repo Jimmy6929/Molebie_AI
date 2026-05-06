@@ -1,0 +1,29 @@
+# gitleaks configuration for Molebie AI
+#
+# Inherits all default rules from upstream gitleaks and layers a narrow
+# allowlist of values that have been reviewed and confirmed safe.
+#
+# Add new entries only after confirming a finding is genuinely benign or
+# already rotated. Real secrets must be rotated and removed from history.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Reviewed false positives in Molebie AI git history"
+regexes = [
+  # Supabase local-dev publishable/anon key. This key class is designed to be
+  # public (it ships in browser clients and is gated by Row Level Security),
+  # and these occurrences point at 127.0.0.1:54321 (local Supabase CLI). All
+  # files referencing it were removed during the Supabase -> SQLite migration,
+  # but the value remains in commit history.
+  '''sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3''',
+
+  # Previous SearXNG server.secret_key value. SearXNG uses this to sign local
+  # session cookies for its own UI, so the leaked value is only meaningful
+  # against the (now rotated) SearXNG instance that originally used it. The
+  # committed file now ships a placeholder; cli/services/feature_setup.py
+  # generates a fresh per-install token via secrets.token_hex(32) before
+  # starting the container.
+  '''7c3bdaf6293520b9d16236b0ad68b0b59f84b10c48290361efe17934ba44f90c''',
+]

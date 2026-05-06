@@ -12,7 +12,9 @@ search:
     - json
 
 server:
-  secret_key: "7c3bdaf6293520b9d16236b0ad68b0b59f84b10c48290361efe17934ba44f90c"
+  # Replaced on first run by cli/services/feature_setup.py with a per-install
+  # token. Keep this placeholder string committed — do not paste a real key here.
+  secret_key: "CHANGE_ME_GENERATED_ON_FIRST_RUN"
   bind_address: "0.0.0.0"
   port: 8080
   limiter: false
