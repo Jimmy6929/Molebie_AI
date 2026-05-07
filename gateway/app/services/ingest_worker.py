@@ -299,6 +299,7 @@ class IngestWorker:
                 relative_path=rel,
                 file_hash=file_row.get("file_hash"),
                 ingest_job_id=job_id,
+                vault_source_id=file_row.get("vault_source_id"),
             )
             doc_id = doc_row["id"]
 

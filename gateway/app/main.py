@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import auth, chat, documents, folder_ingest, health, metrics
+from app.routes import auth, chat, documents, folder_ingest, health, metrics, vault
 
 
 @asynccontextmanager
@@ -151,6 +151,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router)
     app.include_router(metrics.router)
     app.include_router(folder_ingest.router)
+    app.include_router(vault.router)
 
     return app
 
