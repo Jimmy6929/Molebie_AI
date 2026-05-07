@@ -89,6 +89,124 @@ def _strip_think_in_messages(
     return cleaned
 
 
+# ── Token budget estimation ─────────────────────────────────────────
+# Char-based estimate, intentionally backend-agnostic. The gateway
+# fronts arbitrary OpenAI-compatible servers (MLX, vLLM, llama.cpp,
+# Ollama) — no single tokenizer is correct for all of them, and a
+# conservative chars/token ratio (3.5 for English + code) gives
+# headroom against the real token count. Goal is overflow safety,
+# not precision.
+
+def estimate_message_tokens(
+    message: dict[str, Any],
+    chars_per_token: float = 3.5,
+) -> int:
+    """Estimate tokens for one OpenAI-format message.
+
+    Adds a flat +4 for role/delimiter framing that OpenAI-compatible
+    APIs include around each message. Multimodal image parts count
+    as ~1000 tokens each (typical Qwen-VL / GPT-4V vision token
+    budget; safe upper bound for short images).
+    """
+    content = message.get("content", "")
+    if isinstance(content, str):
+        char_count: float = len(content)
+    elif isinstance(content, list):
+        char_count = 0.0
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    char_count += len(part.get("text", ""))
+                elif part.get("type") == "image_url":
+                    char_count += 1000 * chars_per_token
+    else:
+        char_count = 0.0
+    return int(char_count / chars_per_token) + 4
+
+
+def estimate_total_tokens(
+    messages: list[dict[str, Any]],
+    chars_per_token: float = 3.5,
+) -> int:
+    """Estimate tokens for a full messages array (+3 for reply priming)."""
+    return sum(estimate_message_tokens(m, chars_per_token) for m in messages) + 3
+
+
+def trim_messages_to_budget(
+    messages: list[dict[str, Any]],
+    context_window: int,
+    max_tokens: int,
+    chars_per_token: float = 3.5,
+    reserve_fraction: float = 0.15,
+) -> list[dict[str, Any]]:
+    """Trim oldest conversation history to fit the model's context window.
+
+    Strategy:
+      * ``messages[0]``  (system message)        — never trimmed
+      * ``messages[-1]`` (current user message)  — never trimmed
+      * ``messages[1:-1]`` (history)             — dropped from oldest first
+
+    ``context_window <= 0`` disables enforcement and returns the input
+    unchanged. Returns a new list; does not mutate the input.
+    """
+    if context_window <= 0:
+        return messages
+
+    reserve = int(context_window * reserve_fraction)
+    prompt_budget = context_window - max_tokens - reserve
+
+    if prompt_budget <= 0:
+        print(
+            f"[budget] WARNING: max_tokens ({max_tokens}) + reserve ({reserve}) "
+            f">= context_window ({context_window}). Sending as-is."
+        )
+        return messages
+
+    if estimate_total_tokens(messages, chars_per_token) <= prompt_budget:
+        return messages
+
+    if len(messages) <= 2:
+        print(
+            f"[budget] WARNING: system + user message alone "
+            f"({estimate_total_tokens(messages, chars_per_token)} est. tokens) "
+            f"exceeds budget ({prompt_budget}). Sending as-is."
+        )
+        return messages
+
+    system_msg = messages[0]
+    current_msg = messages[-1]
+    history = list(messages[1:-1])
+
+    fixed_cost = (
+        estimate_message_tokens(system_msg, chars_per_token)
+        + estimate_message_tokens(current_msg, chars_per_token)
+        + 3  # reply priming
+    )
+    history_budget = prompt_budget - fixed_cost
+
+    if history_budget <= 0:
+        print(
+            f"[budget] System + user message fills budget. Dropping all history "
+            f"({len(history)} messages)."
+        )
+        return [system_msg, current_msg]
+
+    trimmed = 0
+    while history and sum(
+        estimate_message_tokens(m, chars_per_token) for m in history
+    ) > history_budget:
+        history.pop(0)
+        trimmed += 1
+
+    if trimmed:
+        print(
+            f"[budget] Trimmed {trimmed} oldest messages to fit context window "
+            f"({context_window} tokens, {prompt_budget} prompt budget)."
+        )
+
+    return [system_msg] + history + [current_msg]
+
+
 class InferenceService:
     """
     Service for LLM inference calls via OpenAI-compatible API.

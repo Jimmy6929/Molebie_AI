@@ -134,6 +134,25 @@ class Settings(BaseSettings):
     # See task 1.3 in tasks/hallucination-mitigation/phase-1-foundation.md.
     inference_thinking_auto_disable_for_rag: bool = True
 
+    # ── Context Window Budget ──────────────────────────────────────
+    # Per-tier context window (tokens). 0 disables the budget guard for
+    # that tier. Should match the model's actual context window — check
+    # the backend's model card. When set, the gateway trims oldest
+    # conversation history to keep system prompt + RAG + current user
+    # message inside the window.
+    inference_instant_context_window: int = 0
+    inference_thinking_context_window: int = 0
+    inference_thinking_harder_context_window: int = 0
+
+    # Conservative chars-per-token ratio for budget estimation.
+    # Lower = more conservative (trims more aggressively). 3.5 is safe
+    # for English + code; CJK-heavy workloads may want 2.0–2.5.
+    token_chars_per_token: float = 3.5
+
+    # Fraction of the context window reserved for the completion plus
+    # safety headroom (tool schemas, framing). 0.15 = 15%.
+    token_budget_reserve_fraction: float = 0.15
+
     # ── Self-Consistency (Phase 2 task 2.3) ───────────────────────────
     # Sample N responses for verifiable queries (factual/numeric/yes-no)
     # and majority-vote. Reduces hallucinations on the queries small models
@@ -375,6 +394,14 @@ class Settings(BaseSettings):
         if mode == "thinking":
             return self.inference_thinking_max_tokens
         return self.inference_instant_max_tokens
+
+    def get_context_window_for_mode(self, mode: str) -> int:
+        """Return the configured context window for the given mode (0 = disabled)."""
+        if mode == "thinking_harder":
+            return self.inference_thinking_harder_context_window
+        if mode == "thinking":
+            return self.inference_thinking_context_window
+        return self.inference_instant_context_window
 
     def get_temperature_for_mode(self, mode: str) -> float:
         """Return temperature for the given mode."""
