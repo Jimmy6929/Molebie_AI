@@ -121,7 +121,8 @@ CREATE TABLE IF NOT EXISTS documents (
     processed_at TEXT,
     file_hash TEXT,
     relative_path TEXT,
-    ingest_job_id TEXT
+    ingest_job_id TEXT,
+    vault_source_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
@@ -130,6 +131,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_user_created
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_user_hash ON documents(user_id, file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_ingest_job ON documents(ingest_job_id);
+CREATE INDEX IF NOT EXISTS idx_documents_vault_path
+    ON documents(vault_source_id, relative_path);
 
 -- ============================================
 -- DOCUMENT CHUNKS TABLE
@@ -264,7 +267,8 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
     error_message TEXT,
     created_at TEXT NOT NULL,
     started_at TEXT,
-    finished_at TEXT
+    finished_at TEXT,
+    vault_source_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingest_jobs_user_status ON ingest_jobs(user_id, status);
@@ -308,6 +312,29 @@ CREATE TABLE IF NOT EXISTS ingest_job_events (
 
 CREATE INDEX IF NOT EXISTS idx_ingest_job_events_job_id_id
     ON ingest_job_events(job_id, id);
+"""
+
+
+_VAULT_SOURCES_SCHEMA_SQL = """
+-- ============================================
+-- VAULT SOURCES TABLE (Obsidian / external folder sync)
+-- ============================================
+CREATE TABLE IF NOT EXISTS vault_sources (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'obsidian',
+    plugin_token_hash TEXT,
+    last_sync_at TEXT,
+    last_seen_plugin_at TEXT,
+    exclude_globs TEXT,
+    index_attachments INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_sources_user_root
+    ON vault_sources(user_id, root_path);
 """
 
 
@@ -461,6 +488,30 @@ def init_database_sync(
                 conn.executescript(_INGEST_SCHEMA_SQL)
                 print("[schema] Migrated: added folder-ingest tables")
 
+            # Migrate: vault sources (Obsidian-style external folder sync).
+            # Adds vault_sources + vault_source_id columns on documents and
+            # ingest_jobs. Idempotent — safe to re-run.
+            if "vault_source_id" not in doc_cols:
+                conn.execute("ALTER TABLE documents ADD COLUMN vault_source_id TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_vault_path "
+                "ON documents(vault_source_id, relative_path)"
+            )
+            ij_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(ingest_jobs)").fetchall()
+            }
+            if ij_cols and "vault_source_id" not in ij_cols:
+                conn.execute(
+                    "ALTER TABLE ingest_jobs ADD COLUMN vault_source_id TEXT"
+                )
+            vault_present = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='vault_sources'"
+            ).fetchone()
+            if not vault_present:
+                conn.executescript(_VAULT_SOURCES_SCHEMA_SQL)
+                print("[schema] Migrated: added vault_sources table")
+
             conn.commit()
             print(f"[schema] Database already initialized at {db_path}")
             conn.close()
@@ -471,6 +522,9 @@ def init_database_sync(
 
         # Create folder-ingest tables
         conn.executescript(_INGEST_SCHEMA_SQL)
+
+        # Create vault-sources table (Obsidian-style external folder sync)
+        conn.executescript(_VAULT_SOURCES_SCHEMA_SQL)
 
         # Create FTS5 virtual table
         conn.executescript(_fts5_sql())
