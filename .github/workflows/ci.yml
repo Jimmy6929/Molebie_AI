@@ -33,7 +33,7 @@ jobs:
       - name: Audit gateway dependencies for CVEs
         run: |
           cd gateway
-          pip-audit -r requirements.txt --disable-pip
+          pip-audit -r requirements.txt
 
       - name: Lint gateway
         run: |

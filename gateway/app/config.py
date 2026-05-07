@@ -306,6 +306,24 @@ class Settings(BaseSettings):
     folder_ingest_progress_interval_sec: float = 2.0
     folder_ingest_progress_interval_files: int = 5
 
+    # ── Vault Sync (Obsidian-style live folder source) ────────────
+    # Lets users register an external folder (typically an Obsidian vault) so
+    # Molebie can hash-diff it on demand and only re-embed changed files.
+    vault_sync_enabled: bool = True
+    # Comma-separated list of absolute path prefixes a vault root must lie
+    # under. Empty = restrict to the user's home directory (rejects /etc, /var
+    # and the like). Set explicitly when running in a Docker / multi-user
+    # context where home isn't the right boundary.
+    vault_allowed_roots: str = ""
+    # Default ignore tokens applied on top of any per-vault exclude_globs.
+    # Mirrors the `_path_is_ignored` rules from folder_ingest.
+    vault_default_ignore: str = (
+        ".obsidian,.trash,.git,.DS_Store,*.canvas,*.excalidraw"
+    )
+    # Hard ceiling on a single sync run — protects the embedder from a
+    # 50,000-file dump. NEW + CHANGED above this aborts the sync with 413.
+    vault_max_files_per_sync: int = 5000
+
     # ── Conversation Summarisation (8a) ─────────────────────────
     summary_enabled: bool = True
     summary_trigger_threshold: int = 16    # unsummarised messages before compressing
