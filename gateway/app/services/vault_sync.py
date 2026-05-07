@@ -28,7 +28,6 @@ from app.services.database import get_database_service
 from app.services.ingest_worker import get_ingest_worker
 from app.services.storage import get_storage_service
 
-
 # Markdown is always indexed. PDFs and plaintext join when index_attachments=1.
 _MARKDOWN_EXTS = frozenset({".md", ".markdown"})
 _ATTACHMENT_EXTS = frozenset({".pdf", ".txt"})
