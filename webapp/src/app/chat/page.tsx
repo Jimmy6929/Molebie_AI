@@ -50,6 +50,7 @@ import Sidebar from "./sidebar";
 import MessageBubble from "./MessageBubble";
 import VoiceSettings from "./VoiceSettings";
 import { FolderUploadProgress } from "./FolderUploadProgress";
+import { VaultPanel } from "./VaultPanel";
 
 interface DisplayMessage {
   id: string;
@@ -480,6 +481,30 @@ export default function ChatPage() {
       }
     },
     [token, attachFolderEventStream],
+  );
+
+  // Vault sync produces an ingest_jobs row identical in shape to a folder
+  // upload, so it can ride the existing folderJob state + SSE plumbing.
+  // Bytes are staged server-side from disk — there's no client-side upload
+  // step, so we jump straight to "running".
+  const handleVaultSyncStarted = useCallback(
+    (params: { jobId: string; rootLabel: string; totalFiles: number }) => {
+      setFolderJob({
+        jobId: params.jobId,
+        rootLabel: params.rootLabel,
+        status: "running",
+        totalFiles: params.totalFiles,
+        totalBytes: 0,
+        processedFiles: 0,
+        failedFiles: 0,
+        skippedFiles: 0,
+        processedBytes: 0,
+        currentFilename: null,
+        errors: [],
+      });
+      attachFolderEventStream(params.jobId);
+    },
+    [attachFolderEventStream],
   );
 
   async function handleFolderPick(files: FileList) {
@@ -1329,6 +1354,15 @@ export default function ChatPage() {
                     ))}
                   </div>
                 )}
+                <VaultPanel
+                  token={token}
+                  onSyncJobStarted={handleVaultSyncStarted}
+                  onDocumentsChanged={loadDocuments}
+                  onToast={(msg) => {
+                    setDocToast(msg);
+                    setTimeout(() => setDocToast(null), 5000);
+                  }}
+                />
               </div>
             )}
 

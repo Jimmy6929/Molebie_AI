@@ -377,6 +377,7 @@ class DatabaseService:
         relative_path: str | None = None,
         file_hash: str | None = None,
         ingest_job_id: str | None = None,
+        vault_source_id: str | None = None,
     ) -> dict[str, Any]:
         db = await self._get_conn()
         did = _uuid()
@@ -384,11 +385,11 @@ class DatabaseService:
         await db.execute(
             "INSERT INTO documents "
             "(id, user_id, filename, storage_path, file_type, file_size, status, created_at, "
-            " relative_path, file_hash, ingest_job_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " relative_path, file_hash, ingest_job_id, vault_source_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 did, user_id, filename, storage_path, file_type, file_size, doc_status, now,
-                relative_path, file_hash, ingest_job_id,
+                relative_path, file_hash, ingest_job_id, vault_source_id,
             ),
         )
         await db.commit()
@@ -895,6 +896,158 @@ class DatabaseService:
         await db.commit()
 
 
+    # ==================== Vault Sources ====================
+
+    async def insert_vault_source(
+        self,
+        user_id: str,
+        label: str,
+        root_path: str,
+        kind: str = "obsidian",
+        exclude_globs: list[str] | None = None,
+        index_attachments: bool = True,
+    ) -> dict[str, Any]:
+        db = await self._get_conn()
+        vid = _uuid()
+        now = _now()
+        await db.execute(
+            "INSERT INTO vault_sources "
+            "(id, user_id, label, root_path, kind, exclude_globs, "
+            " index_attachments, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                vid, user_id, label, root_path, kind,
+                json.dumps(exclude_globs) if exclude_globs else None,
+                1 if index_attachments else 0,
+                now,
+            ),
+        )
+        await db.commit()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM vault_sources WHERE id = ?", (vid,)
+        )
+        return _row_to_dict(rows[0])
+
+    async def list_vault_sources(self, user_id: str) -> list[dict[str, Any]]:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            """
+            SELECT v.*, (
+                SELECT COUNT(*) FROM documents d
+                WHERE d.vault_source_id = v.id AND d.user_id = v.user_id
+            ) AS doc_count
+            FROM vault_sources v
+            WHERE v.user_id = ?
+            ORDER BY v.created_at DESC
+            """,
+            (user_id,),
+        )
+        return [_row_to_dict(r) for r in rows]
+
+    async def get_vault_source(
+        self, vault_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM vault_sources WHERE id = ? AND user_id = ?",
+            (vault_id, user_id),
+        )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def get_vault_source_by_root(
+        self, user_id: str, root_path: str
+    ) -> dict[str, Any] | None:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM vault_sources WHERE user_id = ? AND root_path = ?",
+            (user_id, root_path),
+        )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def update_vault_source_synced_at(self, vault_id: str) -> None:
+        db = await self._get_conn()
+        await db.execute(
+            "UPDATE vault_sources SET last_sync_at = ? WHERE id = ?",
+            (_now(), vault_id),
+        )
+        await db.commit()
+
+    async def delete_vault_source(self, vault_id: str, user_id: str) -> int:
+        """Delete a vault source AND every document it owns (chunks cascade
+        via document_chunks FK; vec rows cleaned manually since vec0 has no
+        triggers). Returns the number of documents removed."""
+        db = await self._get_conn()
+        owned = await db.execute_fetchall(
+            "SELECT id FROM documents WHERE vault_source_id = ? AND user_id = ?",
+            (vault_id, user_id),
+        )
+        for r in owned:
+            await self.delete_document(r["id"], user_id)
+        await db.execute(
+            "DELETE FROM vault_sources WHERE id = ? AND user_id = ?",
+            (vault_id, user_id),
+        )
+        await db.commit()
+        return len(owned)
+
+    async def list_vault_documents(
+        self, vault_id: str, user_id: str
+    ) -> list[dict[str, Any]]:
+        """Return id, relative_path, file_hash for every document tagged with
+        this vault. Used by the sync diff to classify NEW/CHANGED/DELETED."""
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT id, relative_path, file_hash, status FROM documents "
+            "WHERE vault_source_id = ? AND user_id = ?",
+            (vault_id, user_id),
+        )
+        return [_row_to_dict(r) for r in rows]
+
+    async def find_unattached_document_by_hash(
+        self, user_id: str, file_hash: str
+    ) -> dict[str, Any] | None:
+        """Return the first ``completed`` document with matching SHA256 that
+        isn't yet attached to any vault. Used by `sync_vault` to adopt
+        previously folder-uploaded files into a freshly connected vault
+        instead of re-embedding identical content.
+
+        Only `status='completed'` rows are eligible — partially processed
+        rows would have an inconsistent chunk set."""
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM documents "
+            "WHERE user_id = ? AND file_hash = ? "
+            "  AND vault_source_id IS NULL "
+            "  AND status = 'completed' "
+            "ORDER BY created_at ASC LIMIT 1",
+            (user_id, file_hash),
+        )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def adopt_document_into_vault(
+        self,
+        doc_id: str,
+        vault_id: str,
+        relative_path: str,
+        user_id: str,
+    ) -> bool:
+        """Atomically attach an unattached document to a vault and rewrite
+        its `relative_path` to match the vault's view. Returns True if a row
+        was updated (i.e. the doc was still unattached at write-time).
+
+        The `vault_source_id IS NULL` predicate guards against a race where
+        two concurrent syncs try to adopt the same document — only one wins.
+        """
+        db = await self._get_conn()
+        cur = await db.execute(
+            "UPDATE documents "
+            "SET vault_source_id = ?, relative_path = ? "
+            "WHERE id = ? AND user_id = ? AND vault_source_id IS NULL",
+            (vault_id, relative_path, doc_id, user_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
     # ==================== Folder Ingest Jobs ====================
 
     async def create_ingest_job(
@@ -902,6 +1055,7 @@ class DatabaseService:
         user_id: str,
         root_label: str,
         files: list[dict[str, Any]],
+        vault_source_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Create an ingest_jobs row and one ingest_job_files row per accepted file.
@@ -919,9 +1073,10 @@ class DatabaseService:
 
         await db.execute(
             "INSERT INTO ingest_jobs "
-            "(id, user_id, root_label, total_files, total_bytes, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-            (job_id, user_id, root_label, total_files, total_bytes, now),
+            "(id, user_id, root_label, total_files, total_bytes, status, created_at, "
+            " vault_source_id) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (job_id, user_id, root_label, total_files, total_bytes, now, vault_source_id),
         )
 
         accepted: list[dict[str, Any]] = []
@@ -1045,7 +1200,8 @@ class DatabaseService:
     async def get_ingest_file(self, file_id: str) -> dict[str, Any] | None:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
-            "SELECT f.*, j.user_id AS user_id "
+            "SELECT f.*, j.user_id AS user_id, "
+            "       j.vault_source_id AS vault_source_id "
             "FROM ingest_job_files AS f JOIN ingest_jobs AS j ON j.id = f.job_id "
             "WHERE f.id = ?",
             (file_id,),
@@ -1057,7 +1213,8 @@ class DatabaseService:
     ) -> dict[str, Any] | None:
         db = await self._get_conn()
         rows = await db.execute_fetchall(
-            "SELECT f.*, j.user_id AS user_id "
+            "SELECT f.*, j.user_id AS user_id, "
+            "       j.vault_source_id AS vault_source_id "
             "FROM ingest_job_files AS f JOIN ingest_jobs AS j ON j.id = f.job_id "
             "WHERE f.job_id = ? AND f.relative_path = ?",
             (job_id, relative_path),
@@ -1069,7 +1226,8 @@ class DatabaseService:
         hasn't completed. Status 'uploaded' = bytes saved, ready to process."""
         db = await self._get_conn()
         rows = await db.execute_fetchall(
-            "SELECT f.*, j.user_id AS user_id "
+            "SELECT f.*, j.user_id AS user_id, "
+            "       j.vault_source_id AS vault_source_id "
             "FROM ingest_job_files AS f JOIN ingest_jobs AS j ON j.id = f.job_id "
             "WHERE f.job_id = ? AND f.status = 'uploaded' "
             "ORDER BY f.relative_path LIMIT 1",
