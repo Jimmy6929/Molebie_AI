@@ -40,7 +40,11 @@ from app.models.chat import (
 )
 from app.services.consistency import is_verifiable_query, vote_with_self_consistency
 from app.services.database import DatabaseService, get_database_service
-from app.services.inference import InferenceService, get_inference_service
+from app.services.inference import (
+    InferenceService,
+    get_inference_service,
+    trim_messages_to_budget,
+)
 from app.services.judge import get_grounding_judge
 from app.services.memory import get_memory_service
 from app.services.metrics_registry import RequestRecord, get_metrics_registry
@@ -925,6 +929,19 @@ async def send_message(
     else:
         inference_mode = request.mode.value
 
+    # Token budget guard: trim oldest history if the assembled prompt
+    # would overflow the model's context window. Disabled when the
+    # configured window is 0.
+    context_window = settings.get_context_window_for_mode(inference_mode)
+    if context_window > 0:
+        messages = trim_messages_to_budget(
+            messages,
+            context_window=context_window,
+            max_tokens=settings.get_max_tokens_for_mode(inference_mode),
+            chars_per_token=settings.token_chars_per_token,
+            reserve_fraction=settings.token_budget_reserve_fraction,
+        )
+
     # Force CoT off when RAG context is present on the thinking tier — small
     # Qwen models burn thousands of thinking tokens "in circles" on retrieval
     # Q&A and the strict-grounding template doesn't need reasoning to follow.
@@ -1685,6 +1702,24 @@ async def send_message_stream(
                 for m in messages
             )
             print(f"[chat] Sending {len(messages)} messages ({total_chars} chars) to inference")
+
+            # Token budget guard (mirrors non-streaming path): trim oldest
+            # history if assembled prompt would overflow the context window.
+            # NOTE: ``messages`` is a closure variable from the outer route;
+            # assigning to it here would make Python treat it as local for
+            # this whole generator, breaking the in-place mutation at the
+            # top of the function. Use a separate local instead.
+            stream_context_window = settings.get_context_window_for_mode(inference_mode)
+            messages_for_inference = messages
+            if stream_context_window > 0:
+                messages_for_inference = trim_messages_to_budget(
+                    messages,
+                    context_window=stream_context_window,
+                    max_tokens=settings.get_max_tokens_for_mode(inference_mode),
+                    chars_per_token=settings.token_chars_per_token,
+                    reserve_fraction=settings.token_budget_reserve_fraction,
+                )
+
             await registry.pipeline_event(
                 req_id, f"inference.{inference_mode}", status="running",
                 note=f"{total_chars} chars in",
@@ -1703,7 +1738,7 @@ async def send_message_stream(
             _INFLIGHT_PUSH_EVERY_SEC = 0.5
 
             async for chunk in inference.generate_response_stream(
-                messages=messages,
+                messages=messages_for_inference,
                 mode=inference_mode,
                 enable_thinking=enable_thinking_override,
             ):
