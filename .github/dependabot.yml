@@ -20,6 +20,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "torch"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "torchvision"
+        update-types: ["version-update:semver-major"]
 
   # JavaScript / TypeScript dependencies for the webapp
   - package-ecosystem: "npm"
@@ -41,6 +46,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions used in workflows
   - package-ecosystem: "github-actions"
@@ -50,9 +60,14 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
+    open-pull-requests-limit: 3
     labels:
       - "dependencies"
       - "github-actions"
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
+    groups:
+      github-actions-all:
+        patterns:
+          - "*"
