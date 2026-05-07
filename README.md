@@ -4,6 +4,10 @@
 
 <p align="center">
   <a href="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/ci.yml"><img src="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/codeql.yml"><img src="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+  <a href="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/secret-scan.yml"><img src="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/secret-scan.yml/badge.svg" alt="Secret Scan"></a>
+  <a href="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/test-installer.yml"><img src="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/test-installer.yml/badge.svg" alt="Test Installers"></a>
+  <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-blue.svg" alt="Security Policy"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platform">
@@ -24,8 +28,12 @@
 - **Three Inference Modes** — Instant (fast), Thinking (chain-of-thought), Think Harder (extended reasoning)
 - **Voice Conversation** — Wake-word activation, speech-to-text (Whisper), text-to-speech (Kokoro), speaker verification
 - **Image Understanding** — Attach images via file picker, paste, or drag-and-drop
-- **RAG Document Memory** — Upload PDFs, DOCX, TXT, MD for persistent knowledge with hybrid vector + BM25 search
+- **RAG Document Memory** — Upload PDFs, DOCX, TXT, MD for persistent knowledge with hybrid vector + BM25 search, cross-encoder reranking, neighbor expansion, and adaptive rerank floor
+- **Folder Upload** — Drag a whole folder into Brain; live progress, dedup by content hash, resumable ingest
+- **Vault Sync (Obsidian-style)** — Connect external folders as live sources; SHA-256 hash-diffed sync adopts unattached docs and ingests changes incrementally with allow-list / ignore-globs / size-limit / symlink safety
+- **Hallucination Guards** — Built-in verification pipeline: Chain-of-Verification (CoVe), LLM Judge, SelfCheck consistency, citation enforcement, and tool-aware routing
 - **Web Search** — Self-hosted SearXNG with LLM-powered intent classification and source citation
+- **Live Terminal Monitor** — `molebie-ai monitor` shows real-time system, gateway, and inference health in one dashboard
 - **Full Data Ownership** — All data stored locally in SQLite with file-based storage
 - **Multi-User** — User isolation from day one, no cloud dependency
 - **Any Backend** — Works with MLX, Ollama, vLLM, llama.cpp, or OpenAI API
@@ -66,6 +74,7 @@ For more control, run `molebie-ai install` to use the interactive setup wizard.
 | `molebie-ai install` | Interactive setup wizard |
 | `molebie-ai doctor` | Diagnose problems — checks deps, config, and services |
 | `molebie-ai status` | Show current config and running services |
+| `molebie-ai monitor` | Live terminal dashboard — system, gateway, and inference health |
 | `molebie-ai config env` | List all environment variables |
 | `molebie-ai config set KEY=VALUE` | Update a config value |
 | `molebie-ai model list` | Show available models and download status |
@@ -95,6 +104,22 @@ See [Configuration](docs/configuration.md) for the full command reference.
 | STT | faster-whisper |
 | TTS | Kokoro FastAPI (Docker) |
 | Web Search | SearXNG (Docker) |
+
+## Security & Quality
+
+Every push and pull request runs through a layered security pipeline before it can reach `main`:
+
+| Check | What it does |
+|---|---|
+| **CI** (`lint-and-test`) | Ruff lint, pytest suite, Python + Node toolchain build |
+| **CodeQL** | GitHub static analysis for Python and JavaScript/TypeScript — catches injection, unsafe deserialization, and common CWE patterns |
+| **Secret Scan** (gitleaks) | Blocks any commit that leaks API keys, tokens, or credentials |
+| **pip-audit** | Scans gateway Python dependencies for known CVEs on every CI run |
+| **Test Installers** | Smoke-tests the bootstrap installer end-to-end on Ubuntu, macOS, and Windows runners |
+| **Dependabot** | Weekly grouped dependency updates for pip, npm, and GitHub Actions |
+| **Branch protection** | `main` is PR-only with linear history, no force pushes, required CI green |
+
+Found a vulnerability? See [SECURITY.md](SECURITY.md) for the responsible disclosure policy.
 
 ## License
 
