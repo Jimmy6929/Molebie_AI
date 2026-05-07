@@ -7,5 +7,5 @@
 
 torch>=2.0.0
 torchvision>=0.19
-sentence-transformers>=3.0.0
+sentence-transformers>=5.4.1
 faster-whisper==1.2.1
