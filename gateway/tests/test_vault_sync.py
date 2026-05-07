@@ -18,7 +18,6 @@ migration code path is exercised too.
 from __future__ import annotations
 
 import asyncio
-import os
 import sqlite3
 import sys
 import tempfile
@@ -222,9 +221,10 @@ async def test_sync_idempotent_when_unchanged(isolated_data_dir, vault_dir):
 @pytest.mark.asyncio
 async def test_sync_detects_changed_and_deleted(isolated_data_dir, vault_dir):
     """Edit one file, delete another, leave one alone — classify accordingly."""
+    import hashlib
+
     from app.services.database import get_database_service
     from app.services.vault_sync import sync_vault
-    import hashlib
 
     _write(vault_dir, "a.md", "version-1")
     _write(vault_dir, "b.md", "stable")
@@ -299,9 +299,10 @@ async def test_sync_adopts_unattached_document_by_hash(
 ):
     """A previously folder-uploaded doc with matching SHA256 should be
     adopted into the vault — no re-embedding, just a pointer flip."""
+    import hashlib
+
     from app.services.database import get_database_service
     from app.services.vault_sync import sync_vault
-    import hashlib
 
     # The vault contains a single note "shared.md".
     body = b"# shared content"
@@ -354,9 +355,10 @@ async def test_sync_does_not_adopt_doc_attached_to_other_vault(
 ):
     """Hash collision with a doc owned by a DIFFERENT vault must not steal
     that doc — adoption only operates on `vault_source_id IS NULL` rows."""
+    import hashlib
+
     from app.services.database import get_database_service
     from app.services.vault_sync import sync_vault
-    import hashlib
 
     body = b"# shared"
     _write(vault_dir, "shared.md", body.decode())
@@ -405,9 +407,10 @@ async def test_sync_does_not_adopt_same_orphan_twice(
 ):
     """Two vault files with the same SHA256 must not both adopt one orphan —
     one wins, the other becomes NEW."""
+    import hashlib
+
     from app.services.database import get_database_service
     from app.services.vault_sync import sync_vault
-    import hashlib
 
     body = b"# duplicate"
     sha = hashlib.sha256(body).hexdigest()
