@@ -8,9 +8,26 @@
   <a href="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/secret-scan.yml"><img src="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/secret-scan.yml/badge.svg" alt="Secret Scan"></a>
   <a href="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/test-installer.yml"><img src="https://github.com/Jimmy6929/Molebie_AI/actions/workflows/test-installer.yml/badge.svg" alt="Test Installers"></a>
   <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-blue.svg" alt="Security Policy"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Jimmy6929/Molebie_AI/stargazers"><img src="https://img.shields.io/github/stars/Jimmy6929/Molebie_AI?style=flat&logo=github&color=yellow" alt="GitHub stars"></a>
+  <a href="https://github.com/Jimmy6929/Molebie_AI/commits/main"><img src="https://img.shields.io/github/last-commit/Jimmy6929/Molebie_AI?logo=git&logoColor=white" alt="Last commit"></a>
+  <a href="https://github.com/Jimmy6929/Molebie_AI/issues"><img src="https://img.shields.io/github/issues/Jimmy6929/Molebie_AI?logo=github" alt="Open issues"></a>
+  <a href="https://github.com/Jimmy6929/Molebie_AI/pulls"><img src="https://img.shields.io/github/issues-pr/Jimmy6929/Molebie_AI?logo=github" alt="Open PRs"></a>
+  <a href="https://www.conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-FE5196?logo=conventionalcommits&logoColor=white" alt="Conventional Commits"></a>
+</p>
+
+<p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/node-20+-339933?logo=node.js&logoColor=white" alt="Node 20+">
+  <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.x">
+  <img src="https://img.shields.io/badge/Next.js-16-000000?logo=next.js&logoColor=white" alt="Next.js 16">
+  <img src="https://img.shields.io/badge/FastAPI-0.109+-009688?logo=fastapi&logoColor=white" alt="FastAPI 0.109+">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/code%20style-ruff-261230.svg" alt="Code style: ruff">
+  <img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black">
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
 </p>
 
