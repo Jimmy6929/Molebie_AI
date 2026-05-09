@@ -59,6 +59,94 @@ def _apply_sampling_params(
             payload["repeat_penalty"] = repetition_penalty
 
 
+_CLOSE_THINK_RE = re.compile(r"</think>\s*", re.IGNORECASE)
+
+
+class _StreamThinkStripper:
+    """Stateful filter that drops a leading ``<think>...</think>`` block
+    from streamed delta.content.
+
+    Used when CoT was supposed to be off but the backend leaked think
+    tokens — ``mlx_vlm.server`` (the project's MLX wrapper) does not
+    translate the ``enable_thinking`` request field into
+    ``chat_template_kwargs``, so Qwen 3.5's chat template still injects
+    the opener server-side. The model emits reasoning, then ``</think>``,
+    then the real answer (the so-called "Format C" pattern).
+
+    Strategy: buffer all content until ``</think>`` is observed; emit
+    only what follows; thereafter passthrough. ``flush()`` releases
+    whatever's buffered when the upstream stream closes — covers the
+    case where the backend honored the flag and no close tag ever
+    arrived (we'd otherwise drop the entire answer).
+    """
+
+    def __init__(self) -> None:
+        self._past_close = False
+        self._buffer = ""
+
+    def filter_content(self, content: str) -> str:
+        if self._past_close:
+            return content
+        self._buffer += content
+        match = _CLOSE_THINK_RE.search(self._buffer)
+        if match:
+            self._past_close = True
+            after = self._buffer[match.end():]
+            self._buffer = ""
+            return after
+        return ""
+
+    def flush(self) -> str:
+        if self._past_close:
+            return ""
+        out = self._buffer
+        self._buffer = ""
+        self._past_close = True
+        return out
+
+
+async def _strip_think_async(
+    line_iter: AsyncIterator[str],
+) -> AsyncIterator[str]:
+    """Wrap an SSE line iterator, removing ``<think>...</think>`` from
+    delta.content of each ``data: {...}`` line. Non-JSON, ``[DONE]``,
+    and event lines pass through unchanged. Buffered post-close content
+    is flushed as a synthetic delta just before ``[DONE]``.
+    """
+    stripper = _StreamThinkStripper()
+    async for line in line_iter:
+        if not line.startswith("data: "):
+            yield line
+            continue
+        body = line[6:].strip()
+        if body == "[DONE]":
+            tail = stripper.flush()
+            if tail:
+                synthetic = {"choices": [{"delta": {"content": tail}}]}
+                yield f"data: {json.dumps(synthetic)}"
+            yield line
+            continue
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            yield line
+            continue
+        choices = payload.get("choices") or [{}]
+        delta = choices[0].get("delta") or {}
+        original = delta.get("content")
+        if not isinstance(original, str) or original == "":
+            yield line
+            continue
+        filtered = stripper.filter_content(original)
+        if filtered == original:
+            yield line
+            continue
+        if filtered:
+            delta["content"] = filtered
+            yield f"data: {json.dumps(payload)}"
+        # else: drop the chunk entirely (content was inside <think>...</think>)
+
+
 def _strip_think_in_messages(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -592,8 +680,15 @@ class InferenceService:
                 choice = data["choices"][0]
                 usage = data.get("usage", {})
 
+                content = choice["message"].get("content") or ""
+                # Defensive strip: when CoT was off but the backend
+                # leaked a <think>...</think> block anyway. Mirror of
+                # the streaming-path filter (_strip_think_async).
+                if enable_thinking is False and content:
+                    content = _THINK_BLOCK_RE.sub("", content)
+
                 return {
-                    "content": choice["message"].get("content") or "",
+                    "content": content,
                     "reasoning_content": choice["message"].get("reasoning_content"),
                     "tool_calls": choice["message"].get("tool_calls") or [],
                     "tokens_used": usage.get("total_tokens"),
@@ -748,7 +843,15 @@ class InferenceService:
                     headers=self._get_headers(),
                 ) as response:
                     response.raise_for_status()
-                    async for line in response.aiter_lines():
+                    line_iter: AsyncIterator[str] = response.aiter_lines()
+                    # Defensive output strip: when CoT is off but the
+                    # backend leaks <think>...</think> anyway (mlx_vlm
+                    # does not honor enable_thinking per-request against
+                    # Qwen 3.5's chat template), drop the leading think
+                    # block before chunks reach the client.
+                    if resolved_enable_thinking is False:
+                        line_iter = _strip_think_async(line_iter)
+                    async for line in line_iter:
                         if line.strip():
                             yield f"{line}\n\n"
         except Exception as e:

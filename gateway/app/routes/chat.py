@@ -45,6 +45,7 @@ from app.services.inference import (
     get_inference_service,
     trim_messages_to_budget,
 )
+from app.services.intent import classify_explain_intent
 from app.services.judge import get_grounding_judge
 from app.services.memory import get_memory_service
 from app.services.metrics_registry import RequestRecord, get_metrics_registry
@@ -574,8 +575,9 @@ def _build_system_message(
     confidence: str = "NONE",
     explicit_lookup: bool = False,
     use_tool_calling: bool = False,
+    explain_intent: bool = False,
 ) -> dict:
-    """Build the system message with confidence-driven prompt routing.
+    """Build the system message with confidence- and intent-driven routing.
 
     Routing rule (see ``_routing_mode``):
       - HIGH/MODERATE/LOW retrieval → ``system_rag.txt`` (strict, cite-when-used)
@@ -583,6 +585,8 @@ def _build_system_message(
         knowledge + web allowed)
       - ``explicit_lookup=True`` overrides into strict mode regardless of
         confidence so the user's explicit "from my notes" intent wins.
+      - ``explain_intent=True`` AND lookup mode → ``system_rag_explain.txt``
+        (strict citations + permitted multi-paragraph synthesis).
 
     When ``use_tool_calling`` is True (and not voice mode), a one-line
     "TOOLS AVAILABLE" hint is appended. Local Qwen-class models otherwise
@@ -600,7 +604,10 @@ def _build_system_message(
         content = prompt_template.format(current_date=today_str)
     else:
         mode = _routing_mode(confidence, explicit_lookup)
-        template_name = "system_rag" if mode == "lookup" else "system_generative"
+        if mode == "lookup":
+            template_name = "system_rag_explain" if explain_intent else "system_rag"
+        else:
+            template_name = "system_generative"
         prompt_template = _load_prompt_template(template_name)
         content = prompt_template.format(
             current_date=today_str,
@@ -858,6 +865,13 @@ async def send_message(
         print(f"[chat] Retrieval confidence: {rag_confidence} → mode: {routing_mode}"
               + (" (explicit lookup phrasing)" if explicit_lookup else ""))
 
+    # Explain-vs-lookup intent. Only worth classifying when we'd otherwise
+    # use the strict lookup template — generative mode is already permissive.
+    # Drives both template selection and the CoT auto-disable gate below.
+    explain_intent = False
+    if routing_mode == "lookup" and rag_chunks and not request.conversation_mode:
+        explain_intent = await classify_explain_intent(request.message)
+
     # Compute tool-calling availability up-front so it can be advertised in
     # the system prompt (otherwise the model has no prior that web_search /
     # search_notes / etc. are real and refuses with "I cannot access X").
@@ -875,6 +889,7 @@ async def send_message(
         confidence=rag_confidence,
         explicit_lookup=explicit_lookup,
         use_tool_calling=use_tool_calling,
+        explain_intent=explain_intent,
     )] + hist_messages
 
     # Confidence-driven directives: in generative mode on a factual gap with
@@ -942,15 +957,18 @@ async def send_message(
             reserve_fraction=settings.token_budget_reserve_fraction,
         )
 
-    # Force CoT off when RAG context is present on the thinking tier — small
-    # Qwen models burn thousands of thinking tokens "in circles" on retrieval
-    # Q&A and the strict-grounding template doesn't need reasoning to follow.
+    # Force CoT off when RAG context is present on the thinking tier AND the
+    # query is lookup-intent — small Qwen models burn thousands of thinking
+    # tokens "in circles" on terse fact lookups. Explain-intent queries keep
+    # CoT on so the model can reason over the combined context (RAG + history
+    # + system prompt) before synthesizing the multi-paragraph answer.
     enable_thinking_override: bool | None = None
     if (rag_chunks
             and inference_mode in ("thinking", "thinking_harder")
-            and settings.inference_thinking_auto_disable_for_rag):
+            and settings.inference_thinking_auto_disable_for_rag
+            and not explain_intent):
         enable_thinking_override = False
-        print(f"[chat] RAG present on {inference_mode} tier — disabling CoT")
+        print(f"[chat] RAG present on {inference_mode} tier (lookup intent) — disabling CoT")
 
     # Decide which inference path to take. Tool calling and self-consistency
     # are mutually exclusive in this first cut — tool calling produces a
@@ -1579,6 +1597,11 @@ async def send_message_stream(
         print(f"[chat] Retrieval confidence: {rag_confidence} → mode: {routing_mode}"
               + (" (explicit lookup phrasing)" if explicit_lookup else ""))
 
+    # Explain-vs-lookup intent — same gating as send_message().
+    explain_intent = False
+    if routing_mode == "lookup" and rag_chunks and not request.conversation_mode:
+        explain_intent = await classify_explain_intent(request.message)
+
     # Streaming path doesn't use tool_calling (no tool loop on stream), so the
     # TOOLS AVAILABLE hint is suppressed here — advertising tools the model
     # can't call would be worse than staying silent. The tool-loop
@@ -1591,6 +1614,7 @@ async def send_message_stream(
         confidence=rag_confidence,
         explicit_lookup=explicit_lookup,
         use_tool_calling=False,
+        explain_intent=explain_intent,
     )] + hist_messages
 
     # Confidence-driven directives — see send_message() for rationale.
@@ -1622,14 +1646,15 @@ async def send_message_stream(
     else:
         inference_mode = request.mode.value
 
-    # Force CoT off when RAG context is present on the thinking tier — see
-    # send_message() for rationale.
+    # Force CoT off when RAG context is present on the thinking tier AND the
+    # query is lookup-intent — see send_message() for rationale.
     enable_thinking_override: bool | None = None
     if (rag_chunks
             and inference_mode in ("thinking", "thinking_harder")
-            and settings.inference_thinking_auto_disable_for_rag):
+            and settings.inference_thinking_auto_disable_for_rag
+            and not explain_intent):
         enable_thinking_override = False
-        print(f"[chat] RAG present on {inference_mode} tier — disabling CoT")
+        print(f"[chat] RAG present on {inference_mode} tier (lookup intent) — disabling CoT")
 
     async def event_generator():
         """Generate SSE events from inference stream."""
