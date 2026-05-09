@@ -233,6 +233,15 @@ class Settings(BaseSettings):
     web_search_classify_timeout: float = 3.0
     web_search_classify_max_tokens: int = 3
 
+    # Explain-vs-lookup intent classifier. When the user's question is
+    # explanatory ("explain how X works", "why does Y behave...") and
+    # RAG retrieval succeeded, route to the permissive system_rag_explain
+    # template AND keep CoT on. Lookup queries stay on system_rag with
+    # CoT auto-disabled. Fail-closed: classifier failure → assume lookup.
+    intent_classify_enabled: bool = True
+    intent_classify_timeout: float = 3.0
+    intent_classify_max_tokens: int = 4
+
     # ── RAG / Embeddings ─────────────────────────────────────
     rag_enabled: bool = True
     # Same model family as the generator (Qwen) → tokenizer alignment →
