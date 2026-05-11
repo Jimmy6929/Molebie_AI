@@ -7,7 +7,7 @@ uvicorn[standard]==0.46.0
 # python-jose 3.5.0 fixes PYSEC-2024-232/233 and relaxes pyasn1 to allow the patched 0.6.x.
 python-jose[cryptography]==3.5.0
 pydantic==2.13.4
-pydantic-settings==2.14.0
+pydantic-settings==2.14.1
 
 # SQLite (async + vector search)
 aiosqlite>=0.20.0
@@ -20,7 +20,7 @@ bcrypt>=4.1.0
 httpx==0.28.1
 
 # File uploads (FastAPI UploadFile)
-python-multipart==0.0.27
+python-multipart==0.0.28
 
 # RAG: document parsing
 pypdf>=6.10.2
