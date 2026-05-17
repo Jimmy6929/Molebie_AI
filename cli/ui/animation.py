@@ -61,7 +61,13 @@ class Sparkline:
             return " " * self.width
         lo = min(self._buf)
         hi = max(self._buf)
-        span = hi - lo if hi > lo else 1.0
+        # Zero variance: a steady high value would otherwise collapse to ▁
+        # and read as "low". Render a mid-height row so the operator sees
+        # "data exists, no movement" without implying magnitude.
+        if hi == lo:
+            mid = _BLOCKS[(len(_BLOCKS) - 1) // 2]  # ▄ for an 8-block scale
+            return (mid * len(self._buf)).rjust(self.width)
+        span = hi - lo
         blocks = []
         for v in self._buf:
             norm = (v - lo) / span  # 0..1
@@ -95,10 +101,18 @@ class PulseTracker:
 
 
 def hbar(percent: float | None, width: int = 8, filled: str = "█", empty: str = "░") -> str:
-    """Horizontal unicode bar. `percent` is 0..100 (or None → all empty)."""
+    """Horizontal unicode bar. `percent` is 0..100 (or None → all empty).
+
+    Values > 100 render as a fully-filled bar plus a trailing ▶ overflow
+    marker so over-subscription is visually distinct from a saturated 100%
+    bar. The marker spills outside `width`; callers that align bars in a
+    grid should reserve an extra cell if they care about strict columns.
+    """
     if percent is None:
         return empty * width
-    pct = max(0.0, min(100.0, percent))
+    if percent > 100.0:
+        return filled * width + "▶"
+    pct = max(0.0, percent)
     fill = int(round((pct / 100.0) * width))
     return filled * fill + empty * (width - fill)
 

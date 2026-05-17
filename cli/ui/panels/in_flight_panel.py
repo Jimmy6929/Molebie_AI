@@ -44,10 +44,12 @@ def render(state) -> Panel | None:
     ttft_str = _fmt_ms(ttft) if ttft else "[dim]—[/dim]"
 
     # Tokens-per-second: only after the first token has stamped a TTFT.
+    # Floor at 50 ms of decode time — below that the ratio is dominated
+    # by inter-token jitter and momentarily flashes 4-digit values.
     tps_str = "—"
     if tokens and ttft is not None and elapsed * 1000 > ttft:
         decode_sec = elapsed - (ttft / 1000.0)
-        if decode_sec > 0:
+        if decode_sec >= 0.05:
             tps_str = f"{tokens / decode_sec:.1f} tok/s"
 
     tbl = Table.grid(padding=(0, 2))

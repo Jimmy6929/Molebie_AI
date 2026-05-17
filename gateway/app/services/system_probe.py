@@ -169,9 +169,12 @@ class MacOSAppleSiliconProbe(SystemProbe):
             except json.JSONDecodeError:
                 continue
             # macmon schema: gpu_usage = [freq, usage], temp.gpu_temp_avg, gpu_power, ...
+            # `usage` is a 0..1 fraction per macmon's schema; always scale to
+            # percent. If macmon ever changes the unit we want a noisy break
+            # (visibly wrong bar) rather than a silent miscalibration.
             gu = data.get("gpu_usage")
             if isinstance(gu, list) and len(gu) >= 2:
-                self._last_gpu = float(gu[1]) * 100.0 if gu[1] <= 1.0 else float(gu[1])
+                self._last_gpu = float(gu[1]) * 100.0
             temp = data.get("temp", {})
             if isinstance(temp, dict) and "gpu_temp_avg" in temp:
                 self._last_temp = float(temp["gpu_temp_avg"])
