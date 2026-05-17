@@ -14,7 +14,7 @@ search:
 server:
   # Replaced on first run by cli/services/feature_setup.py with a per-install
   # token. Keep this placeholder string committed — do not paste a real key here.
-  secret_key: "CHANGE_ME_GENERATED_ON_FIRST_RUN"
+  secret_key: "8790e9fa9520c5ad4185238f7e149289a2e6695155c01b1668d2b19fc772c5ab"
   bind_address: "0.0.0.0"
   port: 8080
   limiter: false

@@ -515,17 +515,28 @@ class MetricsRegistry:
 
 
 def _quantiles(values: list[float]) -> tuple[float | None, float | None, float | None]:
-    """Return (p50, p95, p99) from a list. None if fewer than 2 samples."""
+    """Return (p50, p95, p99) from a list.
+
+    Linear interpolation between order statistics — matches
+    `numpy.quantile(..., method="linear")` / Excel PERCENTILE.INC. With
+    floor-based nearest-rank, p95 collapsed to `max(values)` for any
+    n ≤ 20, so the dashboard's p95 card silently tracked the slowest
+    request. Interpolation gives meaningful separation even for small n.
+    """
     if not values:
         return None, None, None
     if len(values) == 1:
         v = values[0]
         return v, v, v
     sorted_v = sorted(values)
+    n = len(sorted_v)
 
     def _pick(pct: float) -> float:
-        idx = min(len(sorted_v) - 1, int(pct * len(sorted_v)))
-        return sorted_v[idx]
+        pos = pct * (n - 1)
+        lo = int(pos)
+        hi = min(lo + 1, n - 1)
+        frac = pos - lo
+        return sorted_v[lo] + (sorted_v[hi] - sorted_v[lo]) * frac
 
     return _pick(0.50), _pick(0.95), _pick(0.99)
 
