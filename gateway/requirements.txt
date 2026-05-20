@@ -5,6 +5,9 @@ uvicorn[standard]==0.46.0
 
 # JWT and authentication
 # python-jose 3.5.0 fixes PYSEC-2024-232/233 and relaxes pyasn1 to allow the patched 0.6.x.
+# PYSEC-2025-185 (DoS in jose.jwe.decrypt) does not affect this codebase — we only sign/verify
+# JWTs (jwt.encode/decode), never decrypt JWEs. The CI's pip-audit step ignores that ID; see
+# .github/workflows/ci.yml. Revisit if python-jose ships a fix, or migrate to PyJWT.
 python-jose[cryptography]==3.5.0
 pydantic==2.13.4
 pydantic-settings==2.14.0
