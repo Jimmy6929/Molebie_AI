@@ -475,6 +475,7 @@ async def _run_tool_loop(
     mode: str,
     enable_thinking: bool | None,
     max_iterations: int,
+    session_id: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Tool calling: model emits ``tool_calls`` → we execute → feed results
     back as ``tool`` role messages → call inference again. Loops until the
@@ -488,12 +489,15 @@ async def _run_tool_loop(
     working_messages = list(messages)
 
     for iteration in range(max_iterations):
+        # Pass session_id so the selector pins the whole tool loop to one
+        # backend — KV cache survives across iterations, no per-call cold path.
         result = await inference.generate_response(
             messages=working_messages,
             mode=mode,
             enable_thinking=enable_thinking,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
+            session_id=session_id,
         )
         tool_calls = result.get("tool_calls") or []
         if not tool_calls:
@@ -1009,6 +1013,7 @@ async def send_message(
                 mode=inference_mode,
                 enable_thinking=enable_thinking_override,
                 max_iterations=settings.tool_calling_max_iterations,
+                session_id=session_id,
             )
             inference_result["tool_calls_made"] = tool_call_log
         elif use_self_consistency:
@@ -1043,6 +1048,7 @@ async def send_message(
                 messages=messages,
                 mode=inference_mode,
                 enable_thinking=enable_thinking_override,
+                session_id=session_id,
             )
     except Exception as exc:
         _metrics_error = type(exc).__name__
@@ -1766,6 +1772,7 @@ async def send_message_stream(
                 messages=messages_for_inference,
                 mode=inference_mode,
                 enable_thinking=enable_thinking_override,
+                session_id=session_id,
             ):
                 rewritten_chunk = chunk
                 try:
