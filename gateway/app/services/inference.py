@@ -19,6 +19,12 @@ from typing import Any
 import httpx
 
 from app.config import Settings, get_settings
+from app.services.inference_pool import (
+    BackendPool,
+    BackendSelector,
+    InferenceBackend,
+    NoHealthyBackendError,
+)
 
 # Defensive strip: prior `<think>...</think>` blocks must never re-enter the
 # prompt. The chat route already strips on persist, but multi-process pipelines
@@ -327,6 +333,49 @@ class InferenceService:
         # API key for commercial backends (OpenAI, etc.)
         self.api_key = settings.inference_api_key or ""
 
+        # Plan B: backend pool + selector. Pools start with the local backend
+        # for each tier (if configured). Future `molebie-ai join --role compute`
+        # appends satellites — same selector, no further refactor.
+        self.selector = self._build_selector()
+
+    def _build_selector(self) -> BackendSelector:
+        """Construct a per-tier pool from the configured local endpoints."""
+        pools: dict[str, BackendPool] = {
+            "instant": BackendPool(tier="instant"),
+            "thinking": BackendPool(tier="thinking"),
+        }
+        if self.instant_url:
+            pools["instant"].backends.append(InferenceBackend(
+                url=self.instant_url,
+                api_prefix=self.instant_api_prefix,
+                model=self.instant_model,
+                node_id="local-instant",
+                tier="instant",
+            ))
+        if self.thinking_url:
+            pools["thinking"].backends.append(InferenceBackend(
+                url=self.thinking_url,
+                api_prefix=self.thinking_api_prefix,
+                model=self.thinking_model,
+                node_id="local-thinking",
+                tier="thinking",
+            ))
+        return BackendSelector(pools, fallback_to_instant=self.fallback_to_instant)
+
+    def _select_backend(
+        self,
+        mode: str,
+        session_id: str | None = None,
+        voice_mode: bool = False,
+    ) -> InferenceBackend | None:
+        """Pick a backend for this request via the selector. Returns None if no
+        backend is available for the requested mode (caller falls back to mock
+        or surfaces an error)."""
+        try:
+            return self.selector.select(mode, session_id=session_id, voice_mode=voice_mode)
+        except NoHealthyBackendError:
+            return None
+
     # ==================== Shared Helpers ====================
 
     def _get_headers(self) -> dict:
@@ -492,6 +541,8 @@ class InferenceService:
         enable_thinking: bool | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | None = None,
+        session_id: str | None = None,
+        voice_mode: bool = False,
     ) -> dict[str, Any]:
         """
         Generate a complete response from the LLM.
@@ -500,8 +551,14 @@ class InferenceService:
         API. The model name, token limits, and temperature are resolved
         per-mode from config so both tiers are fully independent.
 
-        If thinking mode fails and fallback is enabled, automatically
-        retries with the instant tier.
+        Backend selection runs through ``BackendSelector`` — session
+        affinity binds chat sessions to backends for KV-cache reuse;
+        circuit breaker skips unhealthy backends; voice_mode picks the
+        lowest-latency option. If the selector can satisfy the request
+        cross-tier (thinking → instant when thinking is degraded), it
+        returns the fallback backend directly. If a primary call still
+        fails post-selection, we retry once on the instant tier the
+        same way the pre-pool code did.
 
         Args:
             messages: Conversation history with 'role' and 'content'
@@ -511,96 +568,114 @@ class InferenceService:
             enable_thinking: Force CoT on/off, overriding the mode default.
                 Pass ``False`` for RAG / tool calls (Qwen3.5 9B otherwise
                 burns thousands of thinking tokens on routine retrievals).
+            session_id: chat session — drives KV-cache affinity.
+            voice_mode: voice path prefers lowest-latency backend.
 
         Returns:
             Dict with 'content', 'tokens_used', 'mode_used', 'model',
             'fallback_used', 'latency_ms'
         """
         start_time = time.monotonic()
-        endpoint = self._get_endpoint(mode)
-        resolved_enable_thinking = (
-            self._get_enable_thinking(mode) if enable_thinking is None
-            else enable_thinking
-        )
+        backend = self._select_backend(mode, session_id, voice_mode)
 
-        if not endpoint:
-            # If thinking not configured, try fallback to instant
-            if mode in ("thinking", "thinking_harder") and self.fallback_to_instant and self.instant_url:
-                print("[inference] Thinking endpoint not configured -- falling back to instant")
-                result = await self._call_endpoint(
-                    endpoint=self.instant_url,
-                    model=self.instant_model,
-                    messages=messages,
-                    mode="instant",
-                    max_tokens=max_tokens or self._get_max_tokens("instant"),
-                    temperature=(temperature if temperature is not None
-                                 else self._get_temperature("instant")),
-                    top_p=self._get_top_p("instant"),
-                    top_k=self._get_top_k("instant"),
-                    timeout=self._get_timeout("instant"),
-                    api_prefix=self._get_api_prefix("instant"),
-                    enable_thinking=self._get_enable_thinking("instant"),
-                    presence_penalty=self._get_presence_penalty("instant"),
-                    repetition_penalty=self._get_repetition_penalty("instant"),
-                )
-                result["fallback_used"] = True
-                result["original_mode"] = "thinking"
-                result["latency_ms"] = int((time.monotonic() - start_time) * 1000)
-                return result
-
+        if backend is None:
+            # No configured backend (or pool entirely degraded). Selector
+            # already tried cross-tier fallback before returning None, so
+            # fall through to mock — this preserves the prior behavior
+            # for users with no inference URLs configured.
             result = await self._mock_response(messages, mode)
             result["latency_ms"] = int((time.monotonic() - start_time) * 1000)
             return result
 
-        # Call the endpoint for the requested mode
-        # When CoT is forced off, also drop the thinking_budget — sending
-        # one alongside enable_thinking=False produces an empty <think>
-        # block on some backends that the chat route then has to strip.
-        result = await self._call_endpoint(
-            endpoint=endpoint,
-            model=self._get_model(mode),
-            messages=messages,
-            mode=mode,
-            max_tokens=max_tokens or self._get_max_tokens(mode),
-            temperature=(temperature if temperature is not None
-                         else self._get_temperature(mode)),
-            top_p=self._get_top_p(mode),
-            top_k=self._get_top_k(mode),
-            timeout=self._get_timeout(mode),
-            api_prefix=self._get_api_prefix(mode),
-            enable_thinking=resolved_enable_thinking,
-            thinking_budget=(self._get_thinking_budget(mode)
-                             if resolved_enable_thinking else None),
-            presence_penalty=self._get_presence_penalty(mode),
-            repetition_penalty=self._get_repetition_penalty(mode),
-            tools=tools,
-            tool_choice=tool_choice,
+        # The selector may have performed a cross-tier fallback (e.g. asked
+        # for thinking, returned an instant backend because the thinking pool
+        # has no eligible entry). All per-mode params must resolve against
+        # the *backend's actual tier*, not the requested mode — otherwise
+        # we'd send thinking-tier max_tokens / enable_thinking / thinking_budget
+        # to an instant-only backend.
+        requested_tier = "thinking" if mode in ("thinking", "thinking_harder") else "instant"
+        effective_mode = backend.tier
+        pre_call_fallback = (effective_mode != requested_tier)
+        resolved_enable_thinking = (
+            self._get_enable_thinking(effective_mode) if enable_thinking is None
+            else enable_thinking
         )
 
-        # If thinking call failed and fallback is enabled, try instant
-        if (result.get("_error")
-                and mode in ("thinking", "thinking_harder")
-                and self.fallback_to_instant
-                and self.instant_url):
-            print("[inference] Thinking endpoint failed -- falling back to instant")
+        backend.in_flight += 1
+        try:
             result = await self._call_endpoint(
-                endpoint=self.instant_url,
-                model=self.instant_model,
+                endpoint=backend.url,
+                model=backend.model,
                 messages=messages,
-                mode="instant",
-                max_tokens=max_tokens or self._get_max_tokens("instant"),
+                mode=effective_mode,
+                max_tokens=max_tokens or self._get_max_tokens(effective_mode),
                 temperature=(temperature if temperature is not None
-                             else self._get_temperature("instant")),
-                top_p=self._get_top_p("instant"),
-                top_k=self._get_top_k("instant"),
-                timeout=self._get_timeout("instant"),
-                api_prefix=self._get_api_prefix("instant"),
-                enable_thinking=self._get_enable_thinking("instant"),
-                presence_penalty=self._get_presence_penalty("instant"),
-                repetition_penalty=self._get_repetition_penalty("instant"),
+                             else self._get_temperature(effective_mode)),
+                top_p=self._get_top_p(effective_mode),
+                top_k=self._get_top_k(effective_mode),
+                timeout=self._get_timeout(effective_mode),
+                api_prefix=backend.api_prefix,
+                enable_thinking=resolved_enable_thinking,
+                thinking_budget=(self._get_thinking_budget(effective_mode)
+                                 if resolved_enable_thinking else None),
+                presence_penalty=self._get_presence_penalty(effective_mode),
+                repetition_penalty=self._get_repetition_penalty(effective_mode),
+                tools=tools,
+                tool_choice=tool_choice,
             )
-            result["fallback_used"] = True
-            result["original_mode"] = "thinking"
+
+            if pre_call_fallback and not result.get("_error"):
+                result["fallback_used"] = True
+                result["original_mode"] = mode
+
+            if result.get("_error"):
+                self.selector.record_failure(backend.node_id)
+                # Post-call fallback: requested thinking but the call failed.
+                # Try once more via the selector — if the selector returns an
+                # instant backend (either because thinking is now OPEN or
+                # because the operator wired the fallback), use it.
+                if (mode in ("thinking", "thinking_harder")
+                        and self.fallback_to_instant
+                        and backend.tier == "thinking"):
+                    fb_backend = self._select_backend("instant", session_id, voice_mode)
+                    if fb_backend is not None and fb_backend.node_id != backend.node_id:
+                        print("[inference] Thinking endpoint failed -- falling back to instant")
+                        fb_backend.in_flight += 1
+                        try:
+                            fb_result = await self._call_endpoint(
+                                endpoint=fb_backend.url,
+                                model=fb_backend.model,
+                                messages=messages,
+                                mode="instant",
+                                max_tokens=max_tokens or self._get_max_tokens("instant"),
+                                temperature=(temperature if temperature is not None
+                                             else self._get_temperature("instant")),
+                                top_p=self._get_top_p("instant"),
+                                top_k=self._get_top_k("instant"),
+                                timeout=self._get_timeout("instant"),
+                                api_prefix=fb_backend.api_prefix,
+                                enable_thinking=self._get_enable_thinking("instant"),
+                                presence_penalty=self._get_presence_penalty("instant"),
+                                repetition_penalty=self._get_repetition_penalty("instant"),
+                            )
+                            if fb_result.get("_error"):
+                                self.selector.record_failure(fb_backend.node_id)
+                            else:
+                                latency_ms = int((time.monotonic() - start_time) * 1000)
+                                self.selector.record_success(fb_backend.node_id, latency_ms)
+                                fb_result["fallback_used"] = True
+                                fb_result["original_mode"] = "thinking"
+                                fb_result["latency_ms"] = latency_ms
+                                fb_result.pop("_error", None)
+                                return fb_result
+                            result = fb_result
+                        finally:
+                            fb_backend.in_flight -= 1
+            else:
+                latency_ms = int((time.monotonic() - start_time) * 1000)
+                self.selector.record_success(backend.node_id, latency_ms)
+        finally:
+            backend.in_flight -= 1
 
         result["latency_ms"] = int((time.monotonic() - start_time) * 1000)
         result.pop("_error", None)
@@ -740,70 +815,65 @@ class InferenceService:
         max_tokens: int | None = None,
         temperature: float | None = None,
         enable_thinking: bool | None = None,
+        session_id: str | None = None,
+        voice_mode: bool = False,
     ) -> AsyncIterator[str]:
         """
         Generate a streaming response from the LLM (SSE format).
 
-        Model-agnostic -- works with any open-source model behind an
-        OpenAI-compatible streaming endpoint. Uses per-mode settings
-        for model name, token limits, and timeout.
-
-        If the requested mode's endpoint is unavailable and fallback
-        is enabled, streams from the fallback tier instead.
+        Routes through ``BackendSelector`` — see :meth:`generate_response`
+        for the routing/affinity semantics. If the primary stream fails
+        and fallback is enabled, re-streams from the instant tier via
+        the selector so health stays tracked.
 
         Yields:
             Server-sent event strings in OpenAI format
         """
         messages = _strip_think_in_messages(messages)
-        endpoint = self._get_endpoint(mode)
-        model = self._get_model(mode)
-        resolved_max_tokens = max_tokens or self._get_max_tokens(mode)
+        start_time = time.monotonic()
+        backend = self._select_backend(mode, session_id, voice_mode)
+
+        if backend is None:
+            async for chunk in self._mock_stream(messages, mode):
+                yield chunk
+            return
+
+        endpoint = backend.url
+        model = backend.model
+        prefix = backend.api_prefix
+        # Resolve per-tier params against the *backend's actual tier*, not the
+        # requested mode. If the selector cross-tier-fell-back (e.g. thinking
+        # pool empty → returned instant), thinking-tier max_tokens / temperature
+        # / enable_thinking / thinking_budget must NOT leak through to the
+        # instant backend.
+        requested_tier = "thinking" if mode in ("thinking", "thinking_harder") else "instant"
+        effective_mode = backend.tier
+        fallback_used = (effective_mode != requested_tier)
+        resolved_max_tokens = max_tokens or self._get_max_tokens(effective_mode)
         resolved_temperature = (temperature if temperature is not None
-                                else self._get_temperature(mode))
-        resolved_top_p = self._get_top_p(mode)
-        resolved_top_k = self._get_top_k(mode)
-        resolved_timeout = self._get_timeout(mode)
-        fallback_used = False
+                                else self._get_temperature(effective_mode))
+        resolved_top_p = self._get_top_p(effective_mode)
+        resolved_top_k = self._get_top_k(effective_mode)
+        resolved_timeout = self._get_timeout(effective_mode)
 
-        # If endpoint not configured, try fallback or mock
-        if not endpoint:
-            if mode in ("thinking", "thinking_harder") and self.fallback_to_instant and self.instant_url:
-                endpoint = self.instant_url
-                model = self.instant_model
-                resolved_max_tokens = max_tokens or self._get_max_tokens("instant")
-                resolved_temperature = (temperature if temperature is not None
-                                        else self._get_temperature("instant"))
-                resolved_top_p = self._get_top_p("instant")
-                resolved_top_k = self._get_top_k("instant")
-                resolved_timeout = self._get_timeout("instant")
-                mode = "instant"
-                fallback_used = True
-                print("[inference] Thinking stream not configured -- falling back to instant")
-            else:
-                async for chunk in self._mock_stream(messages, mode):
-                    yield chunk
-                return
-
-        prefix = self._get_api_prefix(mode)
         resolved_enable_thinking = (
-            self._get_enable_thinking(mode) if enable_thinking is None
+            self._get_enable_thinking(effective_mode) if enable_thinking is None
             else enable_thinking
         )
         resolved_thinking_budget = (
-            self._get_thinking_budget(mode) if resolved_enable_thinking else None
+            self._get_thinking_budget(effective_mode) if resolved_enable_thinking else None
         )
-        resolved_presence_penalty = self._get_presence_penalty(mode)
-        resolved_repetition_penalty = self._get_repetition_penalty(mode)
+        resolved_presence_penalty = self._get_presence_penalty(effective_mode)
+        resolved_repetition_penalty = self._get_repetition_penalty(effective_mode)
 
+        backend.in_flight += 1
         try:
-            # Emit mode metadata as first event. ``enable_thinking`` here
-            # reflects what we actually sent to the backend — distinct from
-            # the user's UI mode, which can be "thinking" while CoT is
-            # disabled (e.g. RAG auto-disable). The frontend uses this to
-            # decide whether mid-stream content might be inside a <think>
-            # block whose opener was stripped by the chat template.
+            # Meta reflects what's *actually* serving the request — if the
+            # selector cross-tier-fell-back, surface that to the client so the
+            # frontend doesn't think a thinking model is replying when really
+            # the instant model is.
             meta = {
-                "mode": mode,
+                "mode": effective_mode,
                 "model": model,
                 "fallback_used": fallback_used,
                 "enable_thinking": resolved_enable_thinking,
@@ -830,10 +900,7 @@ class InferenceService:
                 stream_payload["thinking_budget"] = resolved_thinking_budget
                 stream_payload["thinking_start_token"] = "<think>"
                 stream_payload["thinking_end_token"] = "</think>"
-            # Backend-quirk overrides from .env — last write wins so
-            # operators can flip backend-specific paths (e.g. mlx_vlm's
-            # field-presence-driven streaming buffer) without code.
-            stream_payload.update(self._get_extra_payload(mode))
+            stream_payload.update(self._get_extra_payload(effective_mode))
 
             async with httpx.AsyncClient(timeout=resolved_timeout) as client:
                 async with client.stream(
@@ -844,84 +911,94 @@ class InferenceService:
                 ) as response:
                     response.raise_for_status()
                     line_iter: AsyncIterator[str] = response.aiter_lines()
-                    # Defensive output strip: when CoT is off but the
-                    # backend leaks <think>...</think> anyway (mlx_vlm
-                    # does not honor enable_thinking per-request against
-                    # Qwen 3.5's chat template), drop the leading think
-                    # block before chunks reach the client.
                     if resolved_enable_thinking is False:
                         line_iter = _strip_think_async(line_iter)
                     async for line in line_iter:
                         if line.strip():
                             yield f"{line}\n\n"
+            latency_ms = int((time.monotonic() - start_time) * 1000)
+            self.selector.record_success(backend.node_id, latency_ms)
         except Exception as e:
+            self.selector.record_failure(backend.node_id)
             error_context = f"{mode}, model={model}"
             print(f"[inference] Stream error ({error_context}): {e}")
             primary_endpoint, primary_reason, primary_detail = (
                 endpoint, *_classify_stream_error(e),
             )
 
-            # If thinking failed, try fallback stream
-            if mode in ("thinking", "thinking_harder") and self.fallback_to_instant and self.instant_url:
-                print("[inference] Falling back to instant stream")
-                fb_prefix = self._get_api_prefix("instant")
-                fallback_meta = {
-                    "mode": "instant",
-                    "model": self.instant_model,
-                    "fallback_used": True,
-                    "enable_thinking": self._get_enable_thinking("instant"),
-                }
-                yield f"data: {json.dumps({'metadata': fallback_meta})}\n\n"
-
-                try:
-                    fb_payload: dict[str, Any] = {
-                        "model": self.instant_model,
-                        "messages": messages,
-                        "max_tokens": (max_tokens
-                                       or self._get_max_tokens("instant")),
-                        "temperature": (
-                            temperature if temperature is not None
-                            else self._get_temperature("instant")
-                        ),
-                        "top_p": self._get_top_p("instant"),
-                        "top_k": self._get_top_k("instant"),
-                        "stream": True,
+            # Post-call fallback: ask the selector for an instant backend.
+            # The selector may now return one if thinking is OPEN or if the
+            # operator wired cross-tier fallback.
+            if (mode in ("thinking", "thinking_harder")
+                    and self.fallback_to_instant
+                    and backend.tier == "thinking"):
+                fb_backend = self._select_backend("instant", session_id, voice_mode)
+                if fb_backend is not None and fb_backend.node_id != backend.node_id:
+                    print("[inference] Falling back to instant stream")
+                    fb_prefix = fb_backend.api_prefix
+                    fallback_meta = {
+                        "mode": "instant",
+                        "model": fb_backend.model,
+                        "fallback_used": True,
                         "enable_thinking": self._get_enable_thinking("instant"),
                     }
-                    _apply_sampling_params(
-                        fb_payload,
-                        presence_penalty=self._get_presence_penalty("instant"),
-                        repetition_penalty=self._get_repetition_penalty("instant"),
-                        flavor=self._get_backend_flavor(),
-                    )
-                    # Fallback uses instant-tier settings, including extras.
-                    fb_payload.update(self._get_extra_payload("instant"))
-                    async with httpx.AsyncClient(
-                        timeout=self._get_timeout("instant")
-                    ) as client:
-                        async with client.stream(
-                            "POST",
-                            f"{self.instant_url}{fb_prefix}/chat/completions",
-                            json=fb_payload,
-                            headers=self._get_headers(),
-                        ) as response:
-                            response.raise_for_status()
-                            async for line in response.aiter_lines():
-                                if line.strip():
-                                    yield f"{line}\n\n"
-                    return
-                except Exception as fallback_err:
-                    print(f"[inference] Fallback stream also failed: {fallback_err}")
-                    # Report the *fallback* failure — it's what the user ultimately saw.
-                    primary_endpoint = self.instant_url
-                    primary_reason, primary_detail = _classify_stream_error(fallback_err)
+                    yield f"data: {json.dumps({'metadata': fallback_meta})}\n\n"
 
-            # Surface a real error to the user — don't pretend the endpoint is unconfigured.
+                    fb_backend.in_flight += 1
+                    try:
+                        fb_payload: dict[str, Any] = {
+                            "model": fb_backend.model,
+                            "messages": messages,
+                            "max_tokens": (max_tokens
+                                           or self._get_max_tokens("instant")),
+                            "temperature": (
+                                temperature if temperature is not None
+                                else self._get_temperature("instant")
+                            ),
+                            "top_p": self._get_top_p("instant"),
+                            "top_k": self._get_top_k("instant"),
+                            "stream": True,
+                            "enable_thinking": self._get_enable_thinking("instant"),
+                        }
+                        _apply_sampling_params(
+                            fb_payload,
+                            presence_penalty=self._get_presence_penalty("instant"),
+                            repetition_penalty=self._get_repetition_penalty("instant"),
+                            flavor=self._get_backend_flavor(),
+                        )
+                        fb_payload.update(self._get_extra_payload("instant"))
+                        async with httpx.AsyncClient(
+                            timeout=self._get_timeout("instant")
+                        ) as client:
+                            async with client.stream(
+                                "POST",
+                                f"{fb_backend.url}{fb_prefix}/chat/completions",
+                                json=fb_payload,
+                                headers=self._get_headers(),
+                            ) as response:
+                                response.raise_for_status()
+                                async for line in response.aiter_lines():
+                                    if line.strip():
+                                        yield f"{line}\n\n"
+                        latency_ms = int((time.monotonic() - start_time) * 1000)
+                        self.selector.record_success(fb_backend.node_id, latency_ms)
+                        return
+                    except Exception as fallback_err:
+                        self.selector.record_failure(fb_backend.node_id)
+                        print(f"[inference] Fallback stream also failed: {fallback_err}")
+                        primary_endpoint = fb_backend.url
+                        primary_reason, primary_detail = _classify_stream_error(fallback_err)
+                    finally:
+                        fb_backend.in_flight -= 1
+
             async for chunk in self._error_stream(
                 mode=mode, endpoint=primary_endpoint,
                 reason=primary_reason, detail=primary_detail,
             ):
                 yield chunk
+        finally:
+            backend.in_flight -= 1
+
 
     # ==================== Error (configured-but-failed) ====================
 
