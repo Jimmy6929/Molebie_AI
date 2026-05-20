@@ -25,6 +25,36 @@ class ModelProfile(str, Enum):
     CUSTOM = "custom"
 
 
+class SatelliteRole(str, Enum):
+    STORAGE = "storage"
+    COMPUTE = "compute"
+    BOTH = "both"
+
+
+class SatelliteStatus(str, Enum):
+    ACTIVE = "active"
+    DEGRADED = "degraded"
+    OFFLINE = "offline"
+
+
+class SatelliteNode(BaseModel):
+    """One satellite machine attached to the primary over Tailscale."""
+
+    model_config = {"protected_namespaces": ()}
+
+    host: str = Field(description="Tailscale hostname or IP of the satellite")
+    role: SatelliteRole
+    capabilities: dict = Field(
+        default_factory=dict,
+        description='Free-form per-role capabilities, e.g. {"models_loaded": [...], "disk_gb": 500}',
+    )
+    status: SatelliteStatus = SatelliteStatus.ACTIVE
+    joined_at: str = Field(description="ISO 8601 UTC timestamp of when the satellite joined")
+    label: Optional[str] = Field(
+        default=None, description="Optional human-friendly name for displays"
+    )
+
+
 VALID_FEATURES = ("voice", "search", "rag")
 
 FEATURE_DESCRIPTIONS = {
@@ -39,7 +69,7 @@ class MolebieConfig(BaseModel):
 
     model_config = {"protected_namespaces": ()}
 
-    version: int = Field(default=3, description="Schema version for future migrations")
+    version: int = Field(default=4, description="Schema version for future migrations")
 
     # Setup type
     setup_type: SetupType = SetupType.SINGLE
@@ -82,6 +112,11 @@ class MolebieConfig(BaseModel):
     last_install_at: Optional[str] = Field(
         default=None, description="ISO timestamp of last install"
     )
+
+    # Fleet (Plan B): satellites attached to this primary over Tailscale.
+    # Empty on every fresh install; populated by `molebie-ai join` on satellites
+    # registering with this primary. Single-machine installs keep this empty.
+    satellites: list[SatelliteNode] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _at_least_one_local_service(self) -> "MolebieConfig":

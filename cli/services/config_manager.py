@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cli.models.config import MolebieConfig
@@ -64,16 +65,49 @@ def _migrate_v2_to_v3(data: dict) -> dict:
     return data
 
 
+def _migrate_v3_to_v4(data: dict) -> dict:
+    """Add the fleet satellites list. Synthesize one COMPUTE satellite for
+    v3 distributed setups that pointed at a remote LLM machine; other v3 shapes
+    get an empty satellites list and re-install on the intended primary."""
+    if data.get("version", 3) >= 4:
+        return data
+
+    data["version"] = 4
+    data.setdefault("satellites", [])
+
+    if (
+        data.get("setup_type") == "distributed"
+        and data.get("run_inference") is False
+        and data.get("run_gateway") is True
+        and data.get("run_webapp") is True
+    ):
+        host = (data.get("inference_host") or "").strip()
+        if host and host != "localhost":
+            data["satellites"] = [
+                {
+                    "host": host,
+                    "role": "compute",
+                    "capabilities": {},
+                    "status": "active",
+                    "joined_at": datetime.now(timezone.utc).isoformat(),
+                    "label": "migrated-from-v3",
+                }
+            ]
+
+    return data
+
+
 def load_config() -> MolebieConfig:
     """Load config from disk, returning defaults if file doesn't exist."""
     path = get_config_path()
     if not path.exists():
         return MolebieConfig()
     data = json.loads(path.read_text())
+    original_version = data.get("version", 2)
     data = _migrate_v2_to_v3(data)
+    data = _migrate_v3_to_v4(data)
     config = MolebieConfig.model_validate(data)
-    # Persist migration so it doesn't re-run
-    if data.get("version") == 3:
+    if data.get("version") != original_version:
         save_config(config)
     return config
 
