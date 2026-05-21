@@ -366,6 +366,38 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_type
 """
 
 
+_FLEET_SATELLITES_SCHEMA_SQL = """
+-- ============================================
+-- FLEET SATELLITES — registered satellite machines (Plan B)
+-- ============================================
+-- Authoritative record of every satellite that has joined this primary's
+-- fleet over Tailscale. Written by ``POST /fleet/satellites/register``;
+-- read by ``GET /fleet/inventory`` and the future ``molebie-ai extend
+-- list`` CLI command.
+--
+-- The gateway is the source of truth — the CLI-side
+-- ``MolebieConfig.satellites`` (cli/models/config.py) is a cache populated
+-- by reading this table over loopback. Splitting the two avoids a
+-- cross-process write-write race on the JSON config file.
+CREATE TABLE IF NOT EXISTS fleet_satellites (
+    id TEXT PRIMARY KEY,           -- UUID assigned on first registration
+    host TEXT NOT NULL UNIQUE,     -- Tailscale hostname or IP, unique per fleet
+    role TEXT NOT NULL,            -- 'storage' | 'compute' | 'both'
+    status TEXT NOT NULL,          -- 'active' | 'degraded' | 'offline'
+    label TEXT,                    -- optional human-friendly name
+    capabilities_json TEXT,        -- JSON blob, e.g. {"disk_gb": 500, "models_loaded": [...]}
+    tailscale_user TEXT NOT NULL,  -- Tailscale-User-Login that registered it (audit-side; not surfaced via inventory)
+    joined_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fleet_satellites_role
+    ON fleet_satellites(role);
+CREATE INDEX IF NOT EXISTS idx_fleet_satellites_status
+    ON fleet_satellites(status);
+"""
+
+
 def _fts5_sql() -> str:
     """Return SQL for FTS5 virtual table creation."""
     return """
@@ -548,6 +580,14 @@ def init_database_sync(
                 conn.executescript(_AUDIT_EVENTS_SCHEMA_SQL)
                 print("[schema] Migrated: added audit_events table")
 
+            # Migrate: fleet_satellites (Plan B fleet inventory). Idempotent.
+            fleet_present = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='fleet_satellites'"
+            ).fetchone()
+            if not fleet_present:
+                conn.executescript(_FLEET_SATELLITES_SCHEMA_SQL)
+                print("[schema] Migrated: added fleet_satellites table")
+
             conn.commit()
             print(f"[schema] Database already initialized at {db_path}")
             conn.close()
@@ -564,6 +604,9 @@ def init_database_sync(
 
         # Create audit_events table (fleet operations log)
         conn.executescript(_AUDIT_EVENTS_SCHEMA_SQL)
+
+        # Create fleet_satellites table (Plan B fleet inventory)
+        conn.executescript(_FLEET_SATELLITES_SCHEMA_SQL)
 
         # Create FTS5 virtual table
         conn.executescript(_fts5_sql())
