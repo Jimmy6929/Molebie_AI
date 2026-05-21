@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import socket
 import subprocess
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
@@ -48,6 +50,64 @@ def get_tailscale_ip() -> str | None:
         if candidate:
             return candidate
     return None
+
+
+@dataclass(frozen=True)
+class TailscaleWhoamiInfo:
+    """Identity of the locally-authenticated Tailscale user.
+
+    Used by ``molebie-ai join`` to attach the operator's identity to the
+    satellite-registration request the satellite sends to the primary.
+    """
+
+    user_login: str          # e.g., "jimmy@github" — the LoginName field
+    display_name: str | None  # optional human-friendly name
+
+
+@cache
+def get_tailscale_whoami() -> TailscaleWhoamiInfo | None:
+    """Return the local Tailscale-authenticated user, or None.
+
+    Returns None when Tailscale isn't installed, isn't running, isn't
+    authenticated, times out, or produces output we can't parse — callers
+    decide how to surface the failure (the join command exits with a
+    friendly error). Never raises.
+
+    Parses ``tailscale whoami --json`` output, which is a top-level JSON
+    object with a ``UserProfile`` key containing ``LoginName`` and
+    ``DisplayName``.
+    """
+    cli = _find_tailscale_cli()
+    if not cli:
+        return None
+    try:
+        result = subprocess.run(
+            [cli, "whoami", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    user_profile = data.get("UserProfile")
+    if not isinstance(user_profile, dict):
+        return None
+    login = user_profile.get("LoginName")
+    if not isinstance(login, str) or not login:
+        return None
+    display = user_profile.get("DisplayName")
+    return TailscaleWhoamiInfo(
+        user_login=login,
+        display_name=display if isinstance(display, str) and display else None,
+    )
 
 
 @cache
