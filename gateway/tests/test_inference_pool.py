@@ -49,11 +49,16 @@ class TestBackendHealth:
         h = BackendHealth()
         h.record_failure(now=0.0)
         h.record_failure(now=0.0)
+        assert h.consecutive_failures == 2
         h.record_success(now=0.0)
+        assert h.consecutive_failures == 0
+        # The consecutive counter resets cleanly; the rolling error window is
+        # intentionally NOT cleared (rate-based trips covered in a separate
+        # test). Two more failures alone don't reach the consecutive
+        # threshold of 3.
         h.record_failure(now=0.0)
         h.record_failure(now=0.0)
-        # Two more failures alone shouldn't trip — counter reset.
-        assert h.state == CircuitState.CLOSED
+        assert h.consecutive_failures == 2
 
     def test_open_transitions_to_half_open_after_cooldown(self):
         h = BackendHealth()
@@ -268,3 +273,117 @@ class TestBackendSelector:
         sel = _make_selector(t)
         chosen = sel.select("thinking_harder")
         assert chosen.node_id == "local-thinking"
+
+
+# ──────────────── Probe-driven inputs on BackendHealth ────────────────
+
+
+class TestProbeDrivenBackendHealth:
+    """The probe feeds BackendHealth via record_probe_success / failure and
+    can mark sticky fingerprint drift. These tests cover the shared 60s
+    window, the rate-based trip, and drift semantics."""
+
+    def test_three_consecutive_probe_failures_trip_open(self):
+        h = BackendHealth()
+        for _ in range(3):
+            h.record_probe_failure(now=0.0)
+        assert h.state == CircuitState.OPEN
+
+    def test_high_error_rate_trips_via_rate_check(self):
+        # Mixed sequence with > 25% failure rate and ≥ 4 samples should trip
+        # even though consecutive_failures never reaches 3.
+        h = BackendHealth()
+        h.record_probe_failure(now=0.0)
+        h.record_probe_failure(now=0.0)
+        h.record_probe_success(now=0.0)
+        # cf reset to 0; window has 2F, 1S so far — still under 4 samples.
+        h.record_probe_failure(now=0.0)
+        # Now: window=[F,F,S,F], cf=1, 3 failures / 4 total = 0.75 > 0.25.
+        assert h.state == CircuitState.OPEN
+
+    def test_error_rate_zero_when_under_min_samples(self):
+        h = BackendHealth()
+        h.record_probe_failure(now=0.0)
+        h.record_probe_failure(now=0.0)
+        # Two failures, 100% rate, but only 2 samples — the min-samples
+        # guard returns 0.0 to keep the breaker from over-reacting on noise.
+        assert h.error_rate_60s(now=0.0) == 0.0
+
+    def test_error_window_evicts_after_60s(self):
+        h = BackendHealth()
+        # Plant 4 failures at t=0.
+        for _ in range(4):
+            h.record_probe_failure(now=0.0)
+        # Within window, rate is 100%.
+        assert h.error_rate_60s(now=30.0) == pytest.approx(1.0)
+        # After 60s, all evicted — rate falls back to 0.0 (no samples).
+        assert h.error_rate_60s(now=61.0) == 0.0
+
+    def test_probe_and_request_failures_share_the_window(self):
+        # Symmetry check: probe failures and request-path failures both
+        # contribute to error_rate_60s.
+        h = BackendHealth()
+        h.record_probe_failure(now=0.0)
+        h.record_failure(now=0.0)
+        h.record_success(now=0.0)
+        h.record_probe_failure(now=0.0)
+        # window=[probeF, reqF, reqS, probeF] = 3F / 4 = 0.75
+        assert h.error_rate_60s(now=0.0) == pytest.approx(0.75)
+
+    def test_probe_success_in_half_open_closes_circuit(self):
+        h = BackendHealth()
+        for _ in range(3):
+            h.record_probe_failure(now=0.0)
+        # Advance into HALF_OPEN.
+        h.is_eligible(now=30.0)
+        assert h.state == CircuitState.HALF_OPEN
+        h.record_probe_success(now=31.0)
+        assert h.state == CircuitState.CLOSED
+
+
+class TestFingerprintDrift:
+    def test_mark_drift_trips_open_immediately(self):
+        h = BackendHealth()
+        h.mark_fingerprint_drift(now=0.0)
+        assert h.state == CircuitState.OPEN
+        assert h.drift_open is True
+        assert not h.is_eligible(now=0.0)
+
+    def test_drift_open_blocks_half_open_auto_transition(self):
+        h = BackendHealth()
+        h.mark_fingerprint_drift(now=0.0)
+        # Even after a long cooldown, is_eligible must NOT flip to HALF_OPEN
+        # while drift_open is set. clear_drift is the only escape.
+        assert not h.is_eligible(now=10_000.0)
+        assert h.state == CircuitState.OPEN
+        assert h.drift_open is True
+
+    def test_clear_drift_releases_sticky_open(self):
+        h = BackendHealth()
+        h.mark_fingerprint_drift(now=0.0)
+        h.clear_drift(now=1.0)
+        assert h.drift_open is False
+        assert h.state == CircuitState.CLOSED
+        assert h.is_eligible(now=1.0)
+
+    def test_probe_success_during_drift_does_not_clear_it(self):
+        # Drift must only clear via clear_drift (= probe observed matching
+        # fingerprint again). A bare probe-success should not silently
+        # release a drift OPEN.
+        h = BackendHealth()
+        h.mark_fingerprint_drift(now=0.0)
+        h.record_probe_success(now=1.0)
+        assert h.drift_open is True
+        assert h.state == CircuitState.OPEN
+
+    def test_mark_drift_overrides_existing_state(self):
+        h = BackendHealth()
+        # Get to HALF_OPEN naturally.
+        for _ in range(3):
+            h.record_failure(now=0.0)
+        h.is_eligible(now=30.0)
+        assert h.state == CircuitState.HALF_OPEN
+        # Now drift hits — should land sticky OPEN regardless of prior state.
+        h.mark_fingerprint_drift(now=31.0)
+        assert h.state == CircuitState.OPEN
+        assert h.drift_open is True

@@ -56,13 +56,15 @@ class CircuitState(str, Enum):
 # Tunables — picked to match Hystrix / Envoy defaults that have proven sane
 # in production routing layers. Adjust at the selector boundary, not here.
 _FAILURE_THRESHOLD = 3
-# Number of failures within ``_ERROR_WINDOW_SEC`` that trips the circuit even
-# if they weren't all consecutive (a flapping backend with intermittent
-# successes still gets opened). Real per-request error-rate computation
-# requires per-attempt sample storage and arrives with the BackendProbe
-# extension branch; until then this density trigger covers the gap.
-_WINDOW_FAILURE_THRESHOLD = 4
+# Rolling error-rate trip: if failures/total within ``_ERROR_WINDOW_SEC``
+# exceeds ``_ERROR_RATE_TRIP`` AND we have at least ``_ERROR_RATE_MIN_SAMPLES``
+# samples, trip the circuit. Min-samples guard prevents two failures with no
+# successes (rate = 1.0) from tripping on noise. Both probe outcomes and
+# request-path outcomes feed the same window.
 _ERROR_WINDOW_SEC = 60.0
+_ERROR_RATE_TRIP = 0.25
+_ERROR_RATE_MIN_SAMPLES = 4
+_ERROR_WINDOW_MAXLEN = 128  # bound memory; >> 60s at typical probe + request rates
 _INITIAL_COOLDOWN_SEC = 30.0
 _MAX_COOLDOWN_SEC = 5 * 60.0  # cap exponential backoff at 5 minutes
 _RETRY_BUDGET_MAX = 5
@@ -87,28 +89,27 @@ class BackendHealth:
     # and tests (explicit `now`). Default-factory time.monotonic() leaks the
     # construction clock into elapsed math and breaks deterministic tests.
     last_retry_refill_at: float = 0.0
-    # Rolling failure timestamps within _ERROR_WINDOW_SEC. Used to compute
-    # error_rate. Append on every failure; we don't track successes here
-    # because the rate is "failures per attempt" and attempt count is read
-    # via in_flight/throughput from elsewhere — for the breaker we use a
-    # simpler "failure density" trigger: if N failures occurred in window,
-    # transition. Keeps memory bounded and avoids needing per-call sample
-    # storage.
-    _failure_window: deque = field(default_factory=lambda: deque(maxlen=64))
+    # Drift-induced OPEN is sticky: the probe observed a model_fingerprint
+    # mismatch (operator swapped the model behind the backend's back) and the
+    # backend can't auto-recover until a subsequent probe sees the fingerprint
+    # match again. ``is_eligible`` skips the OPEN → HALF_OPEN auto-transition
+    # while this flag is set.
+    drift_open: bool = False
+    # Rolling (timestamp, ok) samples within _ERROR_WINDOW_SEC. Fed by both
+    # the probe (every 5s) and the request path (on each inference call).
+    # Used by error_rate_60s for rate-based trip decisions. Maxlen bounds
+    # memory on heavily-loaded backends; the time-based eviction in
+    # _evict_old keeps the rate honest.
+    _error_window: deque = field(
+        default_factory=lambda: deque(maxlen=_ERROR_WINDOW_MAXLEN)
+    )
 
     def record_success(self, now: float | None = None) -> None:
         """A real inference call succeeded against this backend."""
         now = now if now is not None else time.monotonic()
         self._refill_retry_budget(now)
-        # Any success resets the breaker. Clear the failure window too so a
-        # post-success burst can't trip the rate-based threshold via stale
-        # failures from before the success.
-        self.consecutive_failures = 0
-        self._failure_window.clear()
-        if self.state in (CircuitState.OPEN, CircuitState.HALF_OPEN):
-            self.state = CircuitState.CLOSED
-            self.open_until = None
-            self.consecutive_trips = 0
+        self._error_window.append((now, True))
+        self._close_circuit(now)
 
     def record_failure(self, now: float | None = None) -> None:
         """A real inference call against this backend failed (timeout, 5xx,
@@ -116,35 +117,83 @@ class BackendHealth:
         one slot from the retry budget."""
         now = now if now is not None else time.monotonic()
         self._refill_retry_budget(now)
+        self._error_window.append((now, False))
         self.consecutive_failures += 1
         self.last_failure_at = now
-        self._failure_window.append(now)
         # Retry budget tracks *failures* within the window, not successful
         # selections. A misbehaving backend bleeds budget; a healthy one
         # keeps it topped up.
         self.retry_budget_remaining = max(0.0, self.retry_budget_remaining - 1.0)
+        self._maybe_trip_open(now)
 
-        if self.state == CircuitState.HALF_OPEN:
-            # Trial probe failed → re-open with extended cooldown.
-            self._trip_open(now, extended=True)
-            return
+    def record_probe_success(self, now: float | None = None) -> None:
+        """Health probe poll succeeded against this backend.
 
-        if self.state == CircuitState.CLOSED:
-            window_failures = self._recent_failure_count(now)
-            if (
-                self.consecutive_failures >= _FAILURE_THRESHOLD
-                or window_failures >= _WINDOW_FAILURE_THRESHOLD
-            ):
-                self._trip_open(now, extended=False)
+        Same state-transition semantics as `record_success` except the retry
+        budget isn't consumed/refilled here — that's the request path's
+        concern. A probe success in HALF_OPEN closes the circuit (recovery)."""
+        now = now if now is not None else time.monotonic()
+        self._error_window.append((now, True))
+        self._close_circuit(now)
+
+    def record_probe_failure(self, now: float | None = None) -> None:
+        """Health probe poll failed (timeout, transport error, non-2xx)."""
+        now = now if now is not None else time.monotonic()
+        self._error_window.append((now, False))
+        self.consecutive_failures += 1
+        self.last_failure_at = now
+        self._maybe_trip_open(now)
+
+    def mark_fingerprint_drift(self, now: float | None = None) -> None:
+        """The probe saw a model_fingerprint mismatch — the backend is serving
+        a different model than the pool expects, which would silently corrupt
+        results. Trip OPEN immediately and stickily; no cooldown progression
+        will free the backend until ``clear_drift`` is called."""
+        now = now if now is not None else time.monotonic()
+        self.state = CircuitState.OPEN
+        self.drift_open = True
+        # Sentinel: any time check `now >= open_until` returns False, so
+        # is_eligible never auto-transitions. clear_drift is the only escape.
+        self.open_until = None
+        self.last_failure_at = now
+
+    def clear_drift(self, now: float | None = None) -> None:
+        """Probe observed the fingerprint matching expectations again —
+        release the sticky OPEN and reset the breaker."""
+        now = now if now is not None else time.monotonic()
+        self.drift_open = False
+        self.state = CircuitState.CLOSED
+        self.consecutive_failures = 0
+        self.consecutive_trips = 0
+        self.open_until = None
+
+    def error_rate_60s(self, now: float | None = None) -> float:
+        """Failures / total samples within the last 60 seconds.
+
+        Returns 0.0 when the window holds fewer than ``_ERROR_RATE_MIN_SAMPLES``
+        — keeps the rate from spiking to 1.0 on a single failed probe and
+        prevents the breaker from over-reacting on noise.
+        """
+        now = now if now is not None else time.monotonic()
+        self._evict_old(now)
+        total = len(self._error_window)
+        if total < _ERROR_RATE_MIN_SAMPLES:
+            return 0.0
+        failures = sum(1 for _, ok in self._error_window if not ok)
+        return failures / total
 
     def is_eligible(self, now: float | None = None) -> bool:
         """Can this backend receive a real request right now?
 
-        Side effect: may transition OPEN → HALF_OPEN if the cooldown elapsed.
-        Side effect: may transition HALF_OPEN → CLOSED only via record_success.
+        Side effect: may transition OPEN → HALF_OPEN if the cooldown elapsed,
+        but only when the OPEN isn't drift-induced (drift_open stays sticky).
+        Side effect: HALF_OPEN → CLOSED happens only via record_success /
+        record_probe_success.
         """
         now = now if now is not None else time.monotonic()
         if self.state == CircuitState.OPEN:
+            if self.drift_open:
+                return False
             if self.open_until is not None and now >= self.open_until:
                 self.state = CircuitState.HALF_OPEN
                 self.open_until = None
@@ -157,12 +206,34 @@ class BackendHealth:
 
     # ------------------------------ internals ------------------------------
 
-    def _recent_failure_count(self, now: float) -> int:
+    def _evict_old(self, now: float) -> None:
         cutoff = now - _ERROR_WINDOW_SEC
-        # deque is in insertion order; drop stale from the left.
-        while self._failure_window and self._failure_window[0] < cutoff:
-            self._failure_window.popleft()
-        return len(self._failure_window)
+        while self._error_window and self._error_window[0][0] < cutoff:
+            self._error_window.popleft()
+
+    def _close_circuit(self, now: float) -> None:
+        """Shared OPEN/HALF_OPEN → CLOSED transition on any success."""
+        # Drift-induced OPEN is sticky — only clear_drift releases it.
+        if self.drift_open:
+            return
+        self.consecutive_failures = 0
+        if self.state in (CircuitState.OPEN, CircuitState.HALF_OPEN):
+            self.state = CircuitState.CLOSED
+            self.open_until = None
+            self.consecutive_trips = 0
+
+    def _maybe_trip_open(self, now: float) -> None:
+        """Common trip check shared between record_failure and record_probe_failure."""
+        if self.state == CircuitState.HALF_OPEN:
+            # Trial selection / probe failed → re-open with extended cooldown.
+            self._trip_open(now, extended=True)
+            return
+        if self.state == CircuitState.CLOSED:
+            if (
+                self.consecutive_failures >= _FAILURE_THRESHOLD
+                or self.error_rate_60s(now) > _ERROR_RATE_TRIP
+            ):
+                self._trip_open(now, extended=False)
 
     def _trip_open(self, now: float, extended: bool) -> None:
         self.consecutive_trips += 1
@@ -202,6 +273,12 @@ class InferenceBackend:
     in_flight: int = 0
     avg_latency_ms: float = 0.0
     last_inference_at: float | None = None
+    # Populated by the BackendProbe on each /v1/models poll. Drift between
+    # this and the pool's expected_fingerprint triggers a sticky OPEN.
+    model_fingerprint: str | None = None
+    # Best-effort: server software version (vLLM, Ollama, MLX, etc.). Sourced
+    # from the Server: response header on probe responses where present.
+    server_version: str | None = None
 
 
 @dataclass
@@ -210,6 +287,11 @@ class BackendPool:
 
     tier: str
     backends: list[InferenceBackend] = field(default_factory=list)
+    # Pinned by the first successful probe of any backend in this pool.
+    # Subsequent backends that report a different fingerprint are flagged as
+    # drifted (the operator swapped weights behind one of them). Cleared on
+    # gateway restart — that's the operator's "trust me, I changed it" signal.
+    expected_fingerprint: str | None = None
 
     def eligible(self, now: float | None = None) -> list[InferenceBackend]:
         """Backends with a healthy circuit AND retry budget remaining.

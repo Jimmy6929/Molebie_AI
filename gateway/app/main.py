@@ -82,7 +82,9 @@ async def lifespan(app: FastAPI):
         print(f"[monitor] System probe unavailable: {exc}")
     try:
         from app.services.backend_probe import get_backend_probe
-        backend_probe = get_backend_probe(settings)
+        # The probe resolves the pool list lazily via the inference service's
+        # selector — no need to thread settings through anymore.
+        backend_probe = get_backend_probe()
         await backend_probe.start()
     except Exception as exc:
         print(f"[monitor] Backend probe unavailable: {exc}")

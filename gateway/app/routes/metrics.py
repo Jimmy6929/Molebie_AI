@@ -102,12 +102,16 @@ async def get_live_metrics(request: Request) -> dict:
         },
         "backends": [
             {
+                "node_id": b.node_id,
                 "tier": b.tier,
                 "url": b.url,
                 "model": b.model,
                 "status": b.status,
                 "last_latency_ms": b.last_latency_ms,
                 "last_error": b.last_error,
+                "model_fingerprint": b.model_fingerprint,
+                "server_version": b.server_version,
+                "circuit_state": b.circuit_state.value,
             }
             for b in backend_snap.values()
         ],
