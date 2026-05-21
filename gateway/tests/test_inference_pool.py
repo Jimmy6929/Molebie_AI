@@ -361,7 +361,7 @@ class TestFingerprintDrift:
     def test_clear_drift_releases_sticky_open(self):
         h = BackendHealth()
         h.mark_fingerprint_drift(now=0.0)
-        h.clear_drift(now=1.0)
+        h.clear_drift()
         assert h.drift_open is False
         assert h.state == CircuitState.CLOSED
         assert h.is_eligible(now=1.0)

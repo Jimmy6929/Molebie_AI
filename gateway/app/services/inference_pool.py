@@ -157,10 +157,10 @@ class BackendHealth:
         self.open_until = None
         self.last_failure_at = now
 
-    def clear_drift(self, now: float | None = None) -> None:
+    def clear_drift(self) -> None:
         """Probe observed the fingerprint matching expectations again —
-        release the sticky OPEN and reset the breaker."""
-        now = now if now is not None else time.monotonic()
+        release the sticky OPEN and reset the breaker. Pure state reset,
+        no timestamp needed."""
         self.drift_open = False
         self.state = CircuitState.CLOSED
         self.consecutive_failures = 0
