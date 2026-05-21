@@ -338,6 +338,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_sources_user_root
 """
 
 
+_AUDIT_EVENTS_SCHEMA_SQL = """
+-- ============================================
+-- AUDIT EVENTS — fleet operations log
+-- ============================================
+-- Always-on append-only log of fleet operations (storage uploads, routing
+-- decisions, satellite joins/removes, anti-entropy passes). ~100 bytes per
+-- row in steady state; the read path is the future ``GET /fleet/audit``
+-- endpoint and ``molebie-ai extend audit`` CLI command.
+--
+-- metadata_json is opaque to the schema — callers store small JSON dicts
+-- of event-specific data. By convention: metadata only, never prompt or
+-- response content (same invariant the metrics registry enforces).
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    actor TEXT,
+    target TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_created
+    ON audit_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_type
+    ON audit_events(event_type);
+"""
+
+
 def _fts5_sql() -> str:
     """Return SQL for FTS5 virtual table creation."""
     return """
@@ -512,6 +540,14 @@ def init_database_sync(
                 conn.executescript(_VAULT_SOURCES_SCHEMA_SQL)
                 print("[schema] Migrated: added vault_sources table")
 
+            # Migrate: audit_events (fleet operations log). Idempotent.
+            audit_present = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'"
+            ).fetchone()
+            if not audit_present:
+                conn.executescript(_AUDIT_EVENTS_SCHEMA_SQL)
+                print("[schema] Migrated: added audit_events table")
+
             conn.commit()
             print(f"[schema] Database already initialized at {db_path}")
             conn.close()
@@ -525,6 +561,9 @@ def init_database_sync(
 
         # Create vault-sources table (Obsidian-style external folder sync)
         conn.executescript(_VAULT_SOURCES_SCHEMA_SQL)
+
+        # Create audit_events table (fleet operations log)
+        conn.executescript(_AUDIT_EVENTS_SCHEMA_SQL)
 
         # Create FTS5 virtual table
         conn.executescript(_fts5_sql())
