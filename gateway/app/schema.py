@@ -398,6 +398,35 @@ CREATE INDEX IF NOT EXISTS idx_fleet_satellites_status
 """
 
 
+_SATELLITE_BLOBS_SCHEMA_SQL = """
+-- ============================================
+-- SATELLITE BLOBS — fleet-wide blob inventory (Plan B)
+-- ============================================
+-- Records which satellite holds which blob, keyed by SHA-256 content
+-- digest + satellite node id. Written by the future TieredStorageService
+-- (slice 9.3) on every offload PUT; read by anti-entropy reconciliation
+-- (slice 9.5) and the drain protocol (slice 9.6).
+--
+-- Composite PK on (sha256, satellite_node_id) means the same blob can be
+-- replicated across multiple satellites for durability later. This slice
+-- ships the table empty; consumers arrive in slice 9.3.
+CREATE TABLE IF NOT EXISTS satellite_blobs (
+    sha256 TEXT NOT NULL,
+    satellite_node_id TEXT NOT NULL,
+    blob_type TEXT,                  -- 'document' | 'image' | other
+    size_bytes INTEGER,
+    uploaded_at TEXT NOT NULL,
+    last_verified_at TEXT,
+    PRIMARY KEY (sha256, satellite_node_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_satellite_blobs_node
+    ON satellite_blobs(satellite_node_id);
+CREATE INDEX IF NOT EXISTS idx_satellite_blobs_type
+    ON satellite_blobs(blob_type);
+"""
+
+
 def _fts5_sql() -> str:
     """Return SQL for FTS5 virtual table creation."""
     return """
@@ -588,6 +617,14 @@ def init_database_sync(
                 conn.executescript(_FLEET_SATELLITES_SCHEMA_SQL)
                 print("[schema] Migrated: added fleet_satellites table")
 
+            # Migrate: satellite_blobs (Plan B fleet-wide blob inventory). Idempotent.
+            blobs_present = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='satellite_blobs'"
+            ).fetchone()
+            if not blobs_present:
+                conn.executescript(_SATELLITE_BLOBS_SCHEMA_SQL)
+                print("[schema] Migrated: added satellite_blobs table")
+
             conn.commit()
             print(f"[schema] Database already initialized at {db_path}")
             conn.close()
@@ -607,6 +644,9 @@ def init_database_sync(
 
         # Create fleet_satellites table (Plan B fleet inventory)
         conn.executescript(_FLEET_SATELLITES_SCHEMA_SQL)
+
+        # Create satellite_blobs table (Plan B fleet-wide blob inventory)
+        conn.executescript(_SATELLITE_BLOBS_SCHEMA_SQL)
 
         # Create FTS5 virtual table
         conn.executescript(_fts5_sql())

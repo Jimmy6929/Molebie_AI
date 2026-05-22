@@ -3,10 +3,36 @@ Local filesystem storage service.
 
 Replaces Supabase Storage with simple file I/O in the data/ directory.
 Documents stored in data/documents/{user_id}/, images in data/images/{user_id}/.
+
+URI-tolerance (added in slice 9.2): ``storage_path`` arguments accept both
+bare paths (the legacy shape: ``"<user-id>/<filename>"``) and ``local://``
+URIs. Writes still produce bare paths — the URI-on-write flip happens in
+slice 9.3 when ``TieredStorageService`` takes over routing. ``satellite://``
+URIs raise ``NotImplementedError`` here; that's the contract slice 9.3
+fulfills.
 """
 
 import uuid
 from pathlib import Path
+
+from app.services import storage_uri
+
+
+def _resolve_local_path(storage_path: str, base: Path) -> Path:
+    """Convert a stored ``storage_path`` (bare path or ``local://`` URI)
+    into a concrete filesystem path under ``base``.
+
+    Raises ``NotImplementedError`` for ``satellite://`` URIs —
+    ``LocalStorageService`` can't dispatch over HTTP; that's
+    ``TieredStorageService``'s job (slice 9.3).
+    """
+    uri = storage_uri.parse(storage_path)
+    if uri.scheme == "local":
+        return base / uri.path_or_digest
+    raise NotImplementedError(
+        f"satellite:// storage requires TieredStorageService (slice 9.3); "
+        f"got {storage_path!r}"
+    )
 
 
 class LocalStorageService:
@@ -32,12 +58,12 @@ class LocalStorageService:
 
     def download_document(self, storage_path: str) -> bytes:
         """Read document bytes from storage."""
-        full_path = self.documents_dir / storage_path
+        full_path = _resolve_local_path(storage_path, self.documents_dir)
         return full_path.read_bytes()
 
     def delete_document(self, storage_path: str) -> None:
         """Delete a document file. Silently ignores missing files."""
-        full_path = self.documents_dir / storage_path
+        full_path = _resolve_local_path(storage_path, self.documents_dir)
         if full_path.exists():
             full_path.unlink()
 
@@ -57,12 +83,12 @@ class LocalStorageService:
 
     def download_image(self, storage_path: str) -> bytes:
         """Read image bytes from storage."""
-        full_path = self.images_dir / storage_path
+        full_path = _resolve_local_path(storage_path, self.images_dir)
         return full_path.read_bytes()
 
     def delete_image(self, storage_path: str) -> None:
         """Delete an image file. Silently ignores missing files."""
-        full_path = self.images_dir / storage_path
+        full_path = _resolve_local_path(storage_path, self.images_dir)
         if full_path.exists():
             full_path.unlink()
 
