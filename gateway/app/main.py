@@ -7,6 +7,7 @@ the web app and inference endpoints.
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 # Suppress asyncio "socket.send() raised exception" warnings that occur
@@ -26,6 +27,52 @@ from app.routes import (
     metrics,
     vault,
 )
+
+
+async def _has_any_satellites() -> bool:
+    """Quick existence check on the fleet_satellites table."""
+    from app.services.database import get_database_service
+    db = get_database_service()
+    conn = await db._get_conn()
+    rows = await conn.execute_fetchall(
+        "SELECT 1 FROM fleet_satellites LIMIT 1"
+    )
+    return bool(rows)
+
+
+async def _maybe_enable_tailscale_serve() -> None:
+    """If any satellites are registered and Tailscale Serve isn't yet
+    proxying our :8000, enable it and emit a `security.tls_enabled` audit
+    event. Idempotent — already-configured is a no-op."""
+    from app.services.tailscale_serve import (
+        enable_serve,
+        get_https_url,
+        is_serve_configured,
+    )
+
+    if not await _has_any_satellites():
+        return
+    if is_serve_configured():
+        return
+
+    ok = enable_serve()
+    if not ok:
+        print(
+            "[security] tailscale serve auto-enable failed — ensure HTTPS "
+            "Certificates are enabled for this tailnet in the Tailscale "
+            "admin console"
+        )
+        return
+
+    url = get_https_url()
+    print(f"[security] tailscale serve enabled: {url or '(URL unknown)'}")
+    from app.services.audit import record as audit_record
+    await audit_record(
+        "security.tls_enabled",
+        actor="system",
+        target=url or "unknown",
+        metadata={"port": 8000},
+    )
 
 
 @asynccontextmanager
@@ -108,6 +155,17 @@ async def lifespan(app: FastAPI):
     if getattr(settings, "folder_ingest_enabled", False):
         from app.services.ingest_worker import get_ingest_worker
         asyncio.create_task(get_ingest_worker().resume_running_jobs())
+
+    # ── Tailscale Serve auto-bootstrap ────────────────────────────
+    # Idempotent every boot. Only kicks in when at least one satellite
+    # has registered — no point burning a Let's Encrypt cert when there's
+    # nothing to expose. Operators who manage `tailscale serve` themselves
+    # can set MOLEBIE_AUTO_TAILSCALE_SERVE=0 to disable.
+    if os.getenv("MOLEBIE_AUTO_TAILSCALE_SERVE", "1") == "1":
+        try:
+            await _maybe_enable_tailscale_serve()
+        except Exception as exc:
+            print(f"[security] tailscale serve bootstrap skipped: {exc}")
 
     try:
         yield
