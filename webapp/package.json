@@ -9,8 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "katex": "^0.16.45",
-    "next": "16.2.5",
+    "katex": "^0.17.0",
+    "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "react-markdown": "^10.1.0",
@@ -26,7 +26,7 @@
     "@types/react-dom": "^19",
     "@types/react-syntax-highlighter": "^15.5.13",
     "eslint": "^9",
-    "eslint-config-next": "16.2.5",
+    "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
