@@ -142,7 +142,7 @@ class TieredStorageService:
         self.local = local
         self.resolve_satellite_host = resolve_satellite_host
         self.operator_identity = operator_identity
-        self._client_factory = http_client_factory or (lambda: httpx.Client())
+        self._client_factory = http_client_factory or httpx.Client
 
     # ----- writes: always local (local-first) -----
 
