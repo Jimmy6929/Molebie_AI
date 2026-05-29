@@ -242,3 +242,52 @@ async def list_inventory(request: Request) -> dict[str, Any]:
     )
     satellites = [_row_to_inventory_item(dict(r)) for r in rows]
     return {"satellites": satellites, "count": len(satellites)}
+
+
+@router.post("/storage/migrate")
+async def migrate_storage(
+    request: Request,
+    limit: int = Query(10, ge=1, le=100),
+) -> dict[str, Any]:
+    """Migrate up to ``limit`` locally-stored documents to a satellite.
+
+    Loopback-gated (operator-only). Manual trigger for the slice-9.4a
+    storage mover; the slice-9.4b scheduler will call the same engine
+    automatically. Runs the (sync) mover in a worker thread so a large
+    blob upload doesn't block the event loop.
+    """
+    _require_loopback(request)
+
+    import asyncio
+
+    from app.config import get_settings
+    from app.services.storage import LocalStorageService
+    from app.services.storage_mover import StorageMover
+    from app.services.tailscale_outbound import get_operator_identity
+
+    identity = get_operator_identity()
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No Tailscale identity available — cannot authenticate to satellites.",
+        )
+
+    data_dir = getattr(get_settings(), "data_dir", "data")
+    mover = StorageMover(LocalStorageService(data_dir), identity, data_dir)
+    results = await asyncio.to_thread(mover.migrate_documents, limit)
+
+    migrated = sum(1 for r in results if r.migrated)
+    return {
+        "migrated": migrated,
+        "skipped": len(results) - migrated,
+        "results": [
+            {
+                "doc_id": r.doc_id,
+                "migrated": r.migrated,
+                "satellite_node_id": r.satellite_node_id,
+                "sha256": r.sha256,
+                "reason": r.reason,
+            }
+            for r in results
+        ],
+    }
