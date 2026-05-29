@@ -1,0 +1,66 @@
+name: CI Failure Notify
+
+# Watchdog: when any of the listed workflows completes in failure on ANY branch
+# (push, PR, schedule, release, Dependabot), POST to a Claude Code Routine's API
+# /fire endpoint so a cloud agent can diagnose it and open a draft fix PR — even
+# when no local Claude Code session is open.
+#
+# Notes:
+#  - workflow_run workflows run from the DEFAULT branch's copy of this file, so this
+#    must be merged to `main` before it takes effect.
+#  - Safe to merge before the secrets exist: it no-ops until CLAUDE_ROUTINE_URL and
+#    CLAUDE_ROUTINE_TOKEN are set in repo Actions secrets.
+
+on:
+  workflow_run:
+    workflows: ["CI", "CodeQL", "Secret Scan", "Test Installers", "Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  fire-routine:
+    # Only react to genuine failures (and timeouts). Successes/cancellations are ignored.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' ||
+      github.event.workflow_run.conclusion == 'timed_out'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire Claude routine
+        env:
+          ROUTINE_URL: ${{ secrets.CLAUDE_ROUTINE_URL }}
+          ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          WF_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WF_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WF_SHA: ${{ github.event.workflow_run.head_sha }}
+          WF_EVENT: ${{ github.event.workflow_run.event }}
+          WF_RUN_ID: ${{ github.event.workflow_run.id }}
+          WF_URL: ${{ github.event.workflow_run.html_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "${ROUTINE_URL}" ] || [ -z "${ROUTINE_TOKEN}" ]; then
+            echo "CLAUDE_ROUTINE_URL / CLAUDE_ROUTINE_TOKEN not set — skipping."
+            echo "Set both in repo Settings → Secrets and variables → Actions to enable cloud diagnosis."
+            exit 0
+          fi
+
+          TEXT="CI failure on ${REPO}. Workflow \"${WF_NAME}\" concluded '${WF_CONCLUSION}' on branch '${WF_BRANCH}' @ ${WF_SHA} (trigger event: ${WF_EVENT}). Failed run id: ${WF_RUN_ID} — ${WF_URL}. Diagnose this failure and act per your saved instructions (fetch the failed log with 'gh run view ${WF_RUN_ID} --log-failed', classify via .claude/agents/ci-diagnoser.md, then open a DRAFT fix PR or a hard-stop issue). Never merge."
+
+          BODY="$(jq -n --arg text "$TEXT" '{text: $text}')"
+
+          HTTP_CODE="$(curl -sS -o /tmp/routine_resp.json -w '%{http_code}' \
+            -X POST "${ROUTINE_URL}" \
+            -H "Authorization: Bearer ${ROUTINE_TOKEN}" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "Content-Type: application/json" \
+            -d "${BODY}")"
+
+          echo "Routine /fire responded HTTP ${HTTP_CODE}"
+          cat /tmp/routine_resp.json || true
+          # Don't fail the watchdog on a transient routine error — log and move on.
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::warning::Routine fire returned ${HTTP_CODE}. Check the routine token/URL and per-account hourly caps."
+          fi
