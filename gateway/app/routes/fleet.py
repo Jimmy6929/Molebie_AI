@@ -244,6 +244,62 @@ async def list_inventory(request: Request) -> dict[str, Any]:
     return {"satellites": satellites, "count": len(satellites)}
 
 
+@router.post("/storage/reconcile")
+async def reconcile_storage(
+    request: Request,
+    node: str | None = Query(default=None, description="Single satellite node id; omit to reconcile all active storage satellites"),
+) -> dict[str, Any]:
+    """Manifest reconciliation (light scrub) trigger.
+
+    Loopback-gated. Compares the primary's ``satellite_blobs`` against
+    each satellite's ``GET /v1/storage/manifest`` and records per-blob
+    outcomes — refreshed ``last_verified_at`` for matches, or a
+    ``storage.drift`` audit event for missing / orphan / size_mismatch.
+    Detect only; no auto-healing in slice 9.5.
+    """
+    _require_loopback(request)
+
+    import asyncio
+
+    from app.config import get_settings
+    from app.services.storage_reconciler import ManifestReconciler
+    from app.services.tailscale_outbound import get_operator_identity
+
+    identity = get_operator_identity()
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No Tailscale identity available — cannot authenticate to satellites.",
+        )
+
+    data_dir = getattr(get_settings(), "data_dir", "data")
+    reconciler = ManifestReconciler(identity, data_dir)
+    if node is None:
+        reports = await asyncio.to_thread(reconciler.reconcile_all)
+    else:
+        reports = [await asyncio.to_thread(reconciler.reconcile, node)]
+
+    return {
+        "reports": [
+            {
+                "node_id": r.node_id,
+                "verified": r.verified,
+                "drift": [
+                    {
+                        "sha256": d.sha256,
+                        "kind": d.kind,
+                        "expected_size": d.expected_size,
+                        "actual_size": d.actual_size,
+                    }
+                    for d in r.drift
+                ],
+                "fetch_error": r.fetch_error,
+            }
+            for r in reports
+        ]
+    }
+
+
 @router.post("/storage/migrate")
 async def migrate_storage(
     request: Request,

@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from satellite_storage import __version__
 from satellite_storage.config import get_settings
-from satellite_storage.routes import capacity, health, storage
+from satellite_storage.routes import capacity, health, manifest, storage
 
 
 @asynccontextmanager
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(storage.router)
     app.include_router(capacity.router)
+    app.include_router(manifest.router)
     app.include_router(health.router)
     return app
 

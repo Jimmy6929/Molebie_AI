@@ -345,6 +345,38 @@ class TestBatchAndIdempotency:
         # Still exactly one satellite_blobs row.
         assert len(_satellite_blobs(data_dir)) == 1
 
+    def test_re_migration_preserves_last_verified_at(self, data_dir):
+        """UPSERT cleanup (slice 9.5): re-migrating the same blob (same
+        sha256, same node) must NOT clobber a verification stamp written
+        by the manifest reconciler. Drives the storage_mover.py change
+        from INSERT OR REPLACE → INSERT ... ON CONFLICT DO UPDATE."""
+        local = LocalStorageService(data_dir)
+        # First doc with content X → first migration writes the row.
+        _seed_document(data_dir, local, _CONTENT)
+        _register_satellite(data_dir, "node-a", "100.64.0.9")
+        shared = _AlwaysOkClient()
+        mover = StorageMover(local, "op@x", data_dir, lambda: shared)
+        mover.migrate_documents(limit=10)
+
+        # Simulate the reconciler writing a last_verified_at stamp.
+        conn = sqlite3.connect(Path(data_dir) / "molebie.db")
+        conn.execute(
+            "UPDATE satellite_blobs SET last_verified_at = ? "
+            "WHERE sha256 = ?",
+            ("2026-05-01T00:00:00+00:00", _DIGEST),
+        )
+        conn.commit()
+        conn.close()
+
+        # Second doc with the SAME bytes → same sha256 → ON CONFLICT path.
+        _seed_document(data_dir, local, _CONTENT)
+        mover.migrate_documents(limit=10)
+
+        # The verification stamp must survive.
+        blobs = _satellite_blobs(data_dir)
+        assert len(blobs) == 1
+        assert blobs[0]["last_verified_at"] == "2026-05-01T00:00:00+00:00"
+
 
 class _AlwaysOkClient:
     """PUT 201, HEAD 200 with matching size, capacity ample. Size taken from
