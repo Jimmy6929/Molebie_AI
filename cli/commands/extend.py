@@ -38,17 +38,25 @@ _STATUS_SHOW_EVENTS = 5  # how many of those to display
 _DETAIL_TRUNCATE = 40
 
 
-def _fetch(path: str, params: dict | None = None) -> dict[str, Any]:
-    """GET a fleet endpoint over loopback, exit cleanly on failure.
+def _request(
+    method: str, path: str, *, params: dict | None = None, timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Call a fleet endpoint over loopback, exit cleanly on failure.
 
-    Three call sites in this module justify pulling the friendly-error
-    block out; below the rule-of-three threshold and inlining would
-    triplicate ~10 lines per subcommand. Always returns a parsed JSON
-    dict; never returns None — errors raise ``typer.Exit(1)``.
+    Shared by ``_fetch`` (GET), ``_post``, and ``_delete``. Always returns
+    a parsed JSON dict; errors raise ``typer.Exit(1)`` with a friendly
+    hint for the operator.
+
+    Dispatches to ``httpx.get`` / ``httpx.post`` / ``httpx.delete`` rather
+    than ``httpx.request`` so tests can monkeypatch each method independently
+    (the existing extend-list/audit/status tests rely on patching ``httpx.get``).
     """
     url = f"{_GATEWAY_BASE}{path}"
+    fn = {"GET": httpx.get, "POST": httpx.post, "DELETE": httpx.delete}.get(method)
+    if fn is None:
+        raise ValueError(f"unsupported HTTP method: {method!r}")
     try:
-        resp = httpx.get(url, params=params, timeout=5.0)
+        resp = fn(url, params=params, timeout=timeout)
     except httpx.TimeoutException:
         print_fail(f"Gateway at {_GATEWAY_BASE} timed out.")
         console.print("    Is the gateway running on this machine?")
@@ -64,6 +72,29 @@ def _fetch(path: str, params: dict | None = None) -> dict[str, Any]:
         console.print(f"    Body: {resp.text}")
         raise typer.Exit(1)
     return resp.json()
+
+
+def _fetch(path: str, params: dict | None = None) -> dict[str, Any]:
+    return _request("GET", path, params=params)
+
+
+def _post(path: str, params: dict | None = None, *, timeout: float = 60.0) -> dict[str, Any]:
+    """POST helper. Longer default timeout — a drain batch can take seconds."""
+    return _request("POST", path, params=params, timeout=timeout)
+
+
+def _delete(path: str, params: dict | None = None) -> dict[str, Any]:
+    return _request("DELETE", path, params=params)
+
+
+def _fmt_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.2f} GB"
 
 
 def _short_id(full: str) -> str:
@@ -177,6 +208,126 @@ def audit_log(
     console.print(table)
     console.print()
     print_info(f"{len(events)} event(s) shown.")
+
+
+@app.command("remove")
+def remove_satellite(
+    host: str = typer.Argument(..., help="Tailscale hostname or IP of the satellite to remove."),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Satellite is gone — skip drain and accept data loss on documents that lived there.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts."),
+) -> None:
+    """Drain a satellite back to the primary and remove it from the fleet.
+
+    Graceful (default): the satellite must be reachable. Bytes are pulled
+    back, ``documents.storage_path`` is rewritten to ``local://...``, the
+    satellite is deleted from the inventory.
+
+    ``--force``: the satellite is assumed gone. No drain is attempted;
+    inventory rows are deleted; documents that pointed at it surface as
+    BlobUnreachableError on read.
+    """
+    # 1. Resolve host → node_id.
+    inv = _fetch("/fleet/inventory")
+    matches = [s for s in (inv.get("satellites") or []) if s.get("host") == host]
+    if not matches:
+        print_fail(f"No satellite registered with host {host!r}.")
+        console.print(
+            "    Run [bold]molebie-ai extend list[/bold] to see registered satellites."
+        )
+        raise typer.Exit(1)
+    node_id = matches[0]["id"]
+
+    # 2. Pre-flight.
+    preview = _fetch("/fleet/extend/drain-preview", params={"node": node_id})
+
+    if force:
+        if preview["satellite_reachable"]:
+            console.print()
+            console.print(
+                "[bold yellow]Warning:[/bold yellow] satellite responds — "
+                "[bold]--force[/bold] will lose data that could have been drained."
+            )
+            if not yes and not typer.confirm("Continue anyway?", default=False):
+                raise typer.Exit(0)
+        body = _delete(f"/fleet/satellites/{node_id}", params={"force": "true"})
+        console.print()
+        print_info(
+            f"Removed {host} (force): {body.get('lost_blobs', 0)} blob(s) "
+            f"lost, {_fmt_bytes(body.get('lost_bytes', 0))}."
+        )
+        return
+
+    # 3. Graceful path — refuse cleanly when prerequisites fail.
+    if not preview["satellite_reachable"]:
+        print_fail(f"Satellite {host} is unreachable.")
+        console.print(
+            "    Bring it back online and retry, or pass [bold]--force[/bold] "
+            "to accept data loss for documents that lived on it."
+        )
+        raise typer.Exit(1)
+    if not preview["feasible"]:
+        print_fail(
+            f"Primary has {_fmt_bytes(preview['primary_free_bytes'])} free, "
+            f"needs at least {_fmt_bytes(preview['total_bytes'])} to drain."
+        )
+        console.print("    Free up space on the primary and retry.")
+        raise typer.Exit(1)
+
+    if preview["blob_count"] == 0:
+        # Nothing to drain — just delete the inventory row.
+        _delete(f"/fleet/satellites/{node_id}")
+        console.print()
+        print_info(f"Removed {host} (no blobs to drain).")
+        return
+
+    # 4. Confirm + drain loop.
+    console.print()
+    console.print(
+        f"  Will drain [bold]{preview['blob_count']}[/bold] blob(s) "
+        f"([cyan]{_fmt_bytes(preview['total_bytes'])}[/cyan]) "
+        f"from [bold]{host}[/bold] to this primary."
+    )
+    console.print(
+        f"  Primary free: [cyan]{_fmt_bytes(preview['primary_free_bytes'])}[/cyan]"
+    )
+    if not yes and not typer.confirm("Continue?", default=False):
+        raise typer.Exit(0)
+
+    total_drained = 0
+    total_skipped = 0
+    while True:
+        report = _post(
+            "/fleet/storage/drain", params={"node": node_id, "limit": 10}
+        )
+        total_drained += report["drained"]
+        total_skipped += report["skipped"]
+        console.print(
+            f"  drained={report['drained']} skipped={report['skipped']} "
+            f"remaining={report['remaining']}"
+        )
+        if report["remaining"] == 0:
+            break
+        # Guard against an infinite loop if every blob in a batch errors.
+        if report["drained"] == 0 and report["skipped"] > 0:
+            print_fail(
+                f"Drain stalled: {report['skipped']} blob(s) in this batch errored, "
+                f"{report['remaining']} still on satellite."
+            )
+            console.print(
+                "    Check the audit log: [bold]molebie-ai extend audit[/bold]"
+            )
+            raise typer.Exit(1)
+
+    # 5. Final inventory delete.
+    _delete(f"/fleet/satellites/{node_id}")
+    console.print()
+    print_info(
+        f"Removed {host}: {total_drained} blob(s) drained back to primary"
+        + (f", {total_skipped} skipped." if total_skipped else ".")
+    )
 
 
 @app.command("status")
