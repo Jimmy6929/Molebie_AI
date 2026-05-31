@@ -130,6 +130,7 @@ async def lifespan(app: FastAPI):
     system_probe = None
     backend_probe = None
     storage_probe = None
+    storage_scheduler = None
     try:
         from app.services.system_probe import get_system_probe
         system_probe = get_system_probe()
@@ -150,6 +151,12 @@ async def lifespan(app: FastAPI):
         await storage_probe.start()
     except Exception as exc:
         print(f"[monitor] Storage probe unavailable: {exc}")
+    try:
+        from app.services.storage_scheduler import get_storage_scheduler
+        storage_scheduler = get_storage_scheduler(settings.data_dir)
+        await storage_scheduler.start(settings.storage_auto_migrate_interval_sec)
+    except Exception as exc:
+        print(f"[fleet] Storage migration scheduler unavailable: {exc}")
 
     # Resume any folder-ingest jobs that were interrupted by a restart.
     if getattr(settings, "folder_ingest_enabled", False):
@@ -177,6 +184,8 @@ async def lifespan(app: FastAPI):
             await backend_probe.stop()
         if storage_probe is not None:
             await storage_probe.stop()
+        if storage_scheduler is not None:
+            await storage_scheduler.stop()
         print(f"Shutting down {settings.app_name}")
 
 

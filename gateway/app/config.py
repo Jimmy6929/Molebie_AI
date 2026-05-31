@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     # Data directory (SQLite database + local file storage)
     data_dir: str = "data"
 
+    # ── Automatic storage migration (slice 9.4b) ─────────────────
+    # Background scheduler that migrates cold local documents to a
+    # storage satellite once the primary's filesystem crosses
+    # ``high_water``. Safe-by-default: only acts when satellites are
+    # registered AND a Tailscale operator identity is available; the
+    # 9.4a engine HEAD-verifies the satellite copy before reclaiming
+    # the local file, so there is no data-loss window.
+    storage_auto_migrate_enabled: bool = True
+    storage_auto_migrate_interval_sec: float = 300.0
+    storage_auto_migrate_high_water: float = 0.85  # used-fraction trigger
+    storage_auto_migrate_batch_limit: int = 10
+
     # Authentication mode: "single" (password only) or "multi" (email + password)
     auth_mode: str = "single"
 
