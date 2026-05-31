@@ -300,6 +300,209 @@ async def reconcile_storage(
     }
 
 
+@router.get("/extend/drain-preview")
+async def drain_preview(
+    request: Request,
+    node: str = Query(..., description="Satellite node id to preview drain for"),
+) -> dict[str, Any]:
+    """Pre-flight: counts, total bytes, primary free space, satellite reachability.
+
+    Loopback-gated. The CLI uses this to confirm before kicking off the
+    actual drain loop, and to decide between the graceful path and ``--force``.
+    """
+    _require_loopback(request)
+
+    from app.config import get_settings
+    from app.services.storage import LocalStorageService
+    from app.services.storage_drainer import StorageDrainer
+    from app.services.tailscale_outbound import get_operator_identity
+
+    identity = get_operator_identity()
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No Tailscale identity available — cannot ping satellite.",
+        )
+
+    data_dir = getattr(get_settings(), "data_dir", "data")
+    drainer = StorageDrainer(LocalStorageService(data_dir), identity, data_dir)
+    preview = drainer.preview(node)
+    if not _satellite_exists(node):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No satellite with id {node!r}",
+        )
+    return {
+        "node_id": preview.node_id,
+        "blob_count": preview.blob_count,
+        "total_bytes": preview.total_bytes,
+        "primary_free_bytes": preview.primary_free_bytes,
+        "feasible": preview.feasible,
+        "satellite_reachable": preview.satellite_reachable,
+    }
+
+
+@router.post("/storage/drain")
+async def drain_storage(
+    request: Request,
+    node: str = Query(..., description="Satellite node id to drain"),
+    limit: int = Query(10, ge=1, le=100),
+) -> dict[str, Any]:
+    """Bounded-batch drain: move up to ``limit`` blobs from the satellite
+    back to the primary's local storage. CLI loops this until remaining=0."""
+    _require_loopback(request)
+
+    import asyncio
+
+    from app.config import get_settings
+    from app.services.storage import LocalStorageService
+    from app.services.storage_drainer import StorageDrainer
+    from app.services.tailscale_outbound import get_operator_identity
+
+    identity = get_operator_identity()
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No Tailscale identity available — cannot authenticate to satellites.",
+        )
+
+    data_dir = getattr(get_settings(), "data_dir", "data")
+    drainer = StorageDrainer(LocalStorageService(data_dir), identity, data_dir)
+    report = await asyncio.to_thread(drainer.drain, node, limit)
+    return {
+        "node_id": report.node_id,
+        "drained": report.drained,
+        "skipped": report.skipped,
+        "remaining": report.remaining,
+        "bytes_drained": report.bytes_drained,
+        "fetch_error": report.fetch_error,
+        "results": [
+            {
+                "sha256": r.sha256,
+                "drained": r.drained,
+                "docs_relocated": r.docs_relocated,
+                "bytes_drained": r.bytes_drained,
+                "reason": r.reason,
+            }
+            for r in report.results
+        ],
+    }
+
+
+@router.delete("/satellites/{node_id}")
+async def remove_satellite(
+    request: Request,
+    node_id: str,
+    force: bool = Query(False, description="Skip drain check; accept data loss"),
+) -> dict[str, Any]:
+    """Final removal of a satellite from the fleet inventory.
+
+    Without ``force``: refuses (409) if any ``satellite_blobs`` rows still
+    reference this satellite — the CLI must finish draining first.
+    With ``force=true``: hands off to ``StorageDrainer.force_remove``,
+    which deletes the rows + emits a ``storage.force_remove`` audit.
+    """
+    _require_loopback(request)
+
+    if not _satellite_exists(node_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No satellite with id {node_id!r}",
+        )
+
+    if force:
+        from app.config import get_settings
+        from app.services.storage import LocalStorageService
+        from app.services.storage_drainer import StorageDrainer
+        from app.services.tailscale_outbound import get_operator_identity
+
+        # force_remove doesn't actually call the satellite, so a missing
+        # identity is fine — pass through whatever (or empty).
+        identity = get_operator_identity() or ""
+        data_dir = getattr(get_settings(), "data_dir", "data")
+        drainer = StorageDrainer(LocalStorageService(data_dir), identity, data_dir)
+        result = drainer.force_remove(node_id)
+        return {
+            "node_id": result.node_id,
+            "removed": True,
+            "forced": True,
+            "lost_blobs": result.lost_blobs,
+            "lost_bytes": result.lost_bytes,
+        }
+
+    # Graceful: refuse if anything is still on the satellite.
+    if _satellite_blob_count(node_id) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Satellite {node_id} still holds blobs; drain via "
+                f"POST /fleet/storage/drain first, or pass force=true to "
+                f"accept data loss."
+            ),
+        )
+
+    # Drained clean — just delete the inventory row + audit it.
+    from datetime import datetime, timezone
+
+    from app.services.database import get_database_service
+    db = get_database_service()
+    conn = await db._get_conn()
+    await conn.execute("DELETE FROM fleet_satellites WHERE id = ?", (node_id,))
+    await conn.execute(
+        "INSERT INTO audit_events "
+        "(event_type, actor, target, metadata_json, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "satellite.remove",
+            "system",
+            node_id,
+            None,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    await conn.commit()
+    return {
+        "node_id": node_id,
+        "removed": True,
+        "forced": False,
+        "lost_blobs": 0,
+        "lost_bytes": 0,
+    }
+
+
+def _satellite_exists(node_id: str) -> bool:
+    import sqlite3
+
+    from app.config import get_settings
+    from app.schema import _get_db_path
+    data_dir = getattr(get_settings(), "data_dir", "data")
+    conn = sqlite3.connect(_get_db_path(data_dir))
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM fleet_satellites WHERE id = ?", (node_id,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def _satellite_blob_count(node_id: str) -> int:
+    import sqlite3
+
+    from app.config import get_settings
+    from app.schema import _get_db_path
+    data_dir = getattr(get_settings(), "data_dir", "data")
+    conn = sqlite3.connect(_get_db_path(data_dir))
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM satellite_blobs WHERE satellite_node_id = ?",
+            (node_id,),
+        ).fetchone()
+        return int(row[0])
+    finally:
+        conn.close()
+
+
 @router.post("/storage/migrate")
 async def migrate_storage(
     request: Request,
