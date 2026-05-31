@@ -76,6 +76,9 @@ class StorageMigrationScheduler:
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):
+                # Shutdown path: we initiated the cancel, so swallow both the
+                # expected CancelledError and any final error from the task to
+                # guarantee stop() always completes.
                 pass
             self._task = None
 
