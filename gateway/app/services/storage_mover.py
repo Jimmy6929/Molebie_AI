@@ -160,10 +160,18 @@ class StorageMover:
         mover is sync; mirrors audit_events' columns from PR #46.)"""
         conn = sqlite3.connect(_get_db_path(self.data_dir))
         try:
+            # UPSERT preserves last_verified_at on re-migration of an already-
+            # verified blob; INSERT OR REPLACE deletes-then-inserts and would
+            # null the stamp. Slice 9.5 starts writing last_verified_at, so
+            # the column needs to survive a same-digest, same-node re-run.
             conn.execute(
-                "INSERT OR REPLACE INTO satellite_blobs "
+                "INSERT INTO satellite_blobs "
                 "(sha256, satellite_node_id, blob_type, size_bytes, uploaded_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(sha256, satellite_node_id) DO UPDATE SET "
+                "blob_type=excluded.blob_type, "
+                "size_bytes=excluded.size_bytes, "
+                "uploaded_at=excluded.uploaded_at",
                 (digest, node_id, "document", size, now),
             )
             conn.execute(
