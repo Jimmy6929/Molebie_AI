@@ -39,11 +39,21 @@ Homepage = "https://github.com/Jimmy6929/Molebie_AI"
 Repository = "https://github.com/Jimmy6929/Molebie_AI"
 
 [tool.setuptools]
+# pyproject.toml lives INSIDE the package directory (`satellite_storage/`),
+# so we point setuptools at the contents of this dir and tell it those
+# files belong to the `satellite_storage` package (and its subpackages).
+# Without this, `pip install -e .` from inside `satellite_storage/` would
+# look for `satellite_storage/satellite_storage/__init__.py` and fail to
+# import the package — caught by a real pipx-style smoke test.
 include-package-data = true
-
-[tool.setuptools.packages.find]
-include = ["satellite_storage*"]
-exclude = ["satellite_storage.tests*"]
+packages = [
+    "satellite_storage",
+    "satellite_storage.cli",
+    "satellite_storage.routes",
+    "satellite_storage.middleware",
+    "satellite_storage.services",
+]
+package-dir = { "satellite_storage" = "." }
 
 [tool.setuptools.package-data]
 satellite_storage = ["templates/*"]
