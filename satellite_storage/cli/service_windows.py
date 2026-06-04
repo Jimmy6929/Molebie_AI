@@ -20,7 +20,7 @@ import tempfile
 from importlib import resources
 from pathlib import Path
 
-from satellite_storage.cli.service import (
+from satellite_storage.cli._service_base import (
     ServiceConfig,
     ServiceInstallError,
     render_template,
@@ -97,6 +97,8 @@ def install_service(config: ServiceConfig) -> str:
         try:
             xml_path.unlink()
         except OSError:
+            # Best-effort temp cleanup — the task is already registered in
+            # the scheduler registry, so a leftover XML must not fail install.
             pass
 
     # Task lives in the scheduler registry, not on disk — return a stable

@@ -246,6 +246,8 @@ def _wait_for_health(url: str, *, timeout_sec: float) -> bool:
             if resp.status_code == 200:
                 return True
         except (httpx.TimeoutException, httpx.TransportError):
+            # Transient network errors during startup are expected; keep
+            # polling until the deadline rather than failing the wizard.
             pass
         time.sleep(_HEALTH_POLL_INTERVAL_SEC)
     return False

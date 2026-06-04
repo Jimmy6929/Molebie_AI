@@ -19,7 +19,7 @@ import subprocess
 from importlib import resources
 from pathlib import Path
 
-from satellite_storage.cli.service import (
+from satellite_storage.cli._service_base import (
     ServiceConfig,
     ServiceInstallError,
     render_template,

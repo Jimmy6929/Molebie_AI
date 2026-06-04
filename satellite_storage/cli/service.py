@@ -23,35 +23,22 @@ from __future__ import annotations
 
 import shutil
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
-SATELLITE_SERVICE_LABEL = "com.molebieai.satellite"
-
-
-@dataclass(frozen=True)
-class ServiceConfig:
-    """Everything any platform module needs to install the satellite as a service.
-
-    ``label`` is platform-flavoured (launchd uses dotted reverse-DNS,
-    systemd uses ``molebie-satellite``, Windows tasks use ``MolebieSatellite``)
-    so each platform module overrides as needed; this default is the
-    macOS-style canonical form.
-    """
-
-    satellite_bin: Path
-    data_dir: Path
-    log_dir: Path
-    home_dir: Path
-    label: str = SATELLITE_SERVICE_LABEL
+# Re-exported from the leaf module so callers can keep importing these names
+# from satellite_storage.cli.service unchanged. The shared types live in
+# _service_base to break the static cycle between this dispatcher and the
+# platform-specific modules.
+from satellite_storage.cli._service_base import (
+    SATELLITE_SERVICE_LABEL,
+    ServiceConfig,
+    ServiceInstallError,
+    render_template,
+)
 
 
 class PlatformNotSupportedError(Exception):
     """Raised when sys.platform isn't one of darwin/linux*/win32."""
-
-
-class ServiceInstallError(Exception):
-    """Raised when the platform-specific install/uninstall fails."""
 
 
 def find_satellite_binary() -> Path | None:
@@ -70,34 +57,6 @@ def default_data_dir() -> Path:
 
 def default_log_dir() -> Path:
     return Path.home() / ".molebie" / "logs"
-
-
-def render_template(template_text: str, mapping: dict[str, str]) -> str:
-    """Substitute ``__KEY__`` placeholders. Drift-detection is precise:
-
-    Snapshots the placeholders **in the input** before substitution, then
-    verifies every one of them appeared in ``mapping``. This avoids
-    false-positives on legitimate values that happen to contain ``__`` —
-    e.g., a home directory like ``/Users/__test__`` would otherwise trip a
-    naive "any leftover ``__`` in output" check.
-
-    Missing keys raise ``KeyError`` so template/code drift fails loudly.
-    """
-    import re
-
-    expected = set(re.findall(r"__[A-Z_]+__", template_text))
-    provided = {f"__{key}__" for key in mapping}
-    missing = expected - provided
-    if missing:
-        raise KeyError(
-            f"render_template: template needs {sorted(missing)} but they "
-            f"were not supplied in mapping"
-        )
-
-    out = template_text
-    for key, value in mapping.items():
-        out = out.replace(f"__{key}__", value)
-    return out
 
 
 # ── dispatcher API ────────────────────────────────────────────────────
