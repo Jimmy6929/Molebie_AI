@@ -73,16 +73,18 @@ def get_tailscale_whoami() -> TailscaleWhoamiInfo | None:
     decide how to surface the failure (the join command exits with a
     friendly error). Never raises.
 
-    Parses ``tailscale whoami --json`` output, which is a top-level JSON
-    object with a ``UserProfile`` key containing ``LoginName`` and
-    ``DisplayName``.
+    Parses ``tailscale status --json`` output, which has
+    ``Self.UserID`` (int) keying into a ``User`` dict whose values carry
+    ``LoginName`` and ``DisplayName``. The ``whoami`` subcommand does not
+    exist on the production Tailscale CLI (caught by real-hardware smoke
+    test — tests had mocked the subprocess).
     """
     cli = _find_tailscale_cli()
     if not cli:
         return None
     try:
         result = subprocess.run(
-            [cli, "whoami", "--json"],
+            [cli, "status", "--json"],
             capture_output=True,
             text=True,
             timeout=2.0,
@@ -95,15 +97,30 @@ def get_tailscale_whoami() -> TailscaleWhoamiInfo | None:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
         return None
+    return _whoami_from_status(data)
+
+
+def _whoami_from_status(data: object) -> "TailscaleWhoamiInfo | None":
     if not isinstance(data, dict):
         return None
-    user_profile = data.get("UserProfile")
-    if not isinstance(user_profile, dict):
+    if data.get("BackendState") != "Running":
         return None
-    login = user_profile.get("LoginName")
+    self_info = data.get("Self")
+    if not isinstance(self_info, dict):
+        return None
+    user_id = self_info.get("UserID")
+    if not isinstance(user_id, int):
+        return None
+    users = data.get("User")
+    if not isinstance(users, dict):
+        return None
+    profile = users.get(str(user_id))
+    if not isinstance(profile, dict):
+        return None
+    login = profile.get("LoginName")
     if not isinstance(login, str) or not login:
         return None
-    display = user_profile.get("DisplayName")
+    display = profile.get("DisplayName")
     return TailscaleWhoamiInfo(
         user_login=login,
         display_name=display if isinstance(display, str) and display else None,

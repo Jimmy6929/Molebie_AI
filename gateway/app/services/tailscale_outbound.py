@@ -8,10 +8,16 @@ its own operator identity so the satellite's identity gate accepts the
 request.
 
 For v0.2 the primary reads its own Tailscale-authenticated user via
-``tailscale whoami --json`` — same mechanism the CLI's ``molebie-ai
+``tailscale status --json`` — same mechanism the CLI's ``molebie-ai
 join`` command uses (cli/services/network_info.py). The value is cached
 for the process lifetime; identity doesn't change while the gateway runs,
 and re-forking a subprocess on every blob read would be wasteful.
+
+The ``status`` subcommand exists across every Tailscale version we care
+about; an earlier draft of this code called ``tailscale whoami --json``,
+which does not exist in the production Tailscale CLI on macOS (caught by
+real-hardware smoke test, not by tests — they mocked the subprocess).
+Pulled identity out of ``Self.UserID`` → ``User[<id>].LoginName``.
 
 Deliberate copy of the CLI's ``get_tailscale_whoami`` shape rather than a
 cross-package import — the gateway and CLI are independently deployable
@@ -53,7 +59,7 @@ def get_operator_identity() -> str | None:
         return None
     try:
         result = subprocess.run(
-            [cli, "whoami", "--json"],
+            [cli, "status", "--json"],
             capture_output=True,
             text=True,
             timeout=_PROBE_TIMEOUT_SEC,
@@ -66,9 +72,29 @@ def get_operator_identity() -> str | None:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
         return None
+    return _login_from_status(data)
+
+
+def _login_from_status(data: object) -> str | None:
+    """Pull ``User[Self.UserID].LoginName`` out of ``tailscale status --json``.
+
+    Returns None for any shape we don't recognise OR if the daemon isn't
+    ``Running`` (caller should be treated as unauthenticated). Never raises.
+    """
     if not isinstance(data, dict):
         return None
-    profile = data.get("UserProfile")
+    if data.get("BackendState") != "Running":
+        return None
+    self_info = data.get("Self")
+    if not isinstance(self_info, dict):
+        return None
+    user_id = self_info.get("UserID")
+    if not isinstance(user_id, int):
+        return None
+    users = data.get("User")
+    if not isinstance(users, dict):
+        return None
+    profile = users.get(str(user_id))
     if not isinstance(profile, dict):
         return None
     login = profile.get("LoginName")
