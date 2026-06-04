@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__SATELLITE_BIN__</string>
+        <string>serve</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>WorkingDirectory</key>
+    <string>__DATA_DIR__</string>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/satellite-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/satellite-stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>HOME</key>
+        <string>__HOME_DIR__</string>
+        <key>MOLEBIE_STORAGE_DATA_DIR</key>
+        <string>__DATA_DIR__</string>
+    </dict>
+</dict>
+</plist>
