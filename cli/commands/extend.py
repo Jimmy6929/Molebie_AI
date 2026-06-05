@@ -26,7 +26,8 @@ import httpx
 import typer
 from rich.table import Table
 
-from cli.ui.console import console, print_fail, print_info
+from cli.services.network_info import get_tailscale_ip
+from cli.ui.console import console, print_fail, print_info, print_ok
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -387,3 +388,62 @@ def fleet_status() -> None:
             )
         console.print(table)
         console.print()
+
+
+@app.command("invite")
+def invite_satellite(
+    role: str = typer.Option(
+        "storage",
+        help="Role the new satellite will offer (storage, compute, both).",
+    ),
+    label: Optional[str] = typer.Option(
+        None,
+        help="Optional human-readable label to pre-fill on the new satellite.",
+    ),
+    repo_ref: str = typer.Option(
+        "main",
+        "--repo-ref",
+        help="Git ref / branch / tag to install satellite_storage from.",
+    ),
+) -> None:
+    """Print a copyable one-liner to install + register a new satellite.
+
+    Mirrors ``kubeadm token create --print-join-command``: run on the
+    primary, paste the printed line on the new satellite. The new satellite
+    needs only Tailscale (same tailnet), Python 3.13+, and pipx.
+    """
+    primary_ip = get_tailscale_ip()
+    if primary_ip is None:
+        print_fail("Couldn't determine this primary's Tailscale IP.")
+        console.print(
+            "    Make sure Tailscale is up on this machine: "
+            "[bold]tailscale up[/bold]."
+        )
+        raise typer.Exit(1)
+
+    pipx_target = (
+        f"'git+https://github.com/Jimmy6929/Molebie_AI.git@{repo_ref}"
+        f"#subdirectory=satellite_storage'"
+    )
+    install_cmd = (
+        f"pipx install {pipx_target} \\\n"
+        f"    && molebie-satellite install --primary {primary_ip} --role {role}"
+    )
+    if label:
+        install_cmd += f" --label {label!r}"
+
+    console.print()
+    print_info("Copy this onto your new satellite machine:")
+    console.print()
+    rule = "─" * 72
+    console.print(f"  {rule}")
+    console.print(f"  {install_cmd}")
+    console.print(f"  {rule}")
+    console.print()
+    print_ok(
+        "Requirements on the satellite machine:\n"
+        "    • Tailscale installed + signed in to the same tailnet\n"
+        "    • Python 3.13+\n"
+        "    • pipx (install with: [bold]python3 -m pip install --user pipx "
+        "&& python3 -m pipx ensurepath[/bold])"
+    )

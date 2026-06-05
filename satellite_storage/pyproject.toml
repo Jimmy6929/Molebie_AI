@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "molebie-satellite"
+version = "0.1.0"
+description = "Standalone satellite-side blob storage service for Molebie AI fleets. Install on a second machine to extend a Molebie primary with content-addressable storage."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Molebie AI" }]
+keywords = ["molebie", "satellite", "storage", "fleet", "tailscale", "self-hosted"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Distributed Computing",
+]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.5.0",
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+molebie-satellite = "satellite_storage.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/Jimmy6929/Molebie_AI"
+Repository = "https://github.com/Jimmy6929/Molebie_AI"
+
+[tool.setuptools]
+# pyproject.toml lives INSIDE the package directory (`satellite_storage/`),
+# so we point setuptools at the contents of this dir and tell it those
+# files belong to the `satellite_storage` package (and its subpackages).
+# Without this, `pip install -e .` from inside `satellite_storage/` would
+# look for `satellite_storage/satellite_storage/__init__.py` and fail to
+# import the package — caught by a real pipx-style smoke test.
+include-package-data = true
+packages = [
+    "satellite_storage",
+    "satellite_storage.cli",
+    "satellite_storage.routes",
+    "satellite_storage.middleware",
+    "satellite_storage.services",
+]
+package-dir = { "satellite_storage" = "." }
+
+[tool.setuptools.package-data]
+satellite_storage = ["templates/*"]

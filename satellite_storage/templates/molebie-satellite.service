@@ -1,0 +1,17 @@
+[Unit]
+Description=Molebie AI satellite blob service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__SATELLITE_BIN__ serve
+Environment=MOLEBIE_STORAGE_DATA_DIR=__DATA_DIR__
+WorkingDirectory=__DATA_DIR__
+StandardOutput=append:__LOG_DIR__/satellite-stdout.log
+StandardError=append:__LOG_DIR__/satellite-stderr.log
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
