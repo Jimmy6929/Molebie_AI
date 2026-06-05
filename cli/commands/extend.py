@@ -127,8 +127,8 @@ def list_satellites() -> None:
     satellites = body.get("satellites") or []
     if not satellites:
         print_info(
-            "No satellites registered yet. Run [bold]molebie-ai join "
-            "<primary>[/bold] on a satellite to add one."
+            "No satellites registered yet. Run [bold]molebie-ai extend "
+            "invite[/bold] for a one-command setup to add one."
         )
         return
 
@@ -346,8 +346,8 @@ def fleet_status() -> None:
 
     if not satellites:
         print_info(
-            "Fleet is empty. Run [bold]molebie-ai join <primary>[/bold] on a "
-            "second machine to begin."
+            "Fleet is empty. Run [bold]molebie-ai extend invite[/bold] for a "
+            "one-command setup to add a second machine."
         )
         return
 

@@ -11,7 +11,6 @@ from cli.commands import (
     extend,
     feature,
     install,
-    join,
     model_cmd,
     monitor,
     run,
@@ -31,7 +30,6 @@ app.command(name="run", help="Start all configured services")(run.run)
 app.command(name="doctor", help="Diagnose environment and setup")(doctor.doctor)
 app.command(name="status", help="Show current config and service state")(status.status)
 app.command(name="monitor", help="Live terminal dashboard (Ctrl-C to quit)")(monitor.monitor)
-app.command(name="join", help="Join an existing Molebie primary as a satellite")(join.join)
 
 # Sub-apps
 app.add_typer(config_cmd.app, name="config", help="View and manage configuration")

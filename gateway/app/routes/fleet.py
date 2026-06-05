@@ -52,7 +52,7 @@ class SatelliteRegistration(BaseModel):
     """Request body for ``POST /fleet/satellites/register``.
 
     Field shape mirrors ``cli/models/config.py:SatelliteNode`` so the
-    future ``molebie-ai join`` command's payload serializes cleanly.
+    satellite-side ``molebie-satellite`` register payload serializes cleanly.
     """
 
     host: str = Field(..., min_length=1, description="Tailscale hostname or IP of this satellite")

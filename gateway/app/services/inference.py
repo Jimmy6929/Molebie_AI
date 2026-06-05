@@ -334,8 +334,8 @@ class InferenceService:
         self.api_key = settings.inference_api_key or ""
 
         # Plan B: backend pool + selector. Pools start with the local backend
-        # for each tier (if configured). Future `molebie-ai join --role compute`
-        # appends satellites — same selector, no further refactor.
+        # for each tier (if configured). A future slice appends compute
+        # satellites (role=compute/both) — same selector, no further refactor.
         self.selector = self._build_selector()
 
     def _build_selector(self) -> BackendSelector:

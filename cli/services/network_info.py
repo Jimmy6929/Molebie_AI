@@ -56,8 +56,8 @@ def get_tailscale_ip() -> str | None:
 class TailscaleWhoamiInfo:
     """Identity of the locally-authenticated Tailscale user.
 
-    Used by ``molebie-ai join`` to attach the operator's identity to the
-    satellite-registration request the satellite sends to the primary.
+    Used to attach the operator's identity to fleet requests (e.g. the
+    ``molebie-ai extend`` commands) sent to the primary over Tailscale.
     """
 
     user_login: str          # e.g., "jimmy@github" — the LoginName field
