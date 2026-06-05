@@ -25,6 +25,7 @@ inventory response — who registered a satellite belongs in
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -39,9 +40,26 @@ from app.middleware.tailscale_identity import (
 from app.services import audit
 from app.services.database import get_database_service
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/fleet", tags=["Fleet"])
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _reload_inference_pool() -> None:
+    """Rebuild the inference selector so compute-fleet changes take effect.
+
+    Best-effort: a failure here must never break the register/remove response.
+    The reload is a synchronous sqlite read + build-and-swap; cheap for the
+    handful of satellites a single-user fleet has.
+    """
+    try:
+        from app.services.inference import get_inference_service
+
+        get_inference_service().reload_backends()
+    except Exception as exc:  # noqa: BLE001 — reload must not fail the request
+        logger.warning("failed to reload inference pool after fleet change: %s", exc)
 _AUDIT_DEFAULT_LIMIT = 100
 _AUDIT_MAX_LIMIT = 500
 
@@ -217,6 +235,11 @@ async def register_satellite(
             target=payload.host,
             metadata={"role": payload.role, "from_ip": identity.peer_ip},
         )
+
+    # Compute satellites change the inference pool — rebuild the selector so
+    # the new backend starts receiving traffic without a gateway restart.
+    if payload.role in ("compute", "both"):
+        _reload_inference_pool()
 
     rows = await conn.execute_fetchall(
         "SELECT id, host, role, status, label, capabilities_json, "
@@ -422,6 +445,8 @@ async def remove_satellite(
         data_dir = getattr(get_settings(), "data_dir", "data")
         drainer = StorageDrainer(LocalStorageService(data_dir), identity, data_dir)
         result = drainer.force_remove(node_id)
+        # The removed node may have been a compute backend — drop it from the pool.
+        _reload_inference_pool()
         return {
             "node_id": result.node_id,
             "removed": True,
@@ -461,6 +486,8 @@ async def remove_satellite(
         ),
     )
     await conn.commit()
+    # The removed node may have been a compute backend — drop it from the pool.
+    _reload_inference_pool()
     return {
         "node_id": node_id,
         "removed": True,

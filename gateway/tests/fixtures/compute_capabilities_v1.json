@@ -1,0 +1,10 @@
+{
+  "compute": {
+    "port": 11434,
+    "api_prefix": "/v1",
+    "tiers": {
+      "instant": {"model": "llama3.2:3b"},
+      "thinking": {"model": "qwen2.5:14b"}
+    }
+  }
+}
