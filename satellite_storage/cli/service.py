@@ -36,6 +36,23 @@ from satellite_storage.cli._service_base import (
     render_template,
 )
 
+# Public API. Names from _service_base are listed so static analyzers
+# (CodeQL, ruff, pyflakes) recognise them as re-exports rather than unused
+# imports — and so this module's surface area is self-documenting.
+__all__ = [
+    "SATELLITE_SERVICE_LABEL",
+    "ServiceConfig",
+    "ServiceInstallError",
+    "render_template",
+    "PlatformNotSupportedError",
+    "find_satellite_binary",
+    "default_data_dir",
+    "default_log_dir",
+    "install_service",
+    "uninstall_service",
+    "is_service_installed",
+]
+
 
 class PlatformNotSupportedError(Exception):
     """Raised when sys.platform isn't one of darwin/linux*/win32."""
