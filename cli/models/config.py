@@ -114,8 +114,12 @@ class MolebieConfig(BaseModel):
     )
 
     # Fleet (Plan B): satellites attached to this primary over Tailscale.
-    # Empty on every fresh install; populated by `molebie-ai join` on satellites
-    # registering with this primary. Single-machine installs keep this empty.
+    # LEGACY / READ-NOWHERE: this field is no longer written by any command — the
+    # `molebie-ai join` CLI that populated it was removed (satellites now register
+    # via the standalone `molebie-satellite` package, and the gateway's
+    # `fleet_satellites` table is the source of truth). The field is retained only
+    # so older on-disk configs continue to load cleanly via `_migrate_v3_to_v4`.
+    # Nothing in production reads it. Safe to delete in a future migration slice.
     satellites: list[SatelliteNode] = Field(default_factory=list)
 
     @model_validator(mode="after")

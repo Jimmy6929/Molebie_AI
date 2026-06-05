@@ -136,7 +136,8 @@ def _ask_setup_type(config: MolebieConfig) -> None:
     print_step_header(2, 8, "Deployment Layout")
     console.print(
         "  [dim]Molebie AI installs as a primary node — everything runs here. "
-        "To add capacity later, run [bold]molebie-ai join[/bold] on another machine.[/dim]"
+        "To add capacity later, run [bold]molebie-ai extend invite[/bold] for a "
+        "one-command setup to paste on another machine.[/dim]"
     )
     console.print()
     if not ask_confirm(
