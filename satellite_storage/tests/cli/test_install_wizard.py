@@ -1,4 +1,4 @@
-"""Tests for ``molebie-satellite install`` — the 6-phase wizard."""
+"""Tests for ``molebie-satellite install`` — the 5-phase wizard."""
 
 from __future__ import annotations
 
@@ -35,12 +35,18 @@ def good_identity(monkeypatch):
 
 @pytest.fixture
 def primary_reachable(monkeypatch):
-    """Make /health probes return 200 from the primary, and the register POST 200."""
+    """Make /health probes return 200 from the primary, and the register POST 200.
+
+    Records every GET URL the wizard issues so tests can assert it never calls
+    the loopback-only ``/fleet/inventory`` from the satellite (which would 403).
+    Returns the list of recorded GET URLs.
+    """
+    get_urls: list[str] = []
+
     def _get(url, **kwargs):
+        get_urls.append(url)
         if "/health" in url:
             return _FakeResp(200)
-        if "/fleet/inventory" in url:
-            return _FakeResp(200, _json={"satellites": [{"host": "100.64.0.5"}]})
         return _FakeResp(404, text="not configured")
 
     def _post(url, **kwargs):
@@ -50,6 +56,7 @@ def primary_reachable(monkeypatch):
 
     monkeypatch.setattr(httpx, "get", _get)
     monkeypatch.setattr(httpx, "post", _post)
+    return get_urls
 
 
 class TestInstallWizardForeground:
@@ -98,6 +105,29 @@ class TestInstallWizardServiceMode:
         )
 
         assert installed[0] is True
+
+    def test_wizard_never_calls_loopback_inventory(
+        self, good_identity, primary_reachable, monkeypatch, tmp_path,
+    ):
+        """Regression: the wizard must NOT GET /fleet/inventory from the satellite.
+
+        That endpoint is loopback-only on the primary, so a satellite calling it
+        over Tailscale always 403s — which used to surface as a scary ✗ on an
+        otherwise-successful install. Registration (the POST) is the terminal
+        confirmation; verification is the operator's job via ``extend list``.
+        """
+        monkeypatch.setattr(install_mod, "install_service", lambda cfg: f"{tmp_path}/unit.plist")
+        monkeypatch.setattr(install_mod, "find_satellite_binary", lambda: Path("/usr/bin/molebie-satellite"))
+        monkeypatch.setattr(install_mod, "_wait_for_health", lambda *a, **k: True)
+
+        install_mod.install_command(
+            primary="100.64.0.1", port=8000, role="storage",
+            label="nas", data_dir=tmp_path / "data",
+            foreground=False, yes=True,
+        )
+
+        # primary_reachable returns the list of GET URLs the wizard issued.
+        assert not any("/fleet/inventory" in url for url in primary_reachable)
 
 
 class TestInstallWizardRefusals:
