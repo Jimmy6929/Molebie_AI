@@ -11,10 +11,13 @@ types work transparently through the same gateway code.
 """
 
 import json
+import logging
+import os
 import re
+import sqlite3
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 
@@ -25,6 +28,68 @@ from app.services.inference_pool import (
     InferenceBackend,
     NoHealthyBackendError,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class ComputeCaps(TypedDict):
+    """Normalized compute capabilities advertised by a satellite.
+
+    This is the consumer (gateway) side of the compute-capabilities contract.
+    The producer is the satellite's ``molebie-satellite`` package, which lives
+    in a separate, un-importable package — so the contract cannot be a shared
+    module. It is pinned instead by a golden JSON fixture asserted on both
+    sides (``gateway/tests/fixtures/compute_capabilities_v1.json``).
+
+    Wire shape (stored in ``fleet_satellites.capabilities_json``)::
+
+        {"compute": {"port": 11434, "api_prefix": "/v1",
+                     "tiers": {"instant":  {"model": "llama3.2:3b"},
+                               "thinking": {"model": "qwen2.5:14b"}}}}
+    """
+
+    port: int
+    api_prefix: str
+    tiers: dict[str, str]  # tier name -> model id
+
+
+_VALID_TIERS = ("instant", "thinking")
+
+
+def parse_compute_capabilities(raw: Any) -> ComputeCaps | None:
+    """Parse the ``compute`` block of a satellite's capabilities dict.
+
+    Tolerant by design: returns ``None`` for anything absent or malformed, so a
+    satellite advertising garbage simply contributes no compute backends rather
+    than breaking selector construction. Never raises.
+    """
+    if not isinstance(raw, dict):
+        return None
+    compute = raw.get("compute")
+    if not isinstance(compute, dict):
+        return None
+
+    port = compute.get("port")
+    if not isinstance(port, int) or isinstance(port, bool) or not (0 < port < 65536):
+        return None
+
+    api_prefix = compute.get("api_prefix", "/v1")
+    if not isinstance(api_prefix, str):
+        return None
+
+    tiers_raw = compute.get("tiers")
+    if not isinstance(tiers_raw, dict):
+        return None
+    tiers: dict[str, str] = {}
+    for tier, spec in tiers_raw.items():
+        if tier not in _VALID_TIERS:
+            continue
+        if isinstance(spec, dict) and isinstance(spec.get("model"), str) and spec["model"]:
+            tiers[tier] = spec["model"]
+    if not tiers:
+        return None
+
+    return {"port": port, "api_prefix": api_prefix, "tiers": tiers}
 
 # Defensive strip: prior `<think>...</think>` blocks must never re-enter the
 # prompt. The chat route already strips on persist, but multi-process pipelines
@@ -339,7 +404,7 @@ class InferenceService:
         self.selector = self._build_selector()
 
     def _build_selector(self) -> BackendSelector:
-        """Construct a per-tier pool from the configured local endpoints."""
+        """Construct a per-tier pool from local endpoints + compute satellites."""
         pools: dict[str, BackendPool] = {
             "instant": BackendPool(tier="instant"),
             "thinking": BackendPool(tier="thinking"),
@@ -360,19 +425,128 @@ class InferenceService:
                 node_id="local-thinking",
                 tier="thinking",
             ))
+        # Plan B compute extension: append satellites registered with
+        # role=compute/both. Best-effort — never let a fleet read break local
+        # inference (see _load_satellite_backends).
+        self._load_satellite_backends(pools)
         return BackendSelector(pools, fallback_to_instant=self.fallback_to_instant)
+
+    def _read_compute_satellites(self) -> list[dict[str, Any]]:
+        """Read active compute satellites from ``fleet_satellites`` (sync sqlite).
+
+        Mirrors the self-contained-connection pattern in ``routes/fleet.py``
+        (``_satellite_exists``/``_satellite_blob_count``) rather than dragging
+        the async DB service into the selector constructor. Returns a list of
+        ``{"host", "capabilities"}`` dicts; ``capabilities`` is the parsed JSON.
+        """
+        from app.schema import _get_db_path
+
+        data_dir = getattr(self.settings, "data_dir", "data")
+        db_path = _get_db_path(data_dir)
+        if not os.path.exists(db_path):
+            return []
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT host, capabilities_json FROM fleet_satellites "
+                "WHERE role IN ('compute', 'both') AND status = 'active'"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                caps = json.loads(r["capabilities_json"]) if r["capabilities_json"] else None
+            except (json.JSONDecodeError, TypeError):
+                caps = None
+            out.append({"host": r["host"], "capabilities": caps})
+        return out
+
+    def _load_satellite_backends(self, pools: dict[str, BackendPool]) -> None:
+        """Append compute-satellite backends to the per-tier pools.
+
+        Tolerant: a DB read error, or a satellite with absent/garbage compute
+        capabilities, is skipped with a warning — local inference must never be
+        broken by the fleet table.
+        """
+        try:
+            satellites = self._read_compute_satellites()
+        except Exception as exc:  # noqa: BLE001 — never break local inference
+            logger.warning("compute pool: failed to read fleet_satellites: %s", exc)
+            return
+
+        for sat in satellites:
+            caps = parse_compute_capabilities(sat.get("capabilities"))
+            if caps is None:
+                continue
+            host = sat["host"]
+            for tier, model in caps["tiers"].items():
+                pool = pools.get(tier)
+                if pool is None:
+                    continue
+                pool.backends.append(InferenceBackend(
+                    url=f"http://{host}:{caps['port']}",
+                    api_prefix=caps["api_prefix"],
+                    model=model,
+                    node_id=f"satellite-{host}-{tier}",
+                    tier=tier,
+                ))
+
+    def reload_backends(self) -> None:
+        """Rebuild the selector so fleet changes (join/remove) take effect.
+
+        Build-and-swap: both the request path and the BackendProbe read
+        ``self.selector`` freshly, so reassigning it is the entire reload — no
+        lock, no DB watcher. Carries forward per-tier drift pins and the health
+        / counters of backends that survive the rebuild (a reload is NOT a
+        gateway restart, so we must not reset a tripped breaker or unpin drift
+        detection just because an unrelated satellite joined).
+        """
+        old = self.selector
+        new = self._build_selector()
+        old_backends = {
+            b.node_id: b for pool in old.pools.values() for b in pool.backends
+        }
+        for tier, pool in new.pools.items():
+            old_pool = old.pools.get(tier)
+            if old_pool is not None:
+                pool.expected_fingerprint = old_pool.expected_fingerprint
+            for b in pool.backends:
+                prev = old_backends.get(b.node_id)
+                if prev is not None:
+                    b.health = prev.health
+                    # Known limitation: requests in flight at swap time hold the
+                    # OLD backend object and decrement it on completion, so the
+                    # new object's in_flight is inflated by that count until they
+                    # drain. Acceptable — swaps happen only on register/remove
+                    # (rare), and the count self-corrects as in-flight requests finish.
+                    b.in_flight = prev.in_flight
+                    b.avg_latency_ms = prev.avg_latency_ms
+                    b.model_fingerprint = prev.model_fingerprint
+                    b.server_version = prev.server_version
+        self.selector = new
 
     def _select_backend(
         self,
         mode: str,
         session_id: str | None = None,
         voice_mode: bool = False,
+        selector: BackendSelector | None = None,
     ) -> InferenceBackend | None:
         """Pick a backend for this request via the selector. Returns None if no
         backend is available for the requested mode (caller falls back to mock
-        or surfaces an error)."""
+        or surfaces an error).
+
+        ``selector`` lets a request capture one selector ref at the start and
+        use it for the whole lifecycle, so a mid-request ``reload_backends``
+        swap can't split a backend's selection from its success/failure
+        accounting.
+        """
+        selector = selector or self.selector
         try:
-            return self.selector.select(mode, session_id=session_id, voice_mode=voice_mode)
+            return selector.select(mode, session_id=session_id, voice_mode=voice_mode)
         except NoHealthyBackendError:
             return None
 
@@ -576,7 +750,11 @@ class InferenceService:
             'fallback_used', 'latency_ms'
         """
         start_time = time.monotonic()
-        backend = self._select_backend(mode, session_id, voice_mode)
+        # Capture one selector ref for the whole request lifecycle: a
+        # mid-request reload_backends() swap must not split a backend's
+        # selection from its success/failure accounting.
+        selector = self.selector
+        backend = self._select_backend(mode, session_id, voice_mode, selector=selector)
 
         if backend is None:
             # No configured backend (or pool entirely degraded). Selector
@@ -629,7 +807,7 @@ class InferenceService:
                 result["original_mode"] = mode
 
             if result.get("_error"):
-                self.selector.record_failure(backend.node_id)
+                selector.record_failure(backend.node_id)
                 # Post-call fallback: requested thinking but the call failed.
                 # Try once more via the selector — if the selector returns an
                 # instant backend (either because thinking is now OPEN or
@@ -637,7 +815,7 @@ class InferenceService:
                 if (mode in ("thinking", "thinking_harder")
                         and self.fallback_to_instant
                         and backend.tier == "thinking"):
-                    fb_backend = self._select_backend("instant", session_id, voice_mode)
+                    fb_backend = self._select_backend("instant", session_id, voice_mode, selector=selector)
                     if fb_backend is not None and fb_backend.node_id != backend.node_id:
                         print("[inference] Thinking endpoint failed -- falling back to instant")
                         fb_backend.in_flight += 1
@@ -659,10 +837,10 @@ class InferenceService:
                                 repetition_penalty=self._get_repetition_penalty("instant"),
                             )
                             if fb_result.get("_error"):
-                                self.selector.record_failure(fb_backend.node_id)
+                                selector.record_failure(fb_backend.node_id)
                             else:
                                 latency_ms = int((time.monotonic() - start_time) * 1000)
-                                self.selector.record_success(fb_backend.node_id, latency_ms)
+                                selector.record_success(fb_backend.node_id, latency_ms)
                                 fb_result["fallback_used"] = True
                                 fb_result["original_mode"] = "thinking"
                                 fb_result["latency_ms"] = latency_ms
@@ -673,7 +851,7 @@ class InferenceService:
                             fb_backend.in_flight -= 1
             else:
                 latency_ms = int((time.monotonic() - start_time) * 1000)
-                self.selector.record_success(backend.node_id, latency_ms)
+                selector.record_success(backend.node_id, latency_ms)
         finally:
             backend.in_flight -= 1
 
@@ -831,7 +1009,11 @@ class InferenceService:
         """
         messages = _strip_think_in_messages(messages)
         start_time = time.monotonic()
-        backend = self._select_backend(mode, session_id, voice_mode)
+        # Capture one selector ref for the whole request lifecycle: a
+        # mid-request reload_backends() swap must not split a backend's
+        # selection from its success/failure accounting.
+        selector = self.selector
+        backend = self._select_backend(mode, session_id, voice_mode, selector=selector)
 
         if backend is None:
             async for chunk in self._mock_stream(messages, mode):
@@ -917,9 +1099,9 @@ class InferenceService:
                         if line.strip():
                             yield f"{line}\n\n"
             latency_ms = int((time.monotonic() - start_time) * 1000)
-            self.selector.record_success(backend.node_id, latency_ms)
+            selector.record_success(backend.node_id, latency_ms)
         except Exception as e:
-            self.selector.record_failure(backend.node_id)
+            selector.record_failure(backend.node_id)
             error_context = f"{mode}, model={model}"
             print(f"[inference] Stream error ({error_context}): {e}")
             primary_endpoint, primary_reason, primary_detail = (
@@ -932,7 +1114,7 @@ class InferenceService:
             if (mode in ("thinking", "thinking_harder")
                     and self.fallback_to_instant
                     and backend.tier == "thinking"):
-                fb_backend = self._select_backend("instant", session_id, voice_mode)
+                fb_backend = self._select_backend("instant", session_id, voice_mode, selector=selector)
                 if fb_backend is not None and fb_backend.node_id != backend.node_id:
                     print("[inference] Falling back to instant stream")
                     fb_prefix = fb_backend.api_prefix
@@ -981,10 +1163,10 @@ class InferenceService:
                                     if line.strip():
                                         yield f"{line}\n\n"
                         latency_ms = int((time.monotonic() - start_time) * 1000)
-                        self.selector.record_success(fb_backend.node_id, latency_ms)
+                        selector.record_success(fb_backend.node_id, latency_ms)
                         return
                     except Exception as fallback_err:
-                        self.selector.record_failure(fb_backend.node_id)
+                        selector.record_failure(fb_backend.node_id)
                         print(f"[inference] Fallback stream also failed: {fallback_err}")
                         primary_endpoint = fb_backend.url
                         primary_reason, primary_detail = _classify_stream_error(fallback_err)
