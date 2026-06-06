@@ -107,6 +107,25 @@ See [Configuration](docs/configuration.md) for the full command reference.
 | TTS | Kokoro FastAPI (Docker) |
 | Web Search | SearXNG (Docker) |
 
+## Code Tour (for reviewers)
+
+Short on time? These files show the most engineering depth:
+
+| Area | Where to look |
+|------|---------------|
+| **Answer verification / anti-hallucination** — Chain-of-Verification, LLM judge, SelfCheck consistency, citation enforcement | `gateway/app/services/verification.py`, `judge.py`, `selfcheck.py`, `consistency.py` |
+| **Hybrid RAG retrieval** — vector + BM25, cross-encoder rerank, neighbor expansion | `gateway/app/services/rag.py`, `reranker.py` |
+| **Distributed inference pooling** — multi-machine compute across satellites | `gateway/app/services/inference_pool.py` |
+| **Distributed storage reconciliation** — drain / move / reconcile across nodes | `gateway/app/services/storage_drainer.py`, `storage_reconciler.py` |
+| **Live vault sync** — Obsidian-style, SHA-256 hash-diffed incremental ingest | `gateway/app/services/vault_sync.py` |
+| **Storage satellite** — standalone packaged service | `satellite_storage/` |
+
+Reproduce the full CI gate locally with one command:
+
+```bash
+make verify   # ruff lint + pytest + pip-audit CVE scan — exactly what CI enforces
+```
+
 ## Security & Quality
 
 Every push and pull request runs through a layered security pipeline before it can reach `main`:

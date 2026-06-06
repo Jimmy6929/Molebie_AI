@@ -1,7 +1,7 @@
 # Molebie AI - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help quickstart dev dev-gateway dev-webapp test test-gateway lint format clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
+.PHONY: help quickstart dev dev-gateway dev-webapp test test-gateway lint format verify clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
 
 # Default target
 help:
@@ -23,6 +23,8 @@ help:
 	@echo ""
 	@echo "  make lint           Run linters on gateway code"
 	@echo "  make format         Format gateway code with black"
+	@echo ""
+	@echo "  make verify         Run the exact checks CI enforces (ruff + pytest + pip-audit)"
 	@echo ""
 	@echo "  make mlx-install      Install mlx-lm on GPU machine"
 	@echo "  make mlx-vlm-install  Install mlx-vlm on GPU machine"
@@ -150,6 +152,24 @@ format:
 	@echo "✨ Formatting gateway code..."
 	cd gateway && black app/ tests/
 	cd gateway && ruff check --fix app/ tests/
+
+# ──────────────────────────────────────────────────────────────
+# VERIFY (mirrors CI — run before opening a PR)
+# ──────────────────────────────────────────────────────────────
+
+# `verify` reproduces the three gating steps in .github/workflows/ci.yml exactly
+# (ruff → pytest → pip-audit). It deliberately does NOT reuse the `lint` target,
+# because `lint` also runs mypy, which CI does not gate on — so `make verify`
+# stays a true, 1:1 mirror of what CI will enforce on the PR.
+verify:
+	@echo "🔍 [1/3] Lint (ruff)..."
+	cd gateway && ruff check app/ tests/
+	@echo "🧪 [2/3] Tests (pytest)..."
+	cd gateway && pytest tests/ -v
+	@echo "🔒 [3/3] Dependency audit (pip-audit)..."
+	cd gateway && pip-audit -r requirements.txt --ignore-vuln PYSEC-2025-185
+	@echo ""
+	@echo "✅ verify passed — the same checks CI enforces on every PR."
 
 # ──────────────────────────────────────────────────────────────
 # DATABASE
