@@ -119,6 +119,7 @@ Short on time? These files show the most engineering depth:
 | **Distributed storage reconciliation** — drain / move / reconcile across nodes | `gateway/app/services/storage_drainer.py`, `storage_reconciler.py` |
 | **Live vault sync** — Obsidian-style, SHA-256 hash-diffed incremental ingest | `gateway/app/services/vault_sync.py` |
 | **Storage satellite** — standalone packaged service | `satellite_storage/` |
+| **AI engineering automation** — self-review loop, CI-watch & branch-hygiene, built as Claude Code commands + subagents + git/session hooks | `.claude/commands/`, `.claude/agents/`, `.claude/hooks/` (design docs: `.claude/CI-WATCHER.md`, `.claude/REVIEW-LOOP.md`, `.claude/BRANCH-MANAGER.md`) |
 
 Reproduce the full CI gate locally with one command:
 

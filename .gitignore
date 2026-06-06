@@ -58,7 +58,15 @@ tasks/
 # Generated CLI wrapper (created by install.sh)
 bin/
 
-# AI tools (private)
-.claude/
+# AI tools — most of .claude is private (local settings + runtime state),
+# but the automation system (commands, agents, hooks, design docs) is published
+# as a portfolio artifact. Ignore everything under .claude, then re-include those.
+.claude/*
+!.claude/commands/
+!.claude/agents/
+!.claude/hooks/
+!.claude/BRANCH-MANAGER.md
+!.claude/CI-WATCHER.md
+!.claude/REVIEW-LOOP.md
 .cursor/
 CLAUDE.md
