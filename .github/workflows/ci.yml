@@ -68,9 +68,12 @@ jobs:
           pip install pytest pytest-asyncio -q
           # Assert collection counts before running: a green-but-empty run
           # (import error, renamed dir, pattern drift) must fail loudly.
+          # -o addopts= neutralizes ini addopts (gateway sets -v, which cancels
+          # -q and drops the '::' nodeid lines); || true keeps bash -e from
+          # killing the assignment when grep matches nothing.
           run_tree() {
             local tree=$1 min=$2 n
-            n=$(pytest "$tree" --collect-only -q | grep -c '::')
+            n=$(pytest "$tree" --collect-only -q -o addopts= 2>/dev/null | grep -c '::' || true)
             if [ "$n" -lt "$min" ]; then
               echo "::error::$tree collected only $n tests (expected >= $min)"
               exit 1
