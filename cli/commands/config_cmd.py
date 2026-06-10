@@ -8,7 +8,7 @@ import typer
 from rich.syntax import Syntax
 from rich.table import Table
 
-from cli.models.config import InferenceBackend, ModelProfile
+from cli.models.config import ModelProfile
 from cli.services import config_manager
 from cli.services.config_manager import get_project_root
 from cli.services.env_generator import (
@@ -95,7 +95,7 @@ def env_init(
     env_path = get_project_root() / ".env.local"
 
     if env_path.exists() and not force:
-        print_warn(f".env.local already exists. Use --force to overwrite.")
+        print_warn(".env.local already exists. Use --force to overwrite.")
         raise typer.Exit(0)
 
     init_env_local(force=True)
@@ -191,7 +191,7 @@ def set_profile(
     profile: str = typer.Argument(help="Model profile: light (4B+4B) or balanced (9B+4B)"),
 ) -> None:
     """Switch model profile (light or balanced). Updates config and .env.local."""
-    from cli.services.backend_setup import get_models_for_profile, MLX_MODELS, OLLAMA_MODELS
+    from cli.services.backend_setup import get_models_for_profile, MLX_MODELS
 
     profile = profile.lower()
     valid = list(MLX_MODELS.keys())

@@ -64,7 +64,7 @@ def _ensure_ready() -> MolebieConfig:
     if needs_save:
         config_manager.ensure_config_dir()
         config_manager.save_config(config)
-        print_ok(f"Config saved")
+        print_ok("Config saved")
 
     # --- 2. .env.local ---
     env_path = root / ".env.local"

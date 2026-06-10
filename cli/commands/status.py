@@ -6,7 +6,7 @@ import httpx
 from rich.panel import Panel
 from rich.table import Table
 
-from cli.models.config import InferenceBackend, MolebieConfig, SetupType
+from cli.models.config import InferenceBackend, SetupType
 from cli.services import config_manager
 from cli.services.network_info import get_network_urls
 from cli.ui.console import console

@@ -10,7 +10,7 @@ import typer
 from cli.models.config import InferenceBackend, MolebieConfig
 from cli.services import backend_setup, config_manager, prerequisite_checker
 from cli.services.env_generator import init_env_local
-from cli.ui.console import console, make_status_table, print_fail, print_info, print_ok, print_warn
+from cli.ui.console import console, print_fail, print_info, print_ok, print_warn
 
 
 def _check_file(path: Path, label: str) -> bool:

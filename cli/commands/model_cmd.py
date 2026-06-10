@@ -7,7 +7,6 @@ import shutil
 import signal
 import subprocess
 import sys
-from pathlib import Path
 
 import typer
 from rich.table import Table
