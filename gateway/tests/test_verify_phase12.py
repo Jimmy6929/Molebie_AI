@@ -6,10 +6,10 @@ the hallucination-mitigation work. Run before moving to Phase 3 to
 confirm the code actually behaves as the changelog claims.
 
 Usage:
-    .venv/bin/python -m gateway.tests.verify_phase12
+    .venv/bin/python -m gateway.tests.test_verify_phase12
 
-Or, with pytest:
-    .venv/bin/pytest gateway/tests/verify_phase12.py -v
+Or, with pytest (also collected automatically by ``pytest tests/``):
+    .venv/bin/pytest gateway/tests/test_verify_phase12.py -v
 
 Pure-function tests (no network, no models): always run.
 Live model loads (Qwen3-Embedding, Qwen3-Reranker): gated behind
