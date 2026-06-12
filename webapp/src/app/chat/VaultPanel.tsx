@@ -7,6 +7,7 @@ import {
   disconnectVault,
   listVaults,
   triggerVaultSync,
+  updateVault,
   type SyncVaultResponse,
   type VaultInfo,
 } from "@/lib/gateway";
@@ -57,6 +58,9 @@ export function VaultPanel({
   const [label, setLabel] = useState("");
   const [rootPath, setRootPath] = useState("");
   const [indexAttachments, setIndexAttachments] = useState(true);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editPath, setEditPath] = useState("");
 
   const loadVaults = useCallback(async (silent = false) => {
     if (!token) return;
@@ -124,7 +128,47 @@ export function VaultPanel({
       await loadVaults();
       onDocumentsChanged();
     } catch (err) {
-      onToast(`Sync failed: ${err instanceof Error ? err.message : "unknown"}`);
+      const msg = err instanceof Error ? err.message : "unknown";
+      if (msg.includes("API error 400") && msg.includes("no longer exists")) {
+        // Vault folder moved/renamed — open the edit form instead of
+        // dead-ending on a raw 400 toast.
+        onToast(`"${v.label}": vault folder is missing — update its path`);
+        openEdit(v);
+      } else {
+        onToast(`Sync failed: ${msg}`);
+      }
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function openEdit(v: VaultInfo) {
+    setEditId(v.id);
+    setEditLabel(v.label);
+    setEditPath(v.root_path);
+  }
+
+  async function handleUpdate(v: VaultInfo) {
+    if (!token) return;
+    const trimmedLabel = editLabel.trim();
+    const trimmedPath = editPath.trim();
+    if (!trimmedLabel || !trimmedPath) {
+      onToast("Vault label and path are required");
+      return;
+    }
+    setBusyId(v.id);
+    try {
+      const payload: { label?: string; root_path?: string } = {};
+      if (trimmedLabel !== v.label) payload.label = trimmedLabel;
+      if (trimmedPath !== v.root_path) payload.root_path = trimmedPath;
+      if (Object.keys(payload).length > 0) {
+        await updateVault(token, v.id, payload);
+        onToast(`"${trimmedLabel}" updated — sync to reconcile`);
+      }
+      setEditId(null);
+      await loadVaults();
+    } catch (err) {
+      onToast(`Update failed: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
       setBusyId(null);
     }
@@ -210,45 +254,92 @@ export function VaultPanel({
         <div className="space-y-1.5">
           {vaults.map((v) => {
             const isBusy = busyId === v.id;
+            const pathMissing = v.status === "path_missing";
             return (
-              <div
-                key={v.id}
-                className="flex items-center justify-between gap-2 group"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[#33ccff]" />
-                    <span className="text-[11px] text-[#ccc] truncate font-medium">
-                      {v.label}
-                    </span>
-                    <span className="text-[9px] text-[#666] shrink-0">
-                      {v.doc_count} doc{v.doc_count === 1 ? "" : "s"}
-                    </span>
+              <div key={v.id}>
+                <div className="flex items-center justify-between gap-2 group">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          pathMissing ? "bg-[#ffaa00]" : "bg-[#33ccff]"
+                        }`}
+                      />
+                      <span className="text-[11px] text-[#ccc] truncate font-medium">
+                        {v.label}
+                      </span>
+                      <span className="text-[9px] text-[#666] shrink-0">
+                        {v.doc_count} doc{v.doc_count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="text-[9px] text-[#666] truncate font-mono ml-3">
+                      {v.root_path}
+                    </div>
+                    {pathMissing && (
+                      <div className="text-[9px] text-[#ffaa00] ml-3">
+                        path missing — folder moved? Edit to re-point.
+                      </div>
+                    )}
+                    <div className="text-[9px] text-[#888] ml-3">
+                      {formatLastSync(v.last_sync_at)}
+                    </div>
                   </div>
-                  <div className="text-[9px] text-[#666] truncate font-mono ml-3">
-                    {v.root_path}
-                  </div>
-                  <div className="text-[9px] text-[#888] ml-3">
-                    {formatLastSync(v.last_sync_at)}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => handleSync(v)}
+                      disabled={isBusy}
+                      className="text-[10px] px-2 py-0.5 rounded bg-[#00ff41]/10 text-[#00ff41] hover:bg-[#00ff41]/20 transition-all disabled:opacity-40"
+                    >
+                      {isBusy ? "Syncing..." : "Sync"}
+                    </button>
+                    <button
+                      onClick={() => (editId === v.id ? setEditId(null) : openEdit(v))}
+                      disabled={isBusy}
+                      className={`text-[10px] px-1.5 py-0.5 rounded transition-all disabled:opacity-40 ${
+                        pathMissing
+                          ? "bg-[#ffaa00]/15 text-[#ffcc66] hover:bg-[#ffaa00]/25"
+                          : "bg-white/[0.04] text-[#888] hover:bg-white/[0.08] hover:text-[#ccc]"
+                      }`}
+                      title="Edit vault label or path"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      onClick={() => handleDisconnect(v)}
+                      disabled={isBusy}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-[#888] hover:bg-[#ff4444]/15 hover:text-[#ff6666] transition-all disabled:opacity-40"
+                      title="Disconnect vault"
+                    >
+                      ✕
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => handleSync(v)}
-                    disabled={isBusy}
-                    className="text-[10px] px-2 py-0.5 rounded bg-[#00ff41]/10 text-[#00ff41] hover:bg-[#00ff41]/20 transition-all disabled:opacity-40"
-                  >
-                    {isBusy ? "Syncing..." : "Sync"}
-                  </button>
-                  <button
-                    onClick={() => handleDisconnect(v)}
-                    disabled={isBusy}
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-[#888] hover:bg-[#ff4444]/15 hover:text-[#ff6666] transition-all disabled:opacity-40"
-                    title="Disconnect vault"
-                  >
-                    ✕
-                  </button>
-                </div>
+                {editId === v.id && (
+                  <div className="mt-1.5 ml-3 space-y-1.5 p-2 rounded-lg bg-white/[0.03]">
+                    <input
+                      type="text"
+                      value={editLabel}
+                      onChange={(e) => setEditLabel(e.target.value)}
+                      placeholder="Vault label"
+                      className="w-full text-[11px] px-2 py-1 rounded bg-white/[0.05] text-[#ccc] placeholder:text-[#555] outline-none border border-white/[0.06] focus:border-[#33ccff]/40"
+                    />
+                    <input
+                      type="text"
+                      value={editPath}
+                      onChange={(e) => setEditPath(e.target.value)}
+                      placeholder="Absolute path to the vault folder"
+                      className="w-full text-[11px] px-2 py-1 rounded bg-white/[0.05] text-[#ccc] placeholder:text-[#555] outline-none border border-white/[0.06] focus:border-[#33ccff]/40 font-mono"
+                      spellCheck={false}
+                    />
+                    <button
+                      onClick={() => handleUpdate(v)}
+                      disabled={isBusy || !editLabel.trim() || !editPath.trim()}
+                      className="w-full text-[10px] px-2 py-1 rounded bg-[#33ccff]/20 text-[#66ddff] hover:bg-[#33ccff]/30 transition-all disabled:opacity-40"
+                    >
+                      {isBusy ? "Saving..." : "Save changes"}
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

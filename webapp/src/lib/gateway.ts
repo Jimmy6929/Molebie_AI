@@ -835,6 +835,7 @@ export interface VaultInfo {
   last_sync_at: string | null;
   index_attachments: boolean;
   doc_count: number;
+  status: "ok" | "path_missing";
 }
 
 export interface VaultListResponse {
@@ -888,6 +889,18 @@ export async function triggerVaultSync(
     `/documents/vault/${encodeURIComponent(vaultId)}/sync`,
     token,
     { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export async function updateVault(
+  token: string,
+  vaultId: string,
+  payload: { label?: string; root_path?: string },
+): Promise<VaultInfo> {
+  return apiCall<VaultInfo>(
+    `/documents/vault/${encodeURIComponent(vaultId)}`,
+    token,
+    { method: "PATCH", body: JSON.stringify(payload) },
   );
 }
 

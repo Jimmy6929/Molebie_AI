@@ -1034,6 +1034,40 @@ class DatabaseService:
         )
         await db.commit()
 
+    async def update_vault_source(
+        self,
+        vault_id: str,
+        user_id: str,
+        *,
+        label: str | None = None,
+        root_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update label and/or root_path. Returns the fresh row, or None when
+        the vault doesn't exist / belongs to another user. Propagates
+        sqlite3.IntegrityError if root_path collides with the unique
+        (user_id, root_path) index — callers map that to 409."""
+        sets: list[str] = []
+        params: list[Any] = []
+        if label is not None:
+            sets.append("label = ?")
+            params.append(label)
+        if root_path is not None:
+            sets.append("root_path = ?")
+            params.append(root_path)
+        if not sets:
+            return await self.get_vault_source(vault_id, user_id)
+
+        db = await self._get_conn()
+        cursor = await db.execute(
+            f"UPDATE vault_sources SET {', '.join(sets)} "
+            "WHERE id = ? AND user_id = ?",
+            (*params, vault_id, user_id),
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            return None
+        return await self.get_vault_source(vault_id, user_id)
+
     async def delete_vault_source(self, vault_id: str, user_id: str) -> int:
         """Delete a vault source AND every document it owns (chunks cascade
         via document_chunks FK; vec rows cleaned manually since vec0 has no
