@@ -58,21 +58,27 @@ export function VaultPanel({
   const [rootPath, setRootPath] = useState("");
   const [indexAttachments, setIndexAttachments] = useState(true);
 
-  const loadVaults = useCallback(async () => {
+  const loadVaults = useCallback(async (silent = false) => {
     if (!token) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const res = await listVaults(token);
       setVaults(res.vaults);
     } catch (err) {
-      onToast(`Failed to load vaults: ${err instanceof Error ? err.message : "unknown"}`);
+      if (!silent) {
+        onToast(`Failed to load vaults: ${err instanceof Error ? err.message : "unknown"}`);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token, onToast]);
 
   useEffect(() => {
     void loadVaults();
+    // Background auto-sync updates last_sync_at server-side; refresh silently
+    // so "synced Xm ago" stays honest without the user clicking anything.
+    const id = setInterval(() => void loadVaults(true), 60_000);
+    return () => clearInterval(id);
   }, [loadVaults]);
 
   async function handleConnect() {

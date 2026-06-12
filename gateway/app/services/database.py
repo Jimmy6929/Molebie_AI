@@ -997,6 +997,15 @@ class DatabaseService:
         )
         return [_row_to_dict(r) for r in rows]
 
+    async def list_all_vault_sources(self) -> list[dict[str, Any]]:
+        """Every vault source across all users — for the auto-sync scheduler.
+        Rows carry user_id, so the caller scopes follow-up queries itself."""
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM vault_sources ORDER BY created_at ASC"
+        )
+        return [_row_to_dict(r) for r in rows]
+
     async def get_vault_source(
         self, vault_id: str, user_id: str
     ) -> dict[str, Any] | None:

@@ -131,6 +131,7 @@ async def lifespan(app: FastAPI):
     backend_probe = None
     storage_probe = None
     storage_scheduler = None
+    vault_auto_sync = None
     try:
         from app.services.system_probe import get_system_probe
         system_probe = get_system_probe()
@@ -157,6 +158,12 @@ async def lifespan(app: FastAPI):
         await storage_scheduler.start(settings.storage_auto_migrate_interval_sec)
     except Exception as exc:
         print(f"[fleet] Storage migration scheduler unavailable: {exc}")
+    try:
+        from app.services.vault_auto_sync import get_vault_auto_sync_scheduler
+        vault_auto_sync = get_vault_auto_sync_scheduler()
+        await vault_auto_sync.start(settings.vault_auto_sync_interval_sec)
+    except Exception as exc:
+        print(f"[vault] Auto-sync scheduler unavailable: {exc}")
 
     # Resume any folder-ingest jobs that were interrupted by a restart.
     if getattr(settings, "folder_ingest_enabled", False):
@@ -186,6 +193,8 @@ async def lifespan(app: FastAPI):
             await storage_probe.stop()
         if storage_scheduler is not None:
             await storage_scheduler.stop()
+        if vault_auto_sync is not None:
+            await vault_auto_sync.stop()
         print(f"Shutting down {settings.app_name}")
 
 
