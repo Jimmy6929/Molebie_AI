@@ -327,6 +327,17 @@ class Settings(BaseSettings):
     # parents don't fit.
     rag_neighbor_expansion_enabled: bool = True
 
+    # One-hop wikilink expansion: after reranking, resolve [[links]] found in
+    # the top chunks' metadata to their target notes and append those notes'
+    # leading chunks as supplementary context. Appended strictly AFTER the
+    # U-shaped primary results, so linked chunks only ever consume leftover
+    # char budget and can never displace a directly-retrieved chunk.
+    # Default OFF (dark launch): flip after comparing
+    # tests/eval/run_rag_only.py with the flag on vs off.
+    rag_wikilink_expansion_enabled: bool = False
+    rag_wikilink_max_targets: int = 5        # distinct linked notes per query
+    rag_wikilink_chunks_per_target: int = 2  # leading chunks pulled per note
+
     # ── RAG Metrics ───────────────────────────────────────────
     rag_metrics_enabled: bool = True
     rag_metrics_log_console: bool = True

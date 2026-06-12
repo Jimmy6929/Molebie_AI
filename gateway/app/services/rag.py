@@ -160,6 +160,85 @@ async def _expand_with_neighbors(
     return groups
 
 
+async def _expand_with_wikilinks(
+    parents: list[dict[str, Any]],
+    existing_doc_ids: set[str],
+    db: DatabaseService,
+    user_id: str,
+    settings: Settings,
+) -> list[dict[str, Any]]:
+    """One-hop wikilink expansion: resolve ``[[links]]`` from the top-scored
+    parent chunks to their target notes and return those notes' leading
+    chunks as supplementary context.
+
+    Wikilink lists in chunk metadata are document-level (every chunk of a
+    note carries the note's full link list), so targets are deduped across
+    chunks and capped at ``rag_wikilink_max_targets`` — a hub note can't
+    flood the budget. Targets are collected in parent-score order so the
+    most relevant chunk's links win the cap.
+
+    Returned chunks are tagged ``is_parent=False, parent_score=0.0`` —
+    format_context's budget logic treats them as droppable-whole groups, and
+    the caller appends them AFTER the U-shaped primary results, so they only
+    ever consume leftover char budget.
+    """
+    max_targets = settings.rag_wikilink_max_targets
+    per_target = settings.rag_wikilink_chunks_per_target
+    if max_targets <= 0 or per_target <= 0:
+        return []
+
+    # Prefer resolving into the vault most of the parents came from.
+    vault_ids = [c.get("vault_source_id") for c in parents if c.get("vault_source_id")]
+    prefer_vault = max(set(vault_ids), key=vault_ids.count) if vault_ids else None
+
+    targets: list[str] = []
+    seen_targets: set[str] = set()
+    for chunk in sorted(parents, key=_chunk_score, reverse=True):
+        meta = chunk.get("metadata") or {}
+        if not isinstance(meta, dict):
+            continue
+        for raw in meta.get("wikilinks") or []:
+            key = str(raw).strip().lower()
+            if not key or key in seen_targets:
+                continue
+            seen_targets.add(key)
+            targets.append(str(raw).strip())
+            if len(targets) >= max_targets:
+                break
+        if len(targets) >= max_targets:
+            break
+
+    expanded: list[dict[str, Any]] = []
+    linked_doc_ids: set[str] = set()
+    for target in targets:
+        try:
+            doc = await db.find_document_by_title(
+                user_id, target, prefer_vault_id=prefer_vault
+            )
+            if not doc:
+                continue
+            doc_id = doc["id"]
+            if doc_id in existing_doc_ids or doc_id in linked_doc_ids:
+                continue  # already in the primary results / another link
+            chunks = await db.get_chunks_in_range(
+                user_id, doc_id, 0, per_target - 1
+            )
+            if not chunks:
+                continue
+            linked_doc_ids.add(doc_id)
+            for c in chunks:
+                c["is_parent"] = False
+                c["parent_score"] = 0.0
+                c["wikilink_source"] = target
+            expanded.extend(chunks)
+        except Exception as exc:  # noqa: BLE001 — one bad target never aborts the rest
+            print(
+                f"[rag] Wikilink resolve failed for [[{target}]]: "
+                f"{type(exc).__name__}: {exc}"
+            )
+    return expanded
+
+
 def _reorder_groups_for_context(
     groups: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -506,6 +585,11 @@ class RAGService:
         else:
             timings["t_rerank_ms"] = 0
 
+        # Snapshot the directly-retrieved (post-floor) chunks before any
+        # expansion/reorder — wikilink expansion reads their metadata and
+        # scores regardless of which branch below runs.
+        parent_results = list(results)
+
         # Parent-child neighbor expansion: pull chunk_index ± 1 from each
         # retrieved chunk's source document. Answers that span two adjacent
         # chunks need both. Groups of contiguous chunks share their parent's
@@ -528,10 +612,39 @@ class RAGService:
             # land at start AND end of the prompt, lower-scored in the middle.
             results = _reorder_for_context(results)
 
+        # One-hop wikilink expansion (dark-launch flag). Appended strictly
+        # AFTER the U-shaped primary results: format_context consumes budget
+        # in list order, so linked chunks only ever use leftover budget and
+        # can never displace a directly-retrieved chunk.
+        timings["t_wikilink_ms"] = 0
+        if results and self.settings.rag_wikilink_expansion_enabled:
+            t_wl = time.monotonic()
+            try:
+                existing_ids = {
+                    c.get("document_id") for c in results if c.get("document_id")
+                }
+                linked = await _expand_with_wikilinks(
+                    parent_results, existing_ids, self.db, user_id, self.settings
+                )
+                if linked:
+                    print(
+                        f"[rag] Wikilink expansion added {len(linked)} chunk(s) "
+                        f"from {len({c['document_id'] for c in linked})} linked note(s)"
+                    )
+                results = results + linked
+                timings["t_wikilink_ms"] = round(
+                    (time.monotonic() - t_wl) * 1000, 1
+                )
+            except Exception as exc:
+                print(
+                    f"[rag] Wikilink expansion failed (ignored): "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
         timings["t_total_ms"] = round(
             timings.get("t_rewrite_ms", 0) + timings["t_embed_ms"]
             + timings["t_search_ms"] + timings["t_rerank_ms"]
-            + timings["t_expand_ms"], 1
+            + timings["t_expand_ms"] + timings["t_wikilink_ms"], 1
         )
 
         # Attach timings to results for metrics (after reorder so the chunk
