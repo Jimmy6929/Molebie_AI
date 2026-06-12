@@ -617,6 +617,7 @@ class DatabaseService:
                 dc.id AS chunk_id,
                 dc.document_id,
                 d.filename,
+                d.vault_source_id,
                 dc.content,
                 dc.chunk_index,
                 dc.metadata,
@@ -669,6 +670,7 @@ class DatabaseService:
                 dc.id AS chunk_id,
                 dc.document_id,
                 d.filename,
+                d.vault_source_id,
                 dc.content,
                 dc.chunk_index,
                 dc.metadata,
@@ -722,6 +724,7 @@ class DatabaseService:
                 dc.id AS chunk_id,
                 dc.document_id,
                 d.filename,
+                d.vault_source_id,
                 dc.content,
                 dc.chunk_index,
                 dc.metadata
@@ -745,6 +748,56 @@ class DatabaseService:
                     pass
             results.append(d)
         return results
+
+    async def find_document_by_title(
+        self,
+        user_id: str,
+        title: str,
+        prefer_vault_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Resolve an Obsidian wikilink target to a completed document.
+
+        ``title`` is the raw link target (alias/heading already stripped by
+        extract_md_metadata), e.g. ``"My Note"`` or ``"projects/My Note"``.
+        Matches the basename case-insensitively against ``<base>.md`` /
+        ``<base>.markdown`` (Obsidian resolves links case-insensitively;
+        SQLite LOWER() is ASCII-only — non-ASCII titles only match exact
+        case, an accepted limitation). Ranking: exact relative_path match
+        first (for folder-qualified links), then same-vault, then
+        ``created_at ASC`` so duplicate filenames resolve deterministically.
+        """
+        title = title.strip()
+        base = title.rsplit("/", 1)[-1].strip()
+        if not base:
+            return None
+        # The exact-relative-path tier only applies to folder-qualified links
+        # ("proj/Note"); for a bare "Note" it would let a coincidental
+        # root-level Note.md outrank the same-vault preference. Empty string
+        # never matches a real relative_path, so the tier becomes a no-op.
+        rel_exact = f"{title}.md" if "/" in title else ""
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            """
+            SELECT id, filename, relative_path, vault_source_id
+            FROM documents
+            WHERE user_id = ?
+              AND status = 'completed'
+              AND LOWER(filename) IN (LOWER(?), LOWER(?))
+            ORDER BY
+                CASE WHEN LOWER(relative_path) = LOWER(?) THEN 0 ELSE 1 END,
+                CASE WHEN vault_source_id = ? THEN 0 ELSE 1 END,
+                created_at ASC
+            LIMIT 1
+            """,
+            (
+                user_id,
+                f"{base}.md",
+                f"{base}.markdown",
+                rel_exact,
+                prefer_vault_id,
+            ),
+        )
+        return _row_to_dict(rows[0]) if rows else None
 
     # ==================== User Memories ====================
 
