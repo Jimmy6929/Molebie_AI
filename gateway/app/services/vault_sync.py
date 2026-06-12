@@ -18,7 +18,9 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import hashlib
+import json
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -77,6 +79,24 @@ def _path_is_ignored(rel: str, names: list[str], globs: list[str]) -> bool:
         return True
     base = segments[-1] if segments else rel
     return any(fnmatch.fnmatch(base, g) for g in globs)
+
+
+def _vault_ignore_tokens(
+    vault: dict[str, Any], settings: Any
+) -> tuple[list[str], list[str]]:
+    """Effective ignore tokens for a vault: defaults + per-vault exclude_globs
+    (stored as a JSON list). Shared by sync_vault and the auto-sync pre-scan
+    so both always agree on what counts as ignored."""
+    extra: list[str] = []
+    if vault.get("exclude_globs"):
+        try:
+            extra = list(json.loads(vault["exclude_globs"]) or [])
+        except (json.JSONDecodeError, TypeError):
+            extra = []
+    ignore_str = settings.vault_default_ignore + (
+        "," + ",".join(extra) if extra else ""
+    )
+    return _split_ignore_tokens(ignore_str)
 
 
 def _ext_of(rel: str) -> str:
@@ -151,23 +171,19 @@ class _VaultFile:
     content_type: str
 
 
-def _walk_vault_sync(
+def _iter_indexable_files(
     root: Path,
     ignore_names: list[str],
     ignore_globs: list[str],
     index_attachments: bool,
-    max_size: int,
-) -> tuple[dict[str, _VaultFile], list[str]]:
-    """Synchronous vault walk — runs off-thread. Returns (files_by_path, skipped).
+) -> Iterator[tuple[str, Path, os.stat_result]]:
+    """Walk `root` yielding (relative_path, abs_path, lstat) for every file
+    that passes the dir-pruning / ignore / extension / placeholder filters.
 
-    `files_by_path` is keyed on `relative_path` (vault-root-relative POSIX),
-    one entry per indexable file. `skipped` is a list of human-readable reasons
-    (e.g. ``"oversize: foo.pdf (62MB)"``) suitable for surfacing in the SyncReport.
+    Shared by the full hashing walk and the auto-sync signature pre-scan so
+    both always agree on what counts as an indexable file. Stat-only — no
+    file content is read here.
     """
-    files: dict[str, _VaultFile] = {}
-    skipped: list[str] = []
-    root_resolved = root.resolve()
-
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         # Prune ignored directories before recursing — saves walking node_modules
         # and the like. We rebuild dirnames in place per os.walk's protocol.
@@ -203,31 +219,76 @@ def _walk_vault_sync(
             if stat.st_size == 0 and fname.startswith("."):
                 continue
 
-            # Reject symlinks that point outside the vault root.
-            if abs_path.is_symlink() and not _resolve_under(root_resolved, abs_path):
-                skipped.append(f"symlink_escape: {rel}")
-                continue
+            yield rel, abs_path, stat
 
-            size = int(stat.st_size)
-            if size > max_size:
-                skipped.append(f"too_large: {rel} ({size} bytes)")
-                continue
 
-            try:
-                data = abs_path.read_bytes()
-            except OSError as exc:
-                skipped.append(f"read_error: {rel} ({exc})")
-                continue
+def _scan_vault_signature(
+    root: Path,
+    ignore_names: list[str],
+    ignore_globs: list[str],
+    index_attachments: bool,
+) -> str:
+    """Cheap change signature for the auto-sync pre-scan: SHA-256 over the
+    sorted (relative_path, size, mtime_ns) of every indexable file.
 
-            sha = _hash_bytes(data)
-            content_type = _EXT_TO_MIME.get(ext, "text/plain")
-            files[rel] = _VaultFile(
-                relative_path=rel,
-                abs_path=abs_path,
-                size=size,
-                sha256=sha,
-                content_type=content_type,
-            )
+    Any add, delete, rename, edit, or touch changes the digest. A false
+    positive (mtime-only touch) just hands off to sync_vault's hash diff,
+    which classifies everything UNCHANGED — never a re-embed.
+    """
+    lines = sorted(
+        f"{rel}\x00{stat.st_size}\x00{stat.st_mtime_ns}"
+        for rel, _abs_path, stat in _iter_indexable_files(
+            root, ignore_names, ignore_globs, index_attachments
+        )
+    )
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def _walk_vault_sync(
+    root: Path,
+    ignore_names: list[str],
+    ignore_globs: list[str],
+    index_attachments: bool,
+    max_size: int,
+) -> tuple[dict[str, _VaultFile], list[str]]:
+    """Synchronous vault walk — runs off-thread. Returns (files_by_path, skipped).
+
+    `files_by_path` is keyed on `relative_path` (vault-root-relative POSIX),
+    one entry per indexable file. `skipped` is a list of human-readable reasons
+    (e.g. ``"oversize: foo.pdf (62MB)"``) suitable for surfacing in the SyncReport.
+    """
+    files: dict[str, _VaultFile] = {}
+    skipped: list[str] = []
+    root_resolved = root.resolve()
+
+    for rel, abs_path, stat in _iter_indexable_files(
+        root, ignore_names, ignore_globs, index_attachments
+    ):
+        # Reject symlinks that point outside the vault root.
+        if abs_path.is_symlink() and not _resolve_under(root_resolved, abs_path):
+            skipped.append(f"symlink_escape: {rel}")
+            continue
+
+        size = int(stat.st_size)
+        if size > max_size:
+            skipped.append(f"too_large: {rel} ({size} bytes)")
+            continue
+
+        try:
+            data = abs_path.read_bytes()
+        except OSError as exc:
+            skipped.append(f"read_error: {rel} ({exc})")
+            continue
+
+        sha = _hash_bytes(data)
+        content_type = _EXT_TO_MIME.get(_ext_of(rel), "text/plain")
+        files[rel] = _VaultFile(
+            relative_path=rel,
+            abs_path=abs_path,
+            size=size,
+            sha256=sha,
+            content_type=content_type,
+        )
 
     return files, skipped
 
@@ -260,17 +321,7 @@ async def sync_vault(vault_id: str, user_id: str) -> SyncReport:
         raise NotADirectoryError(f"root_path no longer exists: {root}")
 
     # Build ignore set: defaults + per-vault overrides.
-    import json
-    extra: list[str] = []
-    if vault.get("exclude_globs"):
-        try:
-            extra = list(json.loads(vault["exclude_globs"]) or [])
-        except (json.JSONDecodeError, TypeError):
-            extra = []
-    ignore_str = settings.vault_default_ignore + (
-        "," + ",".join(extra) if extra else ""
-    )
-    ignore_names, ignore_globs = _split_ignore_tokens(ignore_str)
+    ignore_names, ignore_globs = _vault_ignore_tokens(vault, settings)
     index_attachments = bool(vault.get("index_attachments", 1))
 
     # 1. Walk the vault off-thread (file I/O + hashing).

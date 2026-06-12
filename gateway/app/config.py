@@ -363,6 +363,10 @@ class Settings(BaseSettings):
     # Hard ceiling on a single sync run — protects the embedder from a
     # 50,000-file dump. NEW + CHANGED above this aborts the sync with 413.
     vault_max_files_per_sync: int = 5000
+    # Background auto-sync: every interval the scheduler stat-scans each vault
+    # (size+mtime signature, no file reads) and runs sync_vault only on change.
+    vault_auto_sync_enabled: bool = True
+    vault_auto_sync_interval_sec: float = 300.0
 
     # ── Conversation Summarisation (8a) ─────────────────────────
     summary_enabled: bool = True
