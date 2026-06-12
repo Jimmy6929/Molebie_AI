@@ -8,8 +8,14 @@ import platform
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from cli.services.system_info import SystemInfo
 
 
 @dataclass
@@ -418,7 +424,7 @@ def check_disk_space(available_gb: float, min_gb: float = 10.0) -> CheckResult:
 
 def check_system_early() -> tuple[list[CheckResult], "SystemInfo"]:
     """Run lightweight system checks BEFORE the wizard. Returns (results, system_info)."""
-    from cli.services.system_info import SystemInfo, get_system_info
+    from cli.services.system_info import get_system_info
 
     sys_info = get_system_info()
     results: list[CheckResult] = []

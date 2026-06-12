@@ -39,10 +39,10 @@ jobs:
           # python-jose ships a fixed release, or when we migrate to PyJWT.
           pip-audit -r requirements.txt --ignore-vuln PYSEC-2025-185
 
-      - name: Lint gateway
+      - name: Lint gateway, CLI, and satellite
         run: |
-          cd gateway
-          ruff check app/ tests/
+          cd gateway && ruff check app/ tests/ && cd ..
+          ruff check cli/ satellite_storage/
 
       - name: Test gateway
         run: |
@@ -54,3 +54,32 @@ jobs:
           cd webapp
           npm install --silent
           npx tsc --noEmit
+
+      # The satellite package requires Python >=3.13 (gateway stays on 3.12 above),
+      # so the remaining suites run on their own interpreter.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Test CLI, satellite, and training suites
+        run: |
+          pip install -e . -q
+          pip install -e ./satellite_storage -q
+          pip install pytest pytest-asyncio -q
+          # Assert collection counts before running: a green-but-empty run
+          # (import error, renamed dir, pattern drift) must fail loudly.
+          # -o addopts= neutralizes ini addopts (gateway sets -v, which cancels
+          # -q and drops the '::' nodeid lines); || true keeps bash -e from
+          # killing the assignment when grep matches nothing.
+          run_tree() {
+            local tree=$1 min=$2 n
+            n=$(pytest "$tree" --collect-only -q -o addopts= 2>/dev/null | grep -c '::' || true)
+            if [ "$n" -lt "$min" ]; then
+              echo "::error::$tree collected only $n tests (expected >= $min)"
+              exit 1
+            fi
+            pytest "$tree" -q
+          }
+          run_tree cli/tests 62
+          run_tree satellite_storage/tests 83
+          run_tree gateway/training/tests 28

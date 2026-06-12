@@ -143,7 +143,7 @@ def add_feature(feature: str = typer.Argument(help="Feature to enable (voice, se
     if feature in _ENV_KEYS:
         key, enabled_val, _ = _ENV_KEYS[feature]
         if not env_generator.update_env_key(key, enabled_val):
-            print_warn(f"Could not update .env.local — run [bold]molebie-ai config init[/bold] to regenerate")
+            print_warn("Could not update .env.local — run [bold]molebie-ai config init[/bold] to regenerate")
 
     print_ok(f"{feature} enabled")
 
@@ -198,7 +198,7 @@ def remove_feature(feature: str = typer.Argument(help="Feature to disable (voice
     if feature in _ENV_KEYS:
         key, _, disabled_val = _ENV_KEYS[feature]
         if not env_generator.update_env_key(key, disabled_val):
-            print_warn(f"Could not update .env.local — run [bold]molebie-ai config init[/bold] to regenerate")
+            print_warn("Could not update .env.local — run [bold]molebie-ai config init[/bold] to regenerate")
 
     print_ok(f"{feature} disabled")
 

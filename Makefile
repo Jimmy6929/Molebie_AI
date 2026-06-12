@@ -1,7 +1,7 @@
 # Molebie AI - Makefile
 # Run `make help` to see available commands
 
-.PHONY: help quickstart dev dev-gateway dev-webapp test test-gateway lint format verify clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
+.PHONY: help quickstart dev dev-gateway dev-webapp test test-gateway test-cli test-satellite test-training lint format verify clean install mlx-thinking mlx-instant mlx-install mlx-vlm-install autopull-install autopull-uninstall autopull-status autopull-logs autopull-diagnose cli
 
 # Default target
 help:
@@ -128,12 +128,24 @@ mlx-instant:
 # TESTING
 # ──────────────────────────────────────────────────────────────
 
-test: test-gateway
+test: test-gateway test-cli test-satellite test-training
 	@echo "✅ All tests passed"
 
 test-gateway:
 	@echo "🧪 Running gateway tests..."
 	cd gateway && pytest tests/ -v
+
+test-cli:
+	@echo "🧪 Running CLI tests..."
+	pytest cli/tests -q
+
+test-satellite:
+	@echo "🧪 Running satellite_storage tests..."
+	pytest satellite_storage/tests -q
+
+test-training:
+	@echo "🧪 Running training tests..."
+	pytest gateway/training/tests -q
 
 test-gateway-cov:
 	@echo "🧪 Running gateway tests with coverage..."
@@ -144,8 +156,9 @@ test-gateway-cov:
 # ──────────────────────────────────────────────────────────────
 
 lint:
-	@echo "🔍 Linting gateway code..."
+	@echo "🔍 Linting gateway, CLI, and satellite code..."
 	cd gateway && ruff check app/ tests/
+	ruff check cli/ satellite_storage/
 	cd gateway && mypy app/
 
 format:
@@ -157,15 +170,17 @@ format:
 # VERIFY (mirrors CI — run before opening a PR)
 # ──────────────────────────────────────────────────────────────
 
-# `verify` reproduces the three gating steps in .github/workflows/ci.yml exactly
-# (ruff → pytest → pip-audit). It deliberately does NOT reuse the `lint` target,
-# because `lint` also runs mypy, which CI does not gate on — so `make verify`
-# stays a true, 1:1 mirror of what CI will enforce on the PR.
+# `verify` reproduces the gating steps in .github/workflows/ci.yml exactly
+# (ruff → pytest across all four test trees → pip-audit). It deliberately does
+# NOT reuse the `lint` target, because `lint` also runs mypy, which CI does not
+# gate on — so `make verify` stays a true, 1:1 mirror of what CI will enforce.
 verify:
 	@echo "🔍 [1/3] Lint (ruff)..."
 	cd gateway && ruff check app/ tests/
+	ruff check cli/ satellite_storage/
 	@echo "🧪 [2/3] Tests (pytest)..."
 	cd gateway && pytest tests/ -v
+	pytest cli/tests satellite_storage/tests gateway/training/tests -q
 	@echo "🔒 [3/3] Dependency audit (pip-audit)..."
 	cd gateway && pip-audit -r requirements.txt --ignore-vuln PYSEC-2025-185
 	@echo ""

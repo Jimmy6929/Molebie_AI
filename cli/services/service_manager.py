@@ -163,7 +163,7 @@ def _print_startup_summary(
     elif not config.run_gateway:
         console.print(f"    API:        http://{config.gateway_host}:8000 (remote)")
     if config.run_gateway:
-        console.print(f"    Database:   data/molebie.db (SQLite)")
+        console.print("    Database:   data/molebie.db (SQLite)")
     if not config.run_inference:
         console.print(f"    Inference:  {config.inference_host} (remote)")
     for svc in definitions:
@@ -209,8 +209,8 @@ def _print_startup_summary(
 
     # ── Config ──
     console.print("  [bold cyan]Config:[/bold cyan]")
-    console.print(f"    Config:     .molebie/config.json")
-    console.print(f"    Env:        .env.local")
+    console.print("    Config:     .molebie/config.json")
+    console.print("    Env:        .env.local")
     console.print()
 
     console.rule(style="green")
