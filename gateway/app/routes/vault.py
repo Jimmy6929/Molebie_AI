@@ -105,6 +105,12 @@ def _validate_root_or_raise(root_str: str) -> Path:
             detail="Vault sync requires RAG to be enabled.",
         )
     root = Path(root_str).expanduser()
+    # Allowlist check FIRST: stat-ing a path before checking it against
+    # VAULT_ALLOWED_ROOTS would let an authenticated user probe existence of
+    # arbitrary paths via the distinct error messages below.
+    reason = _check_root_allowed(root)
+    if reason:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
     if not root.exists():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -115,9 +121,6 @@ def _validate_root_or_raise(root_str: str) -> Path:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"root_path is not a directory: {root}",
         )
-    reason = _check_root_allowed(root)
-    if reason:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
     return root
 
 
