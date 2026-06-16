@@ -23,7 +23,9 @@ bcrypt>=4.1.0
 httpx==0.28.1
 
 # File uploads (FastAPI UploadFile)
-python-multipart==0.0.27
+# 0.0.31: fixes CVE-2026-53538/53539/53540 (multipart parsing). FastAPI
+# 0.136.x only needs python-multipart>=0.0.7, so the bump is API-compatible.
+python-multipart==0.0.31
 
 # RAG: document parsing
 pypdf>=6.10.2

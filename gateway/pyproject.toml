@@ -18,7 +18,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "sqlite-vec>=0.1.6",
     "bcrypt>=4.1.0",
-    "python-multipart>=0.0.6",
+    "python-multipart>=0.0.31",  # CVE-2026-53538/53539/53540
     # Live monitor: host CPU/RAM. GPU telemetry is opt-in (macmon on macOS,
     # nvidia-ml-py on Linux) and is handled via lazy import in system_probe.
     "psutil>=5.9",
