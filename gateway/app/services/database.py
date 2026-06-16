@@ -6,6 +6,7 @@ user isolation via WHERE user_id = ? in every query.
 """
 
 import json
+import re
 import struct
 import time
 import uuid
@@ -64,6 +65,40 @@ def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
 def _serialize_embedding(embedding: list[float]) -> bytes:
     """Pack a float list into bytes for sqlite-vec."""
     return struct.pack(f"{len(embedding)}f", *embedding)
+
+
+# Common English function words stripped from FTS5 MATCH queries. FTS5 has no
+# built-in stopword support — its tokenizers keep every word — so a bare query
+# like "what do you know about me" matches on noise; "me" was matching the note
+# title "Can't Hurt Me". Stripping function words keeps BM25 on content-bearing
+# terms. Kept deliberately small: only true function words (pronouns, articles,
+# prepositions, auxiliaries, wh-words), never content words like "find"/"note".
+_FTS_STOPWORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "if", "of", "to", "in", "on", "at",
+    "for", "with", "about", "as", "by", "from", "into", "over", "is", "are",
+    "was", "were", "be", "been", "being", "am", "do", "does", "did", "doing",
+    "have", "has", "had", "can", "could", "will", "would", "shall", "should",
+    "may", "might", "must", "i", "me", "my", "myself", "mine", "you", "your",
+    "yours", "yourself", "we", "us", "our", "ours", "he", "him", "his", "she",
+    "her", "hers", "it", "its", "they", "them", "their", "this", "that",
+    "these", "those", "what", "which", "who", "whom", "whose", "when", "where",
+    "why", "how", "so", "just", "any", "some", "all",
+})
+
+
+def _build_fts_match(query_text: str) -> str:
+    """Build a quoted FTS5 MATCH string from free text, stripping stopwords.
+
+    Each token is wrapped in double quotes so FTS5 special chars (?, *, (, ),
+    :, +, -, ^, ~) are treated as literals. Stopwords (see ``_FTS_STOPWORDS``)
+    are dropped so common function words don't match noise. Falls back to all
+    tokens — then to the raw text — when every token is a stopword, so a query
+    never collapses to an empty MATCH.
+    """
+    tokens = re.findall(r"\w+", query_text)
+    content = [t for t in tokens if t.lower() not in _FTS_STOPWORDS]
+    effective = content or tokens
+    return " ".join(f'"{t}"' for t in effective) if effective else query_text
 
 
 class DatabaseService:
@@ -659,11 +694,8 @@ class DatabaseService:
     ) -> list[dict[str, Any]]:
         """Search document chunks by full-text (BM25) using FTS5."""
         db = await self._get_conn()
-        # Escape FTS5 special chars — wrap each token in double quotes
-        # so characters like ?, *, (, ), :, +, -, ^, ~ are treated as literals
-        import re
-        tokens = re.findall(r'\w+', query_text)
-        safe_query = " ".join(f'"{t}"' for t in tokens) if tokens else query_text
+        # Strip stopwords + escape FTS5 special chars (see _build_fts_match).
+        safe_query = _build_fts_match(query_text)
         rows = await db.execute_fetchall(
             """
             SELECT
