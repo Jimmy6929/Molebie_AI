@@ -13,6 +13,8 @@ from app.config import get_settings
 from app.middleware.auth import JWTPayload, get_current_user
 from app.models.documents import (
     AttachResponse,
+    BrainInfo,
+    BrainListResponse,
     DocumentInfo,
     DocumentListResponse,
     SessionAttachmentInfo,
@@ -190,6 +192,22 @@ async def list_documents(
             )
             for r in rows
         ]
+    )
+
+
+@router.get("/brains", response_model=BrainListResponse)
+async def list_brains(
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """List the user's brains (top-level vault folders) with document counts.
+
+    The chat UI uses this to populate the brain selector; the "All" scope is a
+    client-side concept (no brain filter), so it is not returned here.
+    """
+    rows = await db.list_brains(user.user_id)
+    return BrainListResponse(
+        brains=[BrainInfo(brain=r["brain"], doc_count=r["doc_count"]) for r in rows]
     )
 
 

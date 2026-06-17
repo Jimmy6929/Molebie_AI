@@ -101,6 +101,27 @@ def _build_fts_match(query_text: str) -> str:
     return " ".join(f'"{t}"' for t in effective) if effective else query_text
 
 
+# A "brain" (corpus) is the top-level folder of a vault note's relative_path —
+# the first path segment. Root/unfiled notes collapse to "Inbox". Computed at
+# query time (no stored column, no migration): the vault sync re-ingests a moved
+# note at its new path, so a folder-derived brain auto-follows moves for free.
+# Assumes the documents table is aliased ``d`` in the surrounding query.
+_BRAIN_SQL = (
+    "CASE "
+    "WHEN d.relative_path IS NULL OR d.relative_path = '' "
+    "OR INSTR(d.relative_path, '/') = 0 THEN 'Inbox' "
+    "ELSE SUBSTR(d.relative_path, 1, INSTR(d.relative_path, '/') - 1) END"
+)
+
+# When a brain filter is active, sqlite-vec's ``k`` selects the k-nearest
+# vectors GLOBALLY and the brain filter (on the joined documents table) prunes
+# afterward — so a small k under-retrieves the selected brain. Brute-force
+# sqlite-vec computes every distance regardless of k (only row transfer scales),
+# so we over-fetch a large k when scoping to a brain; the join still returns only
+# the in-brain rows. Empirically: k=30 yielded 9/46 in-brain chunks, k=500 → 24.
+_BRAIN_VEC_OVERFETCH = 1000
+
+
 class DatabaseService:
     """Async SQLite database service for all CRUD and search operations."""
 
@@ -642,12 +663,22 @@ class DatabaseService:
         query_embedding: list[float],
         threshold: float = 0.3,
         limit: int = 20,
+        brain: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Search document chunks by vector similarity using sqlite-vec."""
+        """Search document chunks by vector similarity using sqlite-vec.
+
+        ``brain`` scopes results to one top-level folder (see ``_BRAIN_SQL``);
+        None/"" searches all documents. When scoping, ``k`` is over-fetched
+        (``_BRAIN_VEC_OVERFETCH``) so the post-join brain filter still yields
+        enough in-brain candidates.
+        """
         db = await self._get_conn()
         blob = _serialize_embedding(query_embedding)
+        brain_clause = f"\n              AND {_BRAIN_SQL} = ?" if brain else ""
+        k = max(limit, _BRAIN_VEC_OVERFETCH) if brain else limit
+        params = (blob, k, user_id, brain) if brain else (blob, k, user_id)
         rows = await db.execute_fetchall(
-            """
+            f"""
             SELECT
                 dc.id AS chunk_id,
                 dc.document_id,
@@ -663,10 +694,10 @@ class DatabaseService:
             WHERE v.embedding MATCH ?
               AND k = ?
               AND dc.user_id = ?
-              AND d.status = 'completed'
+              AND d.status = 'completed'{brain_clause}
             ORDER BY v.distance
             """,
-            (blob, limit, user_id),
+            params,
         )
         results = []
         for r in rows:
@@ -691,13 +722,24 @@ class DatabaseService:
         user_id: str,
         query_text: str,
         limit: int = 20,
+        brain: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Search document chunks by full-text (BM25) using FTS5."""
+        """Search document chunks by full-text (BM25) using FTS5.
+
+        ``brain`` scopes results to one top-level folder (see ``_BRAIN_SQL``);
+        None/"" searches all documents. The filter applies before LIMIT, so FTS
+        scoping is exact — unlike the vector leg, no over-fetch is needed.
+        """
         db = await self._get_conn()
         # Strip stopwords + escape FTS5 special chars (see _build_fts_match).
         safe_query = _build_fts_match(query_text)
+        brain_clause = f"\n              AND {_BRAIN_SQL} = ?" if brain else ""
+        params = (
+            (safe_query, user_id, brain, limit) if brain
+            else (safe_query, user_id, limit)
+        )
         rows = await db.execute_fetchall(
-            """
+            f"""
             SELECT
                 dc.id AS chunk_id,
                 dc.document_id,
@@ -712,11 +754,11 @@ class DatabaseService:
             JOIN documents AS d ON d.id = dc.document_id
             WHERE document_chunks_fts MATCH ?
               AND dc.user_id = ?
-              AND d.status = 'completed'
+              AND d.status = 'completed'{brain_clause}
             ORDER BY fts.rank
             LIMIT ?
             """,
-            (safe_query, user_id, limit),
+            params,
         )
         results = []
         for r in rows:
@@ -730,6 +772,22 @@ class DatabaseService:
                     pass
             results.append(d)
         return results
+
+    async def list_brains(self, user_id: str) -> list[dict[str, Any]]:
+        """Return each brain (top-level folder, see ``_BRAIN_SQL``) with its
+        completed-document count, most-populated first."""
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            f"""
+            SELECT {_BRAIN_SQL} AS brain, COUNT(*) AS doc_count
+            FROM documents AS d
+            WHERE d.user_id = ? AND d.status = 'completed'
+            GROUP BY brain
+            ORDER BY doc_count DESC, brain ASC
+            """,
+            (user_id,),
+        )
+        return [{"brain": r["brain"], "doc_count": r["doc_count"]} for r in rows]
 
     async def get_chunks_in_range(
         self,

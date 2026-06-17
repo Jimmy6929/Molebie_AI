@@ -571,6 +571,14 @@ _TOOLS_HINT = (
 )
 
 
+def _norm_brain(brain: str | None) -> str | None:
+    """Normalize the chat request's brain scope: None, "", or "All" (any case)
+    all mean no scope — search every brain."""
+    if not brain or brain.strip().lower() == "all":
+        return None
+    return brain.strip()
+
+
 def _retrieval_query(message: str, settings) -> str:
     """Expand self-referential identity queries with the owner's identity.
 
@@ -889,6 +897,7 @@ async def send_message(
                     user_id,
                     _retrieval_query(request.message, settings),
                     conversation_context=hist_messages,
+                    brain=_norm_brain(request.brain),
                 )
             except Exception as exc:
                 print(f"[chat] RAG retrieval failed — continuing without context: "
@@ -1616,6 +1625,7 @@ async def send_message_stream(
                     user_id,
                     _retrieval_query(request.message, settings),
                     conversation_context=hist_messages,
+                    brain=_norm_brain(request.brain),
                 )
                 _ms = (time.perf_counter() - t_rag) * 1000.0
                 await pipeline_metrics.pipeline_event(

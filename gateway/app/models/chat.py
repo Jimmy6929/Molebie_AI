@@ -28,6 +28,7 @@ class ChatRequest(BaseModel):
     conversation_mode: bool = Field(False, description="When true, use voice conversation system prompt")
     image: str | None = Field(None, description="Base64-encoded image as data URI (data:image/...;base64,...)")
     web_search: bool = Field(False, description="When true, force web search for this message")
+    brain: str | None = Field(None, description="Scope RAG to one brain (top-level vault folder). null / 'All' = search everything")
 
 
 class ChatMessage(BaseModel):
