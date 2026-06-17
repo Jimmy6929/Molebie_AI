@@ -14,8 +14,7 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.services.database import DatabaseService, get_database_service
-
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+from app.services.streaming_think_filter import strip_think_blocks
 
 _EXTRACT_PROMPT = """\
 Extract important facts about the user from this conversation snippet.
@@ -102,7 +101,7 @@ class MemoryService:
 
         raw_content = result.get("content", "").strip()
         # Strip think tags
-        raw_content = _THINK_RE.sub("", raw_content).strip()
+        raw_content = strip_think_blocks(raw_content).strip()
         close_idx = raw_content.find("</think>")
         if close_idx != -1:
             raw_content = raw_content[close_idx + len("</think>"):].strip()
