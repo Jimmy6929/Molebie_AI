@@ -52,6 +52,7 @@ import VoiceSettings from "./VoiceSettings";
 import { FolderUploadProgress } from "./FolderUploadProgress";
 import { VaultPanel } from "./VaultPanel";
 import BrainSelector from "./BrainSelector";
+import { BrainsPanel } from "./BrainsPanel";
 
 interface DisplayMessage {
   id: string;
@@ -96,6 +97,8 @@ export default function ChatPage() {
     try { return localStorage.getItem("molebie_selected_brain") || null; }
     catch { return null; }
   });
+  // Bumped when brains change in the manager panel so the chat selector refetches.
+  const [brainsRefresh, setBrainsRefresh] = useState(0);
   const [toolsOpen, setToolsOpen] = useState(false);
 
   // ── Mode flags ────────────────────────────────────────────────────────────
@@ -1376,6 +1379,14 @@ export default function ChatPage() {
                     setTimeout(() => setDocToast(null), 5000);
                   }}
                 />
+                <BrainsPanel
+                  token={token}
+                  onChanged={() => setBrainsRefresh((k) => k + 1)}
+                  onToast={(msg) => {
+                    setDocToast(msg);
+                    setTimeout(() => setDocToast(null), 5000);
+                  }}
+                />
               </div>
             )}
 
@@ -1603,6 +1614,7 @@ export default function ChatPage() {
                       token={token}
                       selectedBrain={selectedBrain}
                       onChange={setSelectedBrain}
+                      refreshKey={brainsRefresh}
                     />
 
                     {/* Chat conversation mode */}

@@ -501,18 +501,86 @@ export async function listDocuments(
   return apiCall<{ documents: DocumentInfo[] }>("/documents", token);
 }
 
-// A "brain" = a top-level vault folder; retrieval can be scoped to one.
+// A "brain" = a user-defined named bucket of vault folders; retrieval can be
+// scoped to one. A doc belongs to a brain if its top-level folder is in folders.
 export interface BrainInfo {
-  brain: string;
+  id: string;
+  name: string;
+  folders: string[];
   doc_count: number;
+  missing_folders: string[];
 }
 
 export interface BrainsResponse {
   brains: BrainInfo[];
 }
 
+// A top-level vault folder available to add to a brain.
+export interface FolderInfo {
+  folder: string;
+  doc_count: number;
+}
+
+export interface FoldersResponse {
+  folders: FolderInfo[];
+}
+
 export async function listBrains(token: string): Promise<BrainsResponse> {
   return apiCall<BrainsResponse>("/documents/brains", token);
+}
+
+export async function listFolders(token: string): Promise<FoldersResponse> {
+  return apiCall<FoldersResponse>("/documents/folders", token);
+}
+
+export async function createBrain(token: string, name: string): Promise<BrainInfo> {
+  return apiCall<BrainInfo>("/documents/brains", token, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function renameBrain(
+  token: string,
+  brainId: string,
+  name: string,
+): Promise<BrainInfo> {
+  return apiCall<BrainInfo>(`/documents/brains/${encodeURIComponent(brainId)}`, token, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteBrain(token: string, brainId: string): Promise<void> {
+  // 204 No Content — use a bare fetch (apiCall would choke on the empty body).
+  await fetch(`${GATEWAY_URL}/documents/brains/${encodeURIComponent(brainId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function addBrainFolder(
+  token: string,
+  brainId: string,
+  folder: string,
+): Promise<BrainInfo> {
+  return apiCall<BrainInfo>(
+    `/documents/brains/${encodeURIComponent(brainId)}/folders`,
+    token,
+    { method: "POST", body: JSON.stringify({ folder }) },
+  );
+}
+
+export async function removeBrainFolder(
+  token: string,
+  brainId: string,
+  folder: string,
+): Promise<BrainInfo> {
+  return apiCall<BrainInfo>(
+    `/documents/brains/${encodeURIComponent(brainId)}/folders`,
+    token,
+    { method: "DELETE", body: JSON.stringify({ folder }) },
+  );
 }
 
 export async function deleteDocument(
