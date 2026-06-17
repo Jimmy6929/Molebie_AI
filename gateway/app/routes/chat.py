@@ -706,6 +706,30 @@ def _finalize_assistant_text(raw: str) -> str:
     return _strip_thinking(raw)
 
 
+async def _persist_rag_metrics(
+    db: DatabaseService,
+    rag: RAGService,
+    user_id: str,
+    query_text: str,
+    rag_chunks: list,
+) -> None:
+    """Best-effort persistence of retrieval metrics into ``rag_query_metrics``.
+
+    ``insert_rag_metrics`` existed but was never called, so the table stayed
+    empty (no retrieval observability). Persisted here right after retrieval in
+    both chat endpoints. Wrapped so a metrics-write failure never breaks the
+    chat response.
+    """
+    if not rag_chunks:
+        return
+    try:
+        metrics = rag.get_metrics(rag_chunks)
+        if metrics:
+            await db.insert_rag_metrics(user_id, {**metrics, "query_text": query_text})
+    except Exception as exc:
+        print(f"[chat] RAG metrics persist failed: {type(exc).__name__}: {exc}")
+
+
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
@@ -862,6 +886,9 @@ async def send_message(
                 rag_chunks = []
 
     rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
+    # Persist retrieval metrics (best-effort) — this is what populates
+    # rag_query_metrics, which was previously never written.
+    await _persist_rag_metrics(db, rag, user_id, request.message, rag_chunks)
     rag_confidence = compute_retrieval_confidence(rag_chunks) if rag_chunks else "NONE"
     explicit_lookup = _explicit_lookup_phrasing(request.message)
     routing_mode = _routing_mode(rag_confidence, explicit_lookup)
@@ -1596,6 +1623,9 @@ async def send_message_stream(
                 rag_chunks = []
 
     rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
+    # Persist retrieval metrics (best-effort) — this is what populates
+    # rag_query_metrics, which was previously never written.
+    await _persist_rag_metrics(db, rag, user_id, request.message, rag_chunks)
     rag_confidence = compute_retrieval_confidence(rag_chunks) if rag_chunks else "NONE"
     explicit_lookup = _explicit_lookup_phrasing(request.message)
     routing_mode = _routing_mode(rag_confidence, explicit_lookup)
