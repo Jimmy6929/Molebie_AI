@@ -17,9 +17,41 @@ in parallel with the multi-second RAG rerank — zero wall-clock cost.
 from __future__ import annotations
 
 import asyncio
+import re
 
 from app.config import get_settings
 from app.services.metrics_registry import get_metrics_registry
+
+# Self-referential / identity queries: pronouns + stopwords with no
+# retrievable anchors ("what do you know about me?", "who am I"). Detected
+# deterministically (regex, no LLM) because it must be cheap, zero-latency,
+# and run on the FIRST turn — where the conversation-context query rewrite
+# can't (it needs ≥2 prior messages). Matching expands the retrieval query
+# with the owner's identity so vector + BM25 reach the owner's notes.
+_IDENTITY_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\bwho\s+am\s+i\b",
+        r"\bwhat'?s?\s+(?:do\s+you\s+know|can\s+you\s+tell\s+me)\s+about\s+me\b",
+        r"\b(?:tell|teach|remind)\s+me\s+about\s+(?:me|myself)\b",
+        r"\babout\s+myself\b",
+        r"\bdescribe\s+me\b",
+        r"\bwho\s+i\s+am\b",
+        r"\bmy\s+(?:background|profile|bio|biography|identity|experience|"
+        r"skills?|education|résumé|resume|cv|projects?)\b",
+        r"\bwhat\s+do\s+you\s+know\s+about\s+my\b",
+    )
+)
+
+
+def is_identity_query(message: str) -> bool:
+    """Return True iff the message is a self-referential / identity query.
+
+    Deterministic and side-effect free — safe to call on every turn.
+    """
+    if not message:
+        return False
+    return any(pat.search(message) for pat in _IDENTITY_PATTERNS)
 
 _PROMPT = (
     "Classify the user's question as EXPLAIN or LOOKUP.\n\n"

@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     assistant_name: str = "Assistant"
     prompt_dir: str = "prompts"  # relative to gateway/ directory
 
+    # ── Owner Identity ──────────────────────────────────────────
+    # Who the assistant is helping. Set these (typically via .env.local) so
+    # self-referential queries work: when the user says "I"/"me"/"my", the
+    # assistant knows that means this person.
+    #   - owner_name anchors identity-query expansion (see
+    #     rag_identity_expansion_enabled) so "what do you know about me?"
+    #     retrieves the owner's biographical notes instead of noise.
+    #   - owner_profile is a one-paragraph bio injected into every prompt.
+    # Both default empty (privacy-safe: nothing injected/assumed unless set).
+    owner_name: str = ""
+    owner_profile: str = ""
+
     # ── Inference API Key (for commercial backends like OpenAI) ──
     inference_api_key: str = ""
 
@@ -400,9 +412,21 @@ class Settings(BaseSettings):
 
     # ── RAG Query Rewriting (8c) ────────────────────────────────
     rag_query_rewrite_enabled: bool = True
-    rag_query_rewrite_timeout: float = 3.0  # hard timeout; fallback to original
+    # Bumped 3.0 → 6.0: the instant tier was timing out on every rewrite
+    # (cold model + a 6-message/300-char context) so the safety net never
+    # fired. The smaller context window below also speeds the call up.
+    rag_query_rewrite_timeout: float = 6.0  # hard timeout; fallback to original
     rag_query_rewrite_max_tokens: int = 50  # short rewritten query
     rag_query_rewrite_llm_mode: str = "instant"
+    rag_query_rewrite_context_window: int = 3   # recent messages fed to the rewriter
+    rag_query_rewrite_char_limit: int = 150     # per-message char cap in that context
+
+    # Identity-query expansion: detect self-referential queries ("what do you
+    # know about me?", "who am I") — which are pronouns/stopwords with no
+    # retrievable anchors — and expand the *retrieval* query with the owner's
+    # name (owner_name) + biographical terms so vector + BM25 reach the owner's
+    # notes. The user-visible message is left untouched.
+    rag_identity_expansion_enabled: bool = True
 
     # ── Vision / Image ──────────────────────────────────────────
     vision_max_image_size: int = 5 * 1024 * 1024  # 5 MB max base64 payload

@@ -45,7 +45,7 @@ from app.services.inference import (
     get_inference_service,
     trim_messages_to_budget,
 )
-from app.services.intent import classify_explain_intent
+from app.services.intent import classify_explain_intent, is_identity_query
 from app.services.judge import get_grounding_judge
 from app.services.memory import get_memory_service
 from app.services.metrics_registry import RequestRecord, get_metrics_registry
@@ -571,6 +571,30 @@ _TOOLS_HINT = (
 )
 
 
+def _retrieval_query(message: str, settings) -> str:
+    """Expand self-referential identity queries with the owner's identity.
+
+    Anchorless pronoun queries ("what do you know about me?") match nothing
+    useful — neither vector nor BM25 connects "me" to the owner — and can even
+    surface noise (a note titled "...Me"). When the message is an identity
+    query, append the owner's name + biographical terms so retrieval reaches
+    the owner's notes. The user-visible message is untouched; only the text
+    handed to the retriever is expanded. No-op when disabled or not applicable.
+    """
+    if not getattr(settings, "rag_identity_expansion_enabled", False):
+        return message
+    if not is_identity_query(message):
+        return message
+    owner = (settings.owner_name or "").strip()
+    anchor = f"{owner} " if owner else ""
+    print("[chat] Identity query detected — expanding retrieval query"
+          + (f" with owner '{owner}'" if owner else " (no owner_name set)"))
+    return (
+        f"{message} {anchor}biography background experience education "
+        "skills projects profile about the owner"
+    )
+
+
 def _build_system_message(
     conversation_mode: bool = False,
     summary: str | None = None,
@@ -580,6 +604,7 @@ def _build_system_message(
     explicit_lookup: bool = False,
     use_tool_calling: bool = False,
     explain_intent: bool = False,
+    owner_profile: str | None = None,
 ) -> dict:
     """Build the system message with confidence- and intent-driven routing.
 
@@ -619,6 +644,13 @@ def _build_system_message(
         )
         if use_tool_calling:
             content += f"\n\n{_TOOLS_HINT}"
+
+    if owner_profile:
+        content += (
+            "\n\nOWNER (the person you are assisting — when they say "
+            '"I", "me", or "my", they mean this person):\n'
+            f"{owner_profile}"
+        )
 
     if summary:
         content += f"\n\nCONVERSATION SUMMARY (earlier messages condensed):\n{summary}"
@@ -854,7 +886,9 @@ async def send_message(
         elif await rag.user_has_documents(user_id):
             try:
                 rag_chunks = await rag.retrieve_context(
-                    user_id, request.message, conversation_context=hist_messages,
+                    user_id,
+                    _retrieval_query(request.message, settings),
+                    conversation_context=hist_messages,
                 )
             except Exception as exc:
                 print(f"[chat] RAG retrieval failed — continuing without context: "
@@ -894,6 +928,7 @@ async def send_message(
         explicit_lookup=explicit_lookup,
         use_tool_calling=use_tool_calling,
         explain_intent=explain_intent,
+        owner_profile=settings.owner_profile or None,
     )] + hist_messages
 
     # Confidence-driven directives: in generative mode on a factual gap with
@@ -1578,7 +1613,9 @@ async def send_message_stream(
             t_rag = time.perf_counter()
             try:
                 rag_chunks = await rag.retrieve_context(
-                    user_id, request.message, conversation_context=hist_messages,
+                    user_id,
+                    _retrieval_query(request.message, settings),
+                    conversation_context=hist_messages,
                 )
                 _ms = (time.perf_counter() - t_rag) * 1000.0
                 await pipeline_metrics.pipeline_event(
@@ -1621,6 +1658,7 @@ async def send_message_stream(
         explicit_lookup=explicit_lookup,
         use_tool_calling=False,
         explain_intent=explain_intent,
+        owner_profile=settings.owner_profile or None,
     )] + hist_messages
 
     # Confidence-driven directives — see send_message() for rationale.

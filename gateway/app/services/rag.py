@@ -397,14 +397,16 @@ class RAGService:
         Falls back to original query on timeout or error.
         """
         context_lines = []
-        for msg in conversation_context[-6:]:
+        window = self.settings.rag_query_rewrite_context_window
+        char_limit = self.settings.rag_query_rewrite_char_limit
+        for msg in conversation_context[-window:]:
             role = msg.get("role", "").upper()
             content = msg.get("content", "")
             if isinstance(content, list):
                 content = " ".join(
                     p.get("text", "") for p in content if isinstance(p, dict)
                 )
-            content = content[:300]
+            content = content[:char_limit]
             context_lines.append(f"{role}: {content}")
         context_text = "\n".join(context_lines)
 
