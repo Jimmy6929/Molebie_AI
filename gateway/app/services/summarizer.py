@@ -7,12 +7,10 @@ message. When a summary exists, the chat route reduces history from 20
 to 10 recent messages and prepends the summary to the system message.
 """
 
-import re
 from typing import Any
 
 from app.config import Settings, get_settings
-
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+from app.services.streaming_think_filter import strip_think_blocks
 
 _SUMMARIZE_PROMPT = """\
 You are a conversation summariser. Produce a concise summary of the conversation below.
@@ -126,7 +124,7 @@ class SummariserService:
             return
 
         # Strip any <think> tags
-        summary_text = _THINK_RE.sub("", summary_text).strip()
+        summary_text = strip_think_blocks(summary_text).strip()
         close_idx = summary_text.find("</think>")
         if close_idx != -1:
             summary_text = summary_text[close_idx + len("</think>"):].strip()

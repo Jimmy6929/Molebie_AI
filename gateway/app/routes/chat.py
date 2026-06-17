@@ -53,7 +53,11 @@ from app.services.rag import RAGService, compute_retrieval_confidence, get_rag_s
 from app.services.selfcheck import get_selfcheck_service
 from app.services.sse_split import split_oversized_sse_delta
 from app.services.storage import get_storage_service
-from app.services.streaming_think_filter import ThinkBlockFilter
+from app.services.streaming_think_filter import (
+    ThinkBlockFilter,
+    first_think_inner,
+    strip_think_blocks,
+)
 from app.services.summarizer import get_summariser_service
 from app.services.tools import TOOL_SCHEMAS, ToolExecutor
 from app.services.verification import get_chain_of_verification
@@ -87,7 +91,6 @@ def _load_prompt_template(name: str) -> str:
     return "You are a helpful AI assistant.\n\nCurrent date: {current_date}"
 
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 # High-precision patterns that indicate the user explicitly wants notes-lookup
@@ -698,10 +701,9 @@ def _validate_image(data_uri: str, settings) -> tuple:
 
 def _extract_thinking(content: str) -> str | None:
     """Extract thinking block text from raw content, if present."""
-    m = _THINK_RE.search(content)
-    if m:
-        inner = content[m.start() + len("<think>"):m.end() - len("</think>")].strip()
-        return inner or None
+    inner = first_think_inner(content)
+    if inner is not None:
+        return inner.strip() or None
     close_idx = content.find("</think>")
     if close_idx != -1:
         inner = content[:close_idx].strip()
@@ -716,7 +718,7 @@ def _strip_thinking(content: str) -> str:
       - ``<think>...</think>`` — standard tags
       - ``...</think>`` — mlx_vlm strips ``<think>`` to empty string
     """
-    result = _THINK_RE.sub("", content)
+    result = strip_think_blocks(content)
     if result != content:
         return result.strip()
     close_idx = content.find("</think>")
