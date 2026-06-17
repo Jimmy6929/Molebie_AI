@@ -62,6 +62,7 @@ async def _seed_doc_with_chunk(
     embedding: list[float],
     doc_status: str = "completed",
     metadata: dict | None = None,
+    relative_path: str | None = None,
 ):
     from app.services.database import get_database_service
     db = get_database_service()
@@ -72,6 +73,7 @@ async def _seed_doc_with_chunk(
         file_type="text/markdown",
         file_size=10,
         doc_status=doc_status,
+        relative_path=relative_path,
     )
     await db.insert_chunks([
         {
@@ -165,3 +167,46 @@ async def test_user_isolation(isolated_data_dir):
         "00000000-0000-0000-0000-000000000002", _unit(0), threshold=0.0, limit=10
     )
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_vector_search_scopes_to_brain(isolated_data_dir):
+    """brain= filters the real vector_search_chunks to one top-level folder
+    (root note -> Inbox); exercises the param-tuple ordering + over-fetch path."""
+    from app.services.database import get_database_service
+    db = get_database_service()
+
+    await _seed_doc_with_chunk("a.md", _unit(0), relative_path="Areas/a.md")
+    await _seed_doc_with_chunk("b.md", _unit(10), relative_path="Areas/b.md")
+    await _seed_doc_with_chunk("p.md", _unit(5), relative_path="Projects/p.md")
+    await _seed_doc_with_chunk("root.md", _unit(15))  # no path -> Inbox
+
+    areas = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, brain="Areas")
+    assert sorted(r["filename"] for r in areas) == ["a.md", "b.md"]
+
+    projects = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, brain="Projects")
+    assert [r["filename"] for r in projects] == ["p.md"]
+
+    inbox = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, brain="Inbox")
+    assert [r["filename"] for r in inbox] == ["root.md"]
+
+    everything = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10)
+    assert len(everything) == 4
+
+
+@pytest.mark.asyncio
+async def test_fts_search_scopes_to_brain(isolated_data_dir):
+    """brain= filters the real fts_search_chunks; param ordering with the
+    trailing LIMIT must stay correct."""
+    from app.services.database import get_database_service
+    db = get_database_service()
+
+    await _seed_doc_with_chunk("a.md", _unit(0), relative_path="Areas/a.md")
+    await _seed_doc_with_chunk("p.md", _unit(0), relative_path="Projects/p.md")
+
+    # "content" appears in every seeded chunk ("content of <filename>").
+    scoped = await db.fts_search_chunks(USER_ID, "content", limit=10, brain="Areas")
+    assert [r["filename"] for r in scoped] == ["a.md"]
+
+    everything = await db.fts_search_chunks(USER_ID, "content", limit=10)
+    assert sorted(r["filename"] for r in everything) == ["a.md", "p.md"]

@@ -23,6 +23,17 @@ class DocumentListResponse(BaseModel):
     documents: list[DocumentInfo]
 
 
+class BrainInfo(BaseModel):
+    """A brain (top-level vault folder) and how many documents it holds."""
+    brain: str
+    doc_count: int
+
+
+class BrainListResponse(BaseModel):
+    """Response for GET /documents/brains."""
+    brains: list[BrainInfo]
+
+
 class UploadResponse(BaseModel):
     """Response for POST /documents/upload."""
     id: str

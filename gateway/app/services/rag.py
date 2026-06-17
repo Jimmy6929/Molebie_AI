@@ -344,13 +344,14 @@ class RAGService:
         query_embedding: list[float],
         count: int,
         threshold: float,
+        brain: str | None = None,
     ) -> list[dict[str, Any]]:
         """Run a single vector similarity search against document_chunks."""
         metrics = get_metrics_registry()
         try:
             async with metrics.subsystem_timer("rag.vector_search"):
                 return await self.db.vector_search_chunks(
-                    user_id, query_embedding, threshold, count
+                    user_id, query_embedding, threshold, count, brain=brain
                 )
         except Exception as exc:
             print(f"[rag] Similarity search failed: {type(exc).__name__}: {exc}")
@@ -363,16 +364,17 @@ class RAGService:
         query_text: str,
         count: int,
         threshold: float,
+        brain: str | None = None,
     ) -> list[dict[str, Any]]:
         """Run hybrid search (vector + full-text) with RRF fusion."""
         metrics = get_metrics_registry()
         try:
             async def _vec():
                 async with metrics.subsystem_timer("rag.vector_search"):
-                    return await self.db.vector_search_chunks(user_id, query_embedding, threshold, count)
+                    return await self.db.vector_search_chunks(user_id, query_embedding, threshold, count, brain=brain)
             async def _fts():
                 async with metrics.subsystem_timer("rag.fts_search"):
-                    return await self.db.fts_search_chunks(user_id, query_text, count)
+                    return await self.db.fts_search_chunks(user_id, query_text, count, brain=brain)
             vector_results, text_results = await asyncio.gather(_vec(), _fts())
             async with metrics.subsystem_timer("rag.rrf_fuse"):
                 return _rrf_fuse(
@@ -385,7 +387,7 @@ class RAGService:
         except Exception as exc:
             print(f"[rag] Hybrid search failed: {type(exc).__name__}: {exc}")
             print("[rag] Falling back to vector-only search")
-            return await self._search_chunks(user_id, query_embedding, count, threshold)
+            return await self._search_chunks(user_id, query_embedding, count, threshold, brain=brain)
 
     async def _rewrite_query(
         self,
@@ -460,6 +462,7 @@ class RAGService:
         limit: int | None = None,
         threshold: float | None = None,
         conversation_context: list[dict[str, str]] | None = None,
+        brain: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Embed the query and search for matching document chunks.
@@ -508,15 +511,17 @@ class RAGService:
         )
         timings["t_embed_ms"] = round((time.monotonic() - t0) * 1000, 1)
 
-        # Step 2: Search
+        # Step 2: Search (optionally scoped to a single brain / top-level folder)
+        if brain:
+            print(f"[rag] Scoping retrieval to brain '{brain}'")
         t1 = time.monotonic()
         if self.hybrid_enabled:
             results = await self._hybrid_search(
-                user_id, query_embedding, search_query, count, thresh
+                user_id, query_embedding, search_query, count, thresh, brain=brain
             )
         else:
             results = await self._search_chunks(
-                user_id, query_embedding, count, thresh
+                user_id, query_embedding, count, thresh, brain=brain
             )
         timings["t_search_ms"] = round((time.monotonic() - t1) * 1000, 1)
 
