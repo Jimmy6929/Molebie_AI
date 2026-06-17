@@ -70,6 +70,7 @@ export async function sendMessage(
   conversationMode: boolean = false,
   image?: string,
   webSearch?: boolean,
+  brain?: string,
 ): Promise<ChatResponse> {
   return apiCall<ChatResponse>("/chat", token, {
     method: "POST",
@@ -102,6 +103,7 @@ export async function sendMessageStream(
   onSearchDone?: (sources: SearchSource[]) => void,
   image?: string,
   webSearch?: boolean,
+  brain?: string,
 ): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/chat/stream`, {
     method: "POST",
