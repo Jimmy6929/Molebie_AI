@@ -663,20 +663,29 @@ class DatabaseService:
         query_embedding: list[float],
         threshold: float = 0.3,
         limit: int = 20,
-        brain: str | None = None,
+        folders: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Search document chunks by vector similarity using sqlite-vec.
 
-        ``brain`` scopes results to one top-level folder (see ``_BRAIN_SQL``);
-        None/"" searches all documents. When scoping, ``k`` is over-fetched
-        (``_BRAIN_VEC_OVERFETCH``) so the post-join brain filter still yields
-        enough in-brain candidates.
+        ``folders`` scopes results to documents whose top-level folder (see
+        ``_BRAIN_SQL``) is in the set: None searches all documents; an EMPTY
+        list (an empty brain) returns zero results — never a silent fallback to
+        all. When scoping, ``k`` is over-fetched (``_BRAIN_VEC_OVERFETCH``) so
+        the post-join folder filter still yields enough in-scope candidates.
         """
+        if folders is not None and not folders:
+            return []  # empty scope -> zero results, never fall back to all
         db = await self._get_conn()
         blob = _serialize_embedding(query_embedding)
-        brain_clause = f"\n              AND {_BRAIN_SQL} = ?" if brain else ""
-        k = max(limit, _BRAIN_VEC_OVERFETCH) if brain else limit
-        params = (blob, k, user_id, brain) if brain else (blob, k, user_id)
+        if folders:
+            placeholders = ", ".join("?" for _ in folders)
+            brain_clause = f"\n              AND {_BRAIN_SQL} IN ({placeholders})"
+            k = max(limit, _BRAIN_VEC_OVERFETCH)
+            params = (blob, k, user_id, *folders)
+        else:
+            brain_clause = ""
+            k = limit
+            params = (blob, k, user_id)
         rows = await db.execute_fetchall(
             f"""
             SELECT
@@ -722,22 +731,27 @@ class DatabaseService:
         user_id: str,
         query_text: str,
         limit: int = 20,
-        brain: str | None = None,
+        folders: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Search document chunks by full-text (BM25) using FTS5.
 
-        ``brain`` scopes results to one top-level folder (see ``_BRAIN_SQL``);
-        None/"" searches all documents. The filter applies before LIMIT, so FTS
-        scoping is exact — unlike the vector leg, no over-fetch is needed.
+        ``folders`` scopes results to documents whose top-level folder (see
+        ``_BRAIN_SQL``) is in the set: None searches all documents; an EMPTY
+        list (an empty brain) returns zero results. The filter applies before
+        LIMIT, so FTS scoping is exact — no over-fetch needed.
         """
+        if folders is not None and not folders:
+            return []  # empty scope -> zero results, never fall back to all
         db = await self._get_conn()
         # Strip stopwords + escape FTS5 special chars (see _build_fts_match).
         safe_query = _build_fts_match(query_text)
-        brain_clause = f"\n              AND {_BRAIN_SQL} = ?" if brain else ""
-        params = (
-            (safe_query, user_id, brain, limit) if brain
-            else (safe_query, user_id, limit)
-        )
+        if folders:
+            placeholders = ", ".join("?" for _ in folders)
+            brain_clause = f"\n              AND {_BRAIN_SQL} IN ({placeholders})"
+            params = (safe_query, user_id, *folders, limit)
+        else:
+            brain_clause = ""
+            params = (safe_query, user_id, limit)
         rows = await db.execute_fetchall(
             f"""
             SELECT
@@ -773,21 +787,158 @@ class DatabaseService:
             results.append(d)
         return results
 
-    async def list_brains(self, user_id: str) -> list[dict[str, Any]]:
-        """Return each brain (top-level folder, see ``_BRAIN_SQL``) with its
-        completed-document count, most-populated first."""
+    async def list_folders(self, user_id: str) -> list[dict[str, Any]]:
+        """Return each distinct top-level folder (see ``_BRAIN_SQL``) with its
+        completed-document count — the source for the brain folder-picker."""
         db = await self._get_conn()
         rows = await db.execute_fetchall(
             f"""
-            SELECT {_BRAIN_SQL} AS brain, COUNT(*) AS doc_count
+            SELECT {_BRAIN_SQL} AS folder, COUNT(*) AS doc_count
             FROM documents AS d
             WHERE d.user_id = ? AND d.status = 'completed'
-            GROUP BY brain
-            ORDER BY doc_count DESC, brain ASC
+            GROUP BY folder
+            ORDER BY doc_count DESC, folder ASC
             """,
             (user_id,),
         )
-        return [{"brain": r["brain"], "doc_count": r["doc_count"]} for r in rows]
+        return [{"folder": r["folder"], "doc_count": r["doc_count"]} for r in rows]
+
+    # ==================== Brains (user-defined folder buckets) ====================
+    # A brain is a curated set of top-level folders. A doc belongs to a brain if
+    # its folder (``_BRAIN_SQL``) is in the brain's brain_folders. Deleting a
+    # brain never deletes documents.
+
+    async def insert_brain(self, user_id: str, name: str) -> dict[str, Any] | None:
+        """Create a brain. Raises sqlite3.IntegrityError on a duplicate name
+        (UNIQUE(user_id, name)) — the route maps that to 409."""
+        db = await self._get_conn()
+        bid = _uuid()
+        now = _now()
+        await db.execute(
+            "INSERT INTO brains (id, user_id, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (bid, user_id, name, now, now),
+        )
+        await db.commit()
+        return await self.get_brain(bid, user_id)
+
+    async def get_brain(self, brain_id: str, user_id: str) -> dict[str, Any] | None:
+        db = await self._get_conn()
+        rows = await db.execute_fetchall(
+            "SELECT * FROM brains WHERE id = ? AND user_id = ?",
+            (brain_id, user_id),
+        )
+        return _row_to_dict(rows[0]) if rows else None
+
+    async def get_brain_folders(
+        self, brain_id: str, user_id: str
+    ) -> list[str] | None:
+        """Folders in a brain. Returns ``None`` if the brain doesn't exist / isn't
+        owned (caller treats None as "no scope → All"); ``[]`` if the brain exists
+        but has no folders (caller treats [] as "scope to nothing → zero")."""
+        db = await self._get_conn()
+        if await self.get_brain(brain_id, user_id) is None:
+            return None
+        rows = await db.execute_fetchall(
+            "SELECT folder FROM brain_folders WHERE brain_id = ? AND user_id = ? "
+            "ORDER BY folder",
+            (brain_id, user_id),
+        )
+        return [r["folder"] for r in rows]
+
+    async def list_brains(self, user_id: str) -> list[dict[str, Any]]:
+        """Each user-defined brain with: its folders, doc_count (completed docs
+        whose top-level folder is in the brain), and missing_folders (referenced
+        folders that currently hold no documents — e.g. renamed/deleted)."""
+        db = await self._get_conn()
+        brains = await db.execute_fetchall(
+            "SELECT * FROM brains WHERE user_id = ? ORDER BY name COLLATE NOCASE",
+            (user_id,),
+        )
+        existing = {f["folder"] for f in await self.list_folders(user_id)}
+        out: list[dict[str, Any]] = []
+        for b in brains:
+            frows = await db.execute_fetchall(
+                "SELECT folder FROM brain_folders WHERE brain_id = ? ORDER BY folder",
+                (b["id"],),
+            )
+            folders = [r["folder"] for r in frows]
+            doc_count = 0
+            if folders:
+                placeholders = ", ".join("?" for _ in folders)
+                cnt = await db.execute_fetchall(
+                    f"""
+                    SELECT COUNT(*) AS n FROM documents AS d
+                    WHERE d.user_id = ? AND d.status = 'completed'
+                      AND {_BRAIN_SQL} IN ({placeholders})
+                    """,
+                    (user_id, *folders),
+                )
+                doc_count = cnt[0]["n"] if cnt else 0
+            out.append({
+                "id": b["id"],
+                "name": b["name"],
+                "folders": folders,
+                "doc_count": doc_count,
+                "missing_folders": [f for f in folders if f not in existing],
+            })
+        return out
+
+    async def update_brain(
+        self, brain_id: str, user_id: str, name: str
+    ) -> dict[str, Any] | None:
+        """Rename a brain. Raises sqlite3.IntegrityError on a duplicate name."""
+        db = await self._get_conn()
+        await db.execute(
+            "UPDATE brains SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (name, _now(), brain_id, user_id),
+        )
+        await db.commit()
+        return await self.get_brain(brain_id, user_id)
+
+    async def delete_brain(self, brain_id: str, user_id: str) -> bool:
+        """Delete a brain and its folder mappings. Does NOT delete documents."""
+        db = await self._get_conn()
+        await db.execute(
+            "DELETE FROM brain_folders WHERE brain_id = ? AND user_id = ?",
+            (brain_id, user_id),
+        )
+        await db.execute(
+            "DELETE FROM brains WHERE id = ? AND user_id = ?",
+            (brain_id, user_id),
+        )
+        await db.commit()
+        return True
+
+    async def add_brain_folder(
+        self, brain_id: str, user_id: str, folder: str
+    ) -> None:
+        """Add a folder to a brain (idempotent — INSERT OR IGNORE on the PK)."""
+        db = await self._get_conn()
+        await db.execute(
+            "INSERT OR IGNORE INTO brain_folders (brain_id, user_id, folder) "
+            "VALUES (?, ?, ?)",
+            (brain_id, user_id, folder),
+        )
+        await db.execute(
+            "UPDATE brains SET updated_at = ? WHERE id = ? AND user_id = ?",
+            (_now(), brain_id, user_id),
+        )
+        await db.commit()
+
+    async def remove_brain_folder(
+        self, brain_id: str, user_id: str, folder: str
+    ) -> None:
+        db = await self._get_conn()
+        await db.execute(
+            "DELETE FROM brain_folders WHERE brain_id = ? AND user_id = ? AND folder = ?",
+            (brain_id, user_id, folder),
+        )
+        await db.execute(
+            "UPDATE brains SET updated_at = ? WHERE id = ? AND user_id = ?",
+            (_now(), brain_id, user_id),
+        )
+        await db.commit()
 
     async def get_chunks_in_range(
         self,

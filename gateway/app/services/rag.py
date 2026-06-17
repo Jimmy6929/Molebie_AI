@@ -344,14 +344,14 @@ class RAGService:
         query_embedding: list[float],
         count: int,
         threshold: float,
-        brain: str | None = None,
+        folders: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Run a single vector similarity search against document_chunks."""
         metrics = get_metrics_registry()
         try:
             async with metrics.subsystem_timer("rag.vector_search"):
                 return await self.db.vector_search_chunks(
-                    user_id, query_embedding, threshold, count, brain=brain
+                    user_id, query_embedding, threshold, count, folders=folders
                 )
         except Exception as exc:
             print(f"[rag] Similarity search failed: {type(exc).__name__}: {exc}")
@@ -364,17 +364,17 @@ class RAGService:
         query_text: str,
         count: int,
         threshold: float,
-        brain: str | None = None,
+        folders: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Run hybrid search (vector + full-text) with RRF fusion."""
         metrics = get_metrics_registry()
         try:
             async def _vec():
                 async with metrics.subsystem_timer("rag.vector_search"):
-                    return await self.db.vector_search_chunks(user_id, query_embedding, threshold, count, brain=brain)
+                    return await self.db.vector_search_chunks(user_id, query_embedding, threshold, count, folders=folders)
             async def _fts():
                 async with metrics.subsystem_timer("rag.fts_search"):
-                    return await self.db.fts_search_chunks(user_id, query_text, count, brain=brain)
+                    return await self.db.fts_search_chunks(user_id, query_text, count, folders=folders)
             vector_results, text_results = await asyncio.gather(_vec(), _fts())
             async with metrics.subsystem_timer("rag.rrf_fuse"):
                 return _rrf_fuse(
@@ -387,7 +387,7 @@ class RAGService:
         except Exception as exc:
             print(f"[rag] Hybrid search failed: {type(exc).__name__}: {exc}")
             print("[rag] Falling back to vector-only search")
-            return await self._search_chunks(user_id, query_embedding, count, threshold, brain=brain)
+            return await self._search_chunks(user_id, query_embedding, count, threshold, folders=folders)
 
     async def _rewrite_query(
         self,
@@ -511,17 +511,27 @@ class RAGService:
         )
         timings["t_embed_ms"] = round((time.monotonic() - t0) * 1000, 1)
 
-        # Step 2: Search (optionally scoped to a single brain / top-level folder)
+        # Step 2: Search — optionally scoped to a user-defined brain. Resolve the
+        # brain id to its folder set: None brain -> no scope (All); an unknown or
+        # deleted brain id -> get_brain_folders returns None -> All (safe
+        # fallback); an empty brain -> [] -> zero results (no fallback to All).
+        folders: list[str] | None = None
         if brain:
-            print(f"[rag] Scoping retrieval to brain '{brain}'")
+            folders = await self.db.get_brain_folders(brain, user_id)
+            if folders is None:
+                print(f"[rag] Brain '{brain}' not found — searching all")
+            elif not folders:
+                print(f"[rag] Brain '{brain}' has no folders — returning no results")
+            else:
+                print(f"[rag] Scoping retrieval to brain '{brain}': {folders}")
         t1 = time.monotonic()
         if self.hybrid_enabled:
             results = await self._hybrid_search(
-                user_id, query_embedding, search_query, count, thresh, brain=brain
+                user_id, query_embedding, search_query, count, thresh, folders=folders
             )
         else:
             results = await self._search_chunks(
-                user_id, query_embedding, count, thresh, brain=brain
+                user_id, query_embedding, count, thresh, folders=folders
             )
         timings["t_search_ms"] = round((time.monotonic() - t1) * 1000, 1)
 

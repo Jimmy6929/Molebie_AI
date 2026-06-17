@@ -5,19 +5,22 @@ import { useEffect, useState } from "react";
 import { type BrainInfo, listBrains } from "@/lib/gateway";
 
 /**
- * Scope retrieval to a single "brain" (a top-level vault folder). An empty
- * value means "All brains" (no scope). The list is fetched from
- * GET /documents/brains; if the persisted brain no longer exists (folder
- * renamed/deleted) the selector silently falls back to All.
+ * Scope retrieval to a single user-defined "brain" (a named bucket of folders).
+ * The value is a brain id; an empty value means "All brains" (no scope). The
+ * list is fetched from GET /documents/brains; if the persisted brain no longer
+ * exists (deleted) the selector silently falls back to All.
  */
 export default function BrainSelector({
   token,
   selectedBrain,
   onChange,
+  refreshKey,
 }: {
   token: string | null;
   selectedBrain: string | null;
   onChange: (brain: string | null) => void;
+  // Bumped by the parent when brains change in the manager panel, to refetch.
+  refreshKey?: number;
 }) {
   const [brains, setBrains] = useState<BrainInfo[]>([]);
 
@@ -34,14 +37,14 @@ export default function BrainSelector({
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, refreshKey]);
 
   // If the saved brain disappeared (folder renamed/deleted), reset to All.
   useEffect(() => {
     if (
       selectedBrain &&
       brains.length > 0 &&
-      !brains.some((b) => b.brain === selectedBrain)
+      !brains.some((b) => b.id === selectedBrain)
     ) {
       onChange(null);
     }
@@ -57,8 +60,8 @@ export default function BrainSelector({
     >
       <option value="">🧠 All Brains</option>
       {brains.map((b) => (
-        <option key={b.brain} value={b.brain}>
-          {b.brain} ({b.doc_count})
+        <option key={b.id} value={b.id}>
+          {b.name} ({b.doc_count})
         </option>
       ))}
     </select>

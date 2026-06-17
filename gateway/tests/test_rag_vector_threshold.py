@@ -170,9 +170,10 @@ async def test_user_isolation(isolated_data_dir):
 
 
 @pytest.mark.asyncio
-async def test_vector_search_scopes_to_brain(isolated_data_dir):
-    """brain= filters the real vector_search_chunks to one top-level folder
-    (root note -> Inbox); exercises the param-tuple ordering + over-fetch path."""
+async def test_vector_search_scopes_to_folders(isolated_data_dir):
+    """folders= filters the real vector_search_chunks to a SET of top-level
+    folders (root note -> Inbox); exercises the IN-clause + over-fetch path, the
+    multi-folder case, and the empty-set -> zero rule."""
     from app.services.database import get_database_service
     db = get_database_service()
 
@@ -181,23 +182,26 @@ async def test_vector_search_scopes_to_brain(isolated_data_dir):
     await _seed_doc_with_chunk("p.md", _unit(5), relative_path="Projects/p.md")
     await _seed_doc_with_chunk("root.md", _unit(15))  # no path -> Inbox
 
-    areas = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, brain="Areas")
+    areas = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, folders=["Areas"])
     assert sorted(r["filename"] for r in areas) == ["a.md", "b.md"]
 
-    projects = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, brain="Projects")
-    assert [r["filename"] for r in projects] == ["p.md"]
+    multi = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, folders=["Areas", "Projects"])
+    assert sorted(r["filename"] for r in multi) == ["a.md", "b.md", "p.md"]
 
-    inbox = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, brain="Inbox")
+    inbox = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, folders=["Inbox"])
     assert [r["filename"] for r in inbox] == ["root.md"]
+
+    # Empty brain -> zero results, NOT a fallback to all (the load-bearing rule).
+    assert await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10, folders=[]) == []
 
     everything = await db.vector_search_chunks(USER_ID, _unit(0), threshold=0.0, limit=10)
     assert len(everything) == 4
 
 
 @pytest.mark.asyncio
-async def test_fts_search_scopes_to_brain(isolated_data_dir):
-    """brain= filters the real fts_search_chunks; param ordering with the
-    trailing LIMIT must stay correct."""
+async def test_fts_search_scopes_to_folders(isolated_data_dir):
+    """folders= filters the real fts_search_chunks; the IN-clause sits before
+    the trailing LIMIT param, and an empty set returns zero."""
     from app.services.database import get_database_service
     db = get_database_service()
 
@@ -205,8 +209,10 @@ async def test_fts_search_scopes_to_brain(isolated_data_dir):
     await _seed_doc_with_chunk("p.md", _unit(0), relative_path="Projects/p.md")
 
     # "content" appears in every seeded chunk ("content of <filename>").
-    scoped = await db.fts_search_chunks(USER_ID, "content", limit=10, brain="Areas")
+    scoped = await db.fts_search_chunks(USER_ID, "content", limit=10, folders=["Areas"])
     assert [r["filename"] for r in scoped] == ["a.md"]
+
+    assert await db.fts_search_chunks(USER_ID, "content", limit=10, folders=[]) == []
 
     everything = await db.fts_search_chunks(USER_ID, "content", limit=10)
     assert sorted(r["filename"] for r in everything) == ["a.md", "p.md"]

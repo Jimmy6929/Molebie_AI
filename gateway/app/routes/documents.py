@@ -5,6 +5,7 @@ Handles file upload, processing, listing, and deletion.
 Files are stored locally; metadata and chunks in SQLite.
 """
 
+import sqlite3
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -13,10 +14,15 @@ from app.config import get_settings
 from app.middleware.auth import JWTPayload, get_current_user
 from app.models.documents import (
     AttachResponse,
+    BrainFolderRequest,
     BrainInfo,
     BrainListResponse,
+    CreateBrainRequest,
     DocumentInfo,
     DocumentListResponse,
+    FolderInfo,
+    FolderListResponse,
+    RenameBrainRequest,
     SessionAttachmentInfo,
     SessionAttachmentListResponse,
     UploadResponse,
@@ -195,20 +201,122 @@ async def list_documents(
     )
 
 
+def _brain_to_info(b: dict) -> BrainInfo:
+    return BrainInfo(
+        id=b["id"],
+        name=b["name"],
+        folders=b.get("folders", []),
+        doc_count=b.get("doc_count", 0),
+        missing_folders=b.get("missing_folders", []),
+    )
+
+
+async def _brain_info_or_404(brain_id: str, user_id: str, db: DatabaseService) -> BrainInfo:
+    """Return one brain's full BrainInfo (with folders/counts) or 404."""
+    for b in await db.list_brains(user_id):
+        if b["id"] == brain_id:
+            return _brain_to_info(b)
+    raise HTTPException(status_code=404, detail="Brain not found")
+
+
+@router.get("/folders", response_model=FolderListResponse)
+async def list_folders(
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """Top-level vault folders available to add to a brain (with doc counts)."""
+    rows = await db.list_folders(user.user_id)
+    return FolderListResponse(
+        folders=[FolderInfo(folder=r["folder"], doc_count=r["doc_count"]) for r in rows]
+    )
+
+
 @router.get("/brains", response_model=BrainListResponse)
 async def list_brains(
     user: JWTPayload = Depends(get_current_user),
     db: DatabaseService = Depends(get_database_service),
 ):
-    """List the user's brains (top-level vault folders) with document counts.
+    """List the user's brains (name, folders, doc counts, missing folders).
 
-    The chat UI uses this to populate the brain selector; the "All" scope is a
-    client-side concept (no brain filter), so it is not returned here.
+    The chat UI uses this to populate the brain selector; "All" (no scope) is a
+    client-side concept, so it is not returned here.
     """
-    rows = await db.list_brains(user.user_id)
     return BrainListResponse(
-        brains=[BrainInfo(brain=r["brain"], doc_count=r["doc_count"]) for r in rows]
+        brains=[_brain_to_info(b) for b in await db.list_brains(user.user_id)]
     )
+
+
+@router.post("/brains", response_model=BrainInfo, status_code=status.HTTP_201_CREATED)
+async def create_brain(
+    payload: CreateBrainRequest,
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """Create a new (empty) brain."""
+    name = payload.name.strip()
+    try:
+        brain = await db.insert_brain(user.user_id, name)
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail=f"A brain named '{name}' already exists")
+    return _brain_to_info(brain)
+
+
+@router.patch("/brains/{brain_id}", response_model=BrainInfo)
+async def rename_brain(
+    brain_id: str,
+    payload: RenameBrainRequest,
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """Rename a brain."""
+    if await db.get_brain(brain_id, user.user_id) is None:
+        raise HTTPException(status_code=404, detail="Brain not found")
+    name = payload.name.strip()
+    try:
+        await db.update_brain(brain_id, user.user_id, name)
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail=f"A brain named '{name}' already exists")
+    return await _brain_info_or_404(brain_id, user.user_id, db)
+
+
+@router.delete("/brains/{brain_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_brain(
+    brain_id: str,
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """Delete a brain and its folder mappings. Documents are NOT deleted."""
+    if await db.get_brain(brain_id, user.user_id) is None:
+        raise HTTPException(status_code=404, detail="Brain not found")
+    await db.delete_brain(brain_id, user.user_id)
+
+
+@router.post("/brains/{brain_id}/folders", response_model=BrainInfo)
+async def add_brain_folder(
+    brain_id: str,
+    payload: BrainFolderRequest,
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """Add a folder to a brain (idempotent)."""
+    if await db.get_brain(brain_id, user.user_id) is None:
+        raise HTTPException(status_code=404, detail="Brain not found")
+    await db.add_brain_folder(brain_id, user.user_id, payload.folder.strip())
+    return await _brain_info_or_404(brain_id, user.user_id, db)
+
+
+@router.delete("/brains/{brain_id}/folders", response_model=BrainInfo)
+async def remove_brain_folder(
+    brain_id: str,
+    payload: BrainFolderRequest,
+    user: JWTPayload = Depends(get_current_user),
+    db: DatabaseService = Depends(get_database_service),
+):
+    """Remove a folder from a brain."""
+    if await db.get_brain(brain_id, user.user_id) is None:
+        raise HTTPException(status_code=404, detail="Brain not found")
+    await db.remove_brain_folder(brain_id, user.user_id, payload.folder.strip())
+    return await _brain_info_or_404(brain_id, user.user_id, db)
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

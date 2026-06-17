@@ -338,6 +338,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_sources_user_root
 """
 
 
+_BRAINS_SCHEMA_SQL = """
+-- ============================================
+-- USER-DEFINED BRAINS (named buckets of vault folders)
+-- A brain is a curated view over folders, NOT a container: deleting a brain
+-- never deletes documents. A doc belongs to a brain if its top-level folder
+-- is in the brain's brain_folders set.
+-- ============================================
+CREATE TABLE IF NOT EXISTS brains (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_brains_user_name
+    ON brains(user_id, name);
+
+CREATE TABLE IF NOT EXISTS brain_folders (
+    brain_id TEXT NOT NULL REFERENCES brains(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    folder TEXT NOT NULL,
+    PRIMARY KEY (brain_id, folder)
+);
+
+CREATE INDEX IF NOT EXISTS idx_brain_folders_user
+    ON brain_folders(user_id);
+"""
+
+
 _AUDIT_EVENTS_SCHEMA_SQL = """
 -- ============================================
 -- AUDIT EVENTS — fleet operations log
@@ -601,6 +631,14 @@ def init_database_sync(
                 conn.executescript(_VAULT_SOURCES_SCHEMA_SQL)
                 print("[schema] Migrated: added vault_sources table")
 
+            # Migrate: user-defined brains (named buckets of folders). Idempotent.
+            brains_present = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='brains'"
+            ).fetchone()
+            if not brains_present:
+                conn.executescript(_BRAINS_SCHEMA_SQL)
+                print("[schema] Migrated: added brains tables")
+
             # Migrate: audit_events (fleet operations log). Idempotent.
             audit_present = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'"
@@ -638,6 +676,9 @@ def init_database_sync(
 
         # Create vault-sources table (Obsidian-style external folder sync)
         conn.executescript(_VAULT_SOURCES_SCHEMA_SQL)
+
+        # Create user-defined brains tables (named buckets of folders)
+        conn.executescript(_BRAINS_SCHEMA_SQL)
 
         # Create audit_events table (fleet operations log)
         conn.executescript(_AUDIT_EVENTS_SCHEMA_SQL)
