@@ -81,6 +81,7 @@ export async function sendMessage(
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
       web_search: webSearch ?? false,
+      ...(brain ? { brain } : {}),
     }),
   });
 }
@@ -118,6 +119,7 @@ export async function sendMessageStream(
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
       web_search: webSearch ?? false,
+      ...(brain ? { brain } : {}),
     }),
     signal,
   });
