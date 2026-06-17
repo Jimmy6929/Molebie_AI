@@ -70,6 +70,7 @@ export async function sendMessage(
   conversationMode: boolean = false,
   image?: string,
   webSearch?: boolean,
+  brain?: string,
 ): Promise<ChatResponse> {
   return apiCall<ChatResponse>("/chat", token, {
     method: "POST",
@@ -80,6 +81,7 @@ export async function sendMessage(
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
       web_search: webSearch ?? false,
+      ...(brain ? { brain } : {}),
     }),
   });
 }
@@ -102,6 +104,7 @@ export async function sendMessageStream(
   onSearchDone?: (sources: SearchSource[]) => void,
   image?: string,
   webSearch?: boolean,
+  brain?: string,
 ): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/chat/stream`, {
     method: "POST",
@@ -116,6 +119,7 @@ export async function sendMessageStream(
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
       web_search: webSearch ?? false,
+      ...(brain ? { brain } : {}),
     }),
     signal,
   });
@@ -495,6 +499,20 @@ export async function listDocuments(
   token: string
 ): Promise<{ documents: DocumentInfo[] }> {
   return apiCall<{ documents: DocumentInfo[] }>("/documents", token);
+}
+
+// A "brain" = a top-level vault folder; retrieval can be scoped to one.
+export interface BrainInfo {
+  brain: string;
+  doc_count: number;
+}
+
+export interface BrainsResponse {
+  brains: BrainInfo[];
+}
+
+export async function listBrains(token: string): Promise<BrainsResponse> {
+  return apiCall<BrainsResponse>("/documents/brains", token);
 }
 
 export async function deleteDocument(
