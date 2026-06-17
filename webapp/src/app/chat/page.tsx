@@ -51,6 +51,7 @@ import MessageBubble from "./MessageBubble";
 import VoiceSettings from "./VoiceSettings";
 import { FolderUploadProgress } from "./FolderUploadProgress";
 import { VaultPanel } from "./VaultPanel";
+import BrainSelector from "./BrainSelector";
 
 interface DisplayMessage {
   id: string;
@@ -90,6 +91,11 @@ export default function ChatPage() {
     catch { return false; }
   });
   const [mode, setMode] = useState<"instant" | "thinking" | "thinking_harder">("thinking");
+  const [selectedBrain, setSelectedBrain] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try { return localStorage.getItem("molebie_selected_brain") || null; }
+    catch { return null; }
+  });
   const [toolsOpen, setToolsOpen] = useState(false);
 
   // ── Mode flags ────────────────────────────────────────────────────────────
@@ -107,6 +113,11 @@ export default function ChatPage() {
     try { localStorage.setItem("molebie_web_search", String(webSearchEnabled)); }
     catch {}
   }, [webSearchEnabled]);
+  // Persist the selected brain to localStorage
+  useEffect(() => {
+    try { localStorage.setItem("molebie_selected_brain", selectedBrain || ""); }
+    catch {}
+  }, [selectedBrain]);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -798,6 +809,7 @@ export default function ChatPage() {
         },
         imageDataUri,
         webSearchEnabled,
+        selectedBrain || undefined,
       );
       setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m));
 
@@ -895,6 +907,7 @@ export default function ChatPage() {
         },
         undefined,
         webSearchEnabled,
+        selectedBrain || undefined,
       );
       setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
       loadSessions();
@@ -1584,6 +1597,13 @@ export default function ChatPage() {
                         <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
                       </svg>
                     </button>
+
+                    {/* Brain (corpus) scope */}
+                    <BrainSelector
+                      token={token}
+                      selectedBrain={selectedBrain}
+                      onChange={setSelectedBrain}
+                    />
 
                     {/* Chat conversation mode */}
                     <button

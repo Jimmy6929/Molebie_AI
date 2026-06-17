@@ -501,6 +501,20 @@ export async function listDocuments(
   return apiCall<{ documents: DocumentInfo[] }>("/documents", token);
 }
 
+// A "brain" = a top-level vault folder; retrieval can be scoped to one.
+export interface BrainInfo {
+  brain: string;
+  doc_count: number;
+}
+
+export interface BrainsResponse {
+  brains: BrainInfo[];
+}
+
+export async function listBrains(token: string): Promise<BrainsResponse> {
+  return apiCall<BrainsResponse>("/documents/brains", token);
+}
+
 export async function deleteDocument(
   token: string,
   documentId: string
