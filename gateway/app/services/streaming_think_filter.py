@@ -21,6 +21,45 @@ _OPEN = "<think>"
 _CLOSE = "</think>"
 
 
+def strip_think_blocks(content: str) -> str:
+    """Remove every ``<think>...</think>`` block from a complete buffer.
+
+    Linear-time string scan — equivalent to
+    ``re.compile(r"<think>.*?</think>", re.DOTALL).sub("", content)`` but without
+    the O(n²) backtracking that regex exhibits on input full of unclosed
+    ``<think>`` tags (CodeQL py/polynomial-redos: the regex retries the match at
+    every ``<think>`` start position). An unclosed ``<think>`` leaves the
+    remainder untouched, matching the lazy regex's behaviour.
+    """
+    out: list[str] = []
+    i = 0
+    while True:
+        start = content.find(_OPEN, i)
+        if start == -1:
+            out.append(content[i:])
+            break
+        end = content.find(_CLOSE, start + len(_OPEN))
+        if end == -1:
+            out.append(content[i:])  # no closing tag from here on — keep the rest
+            break
+        out.append(content[i:start])
+        i = end + len(_CLOSE)
+    return "".join(out)
+
+
+def first_think_inner(content: str) -> str | None:
+    """Return the raw inner text of the FIRST complete ``<think>...</think>``
+    block (may be ``""`` for an empty block), or ``None`` if there is no complete
+    block. Linear-time counterpart to ``_THINK_RE.search``."""
+    start = content.find(_OPEN)
+    if start == -1:
+        return None
+    end = content.find(_CLOSE, start + len(_OPEN))
+    if end == -1:
+        return None
+    return content[start + len(_OPEN):end]
+
+
 class ThinkBlockFilter:
     """State machine for stripping <think>...</think> from a streamed text.
 
