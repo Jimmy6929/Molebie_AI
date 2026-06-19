@@ -224,10 +224,14 @@ def check_sqlite_vec(db_path: Path) -> DeepCheckResult:
         if can_load is True:
             return DeepCheckResult("sqlite-vec", True, "vec0 tables present, extension loadable")
         elif can_load is None:
-            # Extension can't load but tables exist (created by gateway)
+            # Python built without loadable SQLite extension support. The gateway
+            # runs this SAME venv (service_manager launches it from .venv), so it
+            # will hit the identical AttributeError at startup — this is a hard
+            # failure, not "gateway handles it".
             return DeepCheckResult(
-                "sqlite-vec", True,
-                "vec0 tables present (extension not loadable in CLI Python — OK, gateway handles it)",
+                "sqlite-vec", False,
+                "Python cannot load SQLite extensions — the gateway will crash at startup",
+                fix_hint=_extension_fix_hint(),
             )
         else:
             return DeepCheckResult(
@@ -259,6 +263,30 @@ def _try_load_sqlite_vec(db_path: Path) -> Optional[bool]:
         return None
     except Exception:
         return None
+
+
+def _extension_fix_hint() -> str:
+    """Package-manager-appropriate guidance for getting an extension-capable Python.
+
+    Reuses the CLI's package-manager detection so the hint is correct on any host
+    rather than hardcoding Homebrew.
+    """
+    from cli.services.prerequisite_checker import detect_package_manager
+
+    rebuild = "rm -rf .venv && ./install.sh"
+    cmds = {
+        "brew": f"brew install python@3.12 && {rebuild}",
+        "apt": f"sudo apt-get install -y python3.12 python3.12-venv && {rebuild}",
+        "dnf": f"sudo dnf install -y python3.12 && {rebuild}",
+        "pacman": f"sudo pacman -S python && {rebuild}",
+    }
+    hint = cmds.get(detect_package_manager() or "")
+    if hint:
+        return hint
+    return (
+        "Rebuild .venv from a Python 3.10+ that has loadable SQLite extension "
+        f"support, then re-run ./install.sh ({rebuild})"
+    )
 
 
 def check_fts5(db_path: Path) -> DeepCheckResult:
