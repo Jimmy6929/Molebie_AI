@@ -215,11 +215,10 @@ def _mlx_python() -> str:
     """Return the interpreter that runs (or would run) the MLX server.
 
     Resolution order:
-      1. Project `.venv/bin/python3` if it exists. Project convention is to
-         run MLX from the venv (the user's shell auto-activates it and
-         `service_manager.py` resolves the literal string "python3" through
-         PATH, which has `.venv/bin` first).
-      2. PATH-resolved `python3` — what the literal "python3" command hits.
+      1. Project `.venv/bin/python3` if it exists. This is the exact
+         interpreter `service_manager.py` launches the MLX server with, so
+         dependency checks here must target the same one.
+      2. PATH-resolved `python3` as a fallback when no project venv exists.
       3. `sys.executable` as a last resort.
 
     Why not `ps`-based detection: macOS venvs share the framework Python

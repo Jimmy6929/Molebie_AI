@@ -57,6 +57,16 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
     root = get_project_root()
     services: list[ServiceDef] = []
 
+    # Every Python service (MLX servers, gateway) must launch from the project
+    # venv interpreter — NOT a PATH-resolved "python3". install.sh launches the
+    # CLI via .venv/bin/molebie-ai without activating the venv, so .venv/bin is
+    # not on PATH at runtime; a bare "python3" resolves to the system Python,
+    # which lacks our deps (uvicorn, mlx-vlm) and crashes the service.
+    if sys.platform == "win32":
+        venv_python = str(root / ".venv" / "Scripts" / "python.exe")
+    else:
+        venv_python = str(root / ".venv" / "bin" / "python")
+
     # 1. Docker services (optional, co-located with gateway)
     if config.run_gateway:
         if config.search_enabled:
@@ -90,7 +100,7 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
                 name="MLX Thinking",
                 port=8080,
                 health_url="http://localhost:8080/v1/models",
-                start_cmd=["python3", str(root / "scripts" / "mlx_server.py"),
+                start_cmd=[venv_python, str(root / "scripts" / "mlx_server.py"),
                             "--host", "0.0.0.0", "--port", "8080"],
                 start_order=2,
             ))
@@ -98,7 +108,7 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
                 name="MLX Instant",
                 port=8081,
                 health_url="http://localhost:8081/v1/models",
-                start_cmd=["python3", str(root / "scripts" / "mlx_server.py"),
+                start_cmd=[venv_python, str(root / "scripts" / "mlx_server.py"),
                             "--host", "0.0.0.0", "--port", "8081"],
                 is_optional=True,
                 start_order=2,
@@ -106,10 +116,6 @@ def get_service_definitions(config: MolebieConfig) -> list[ServiceDef]:
 
     # 3. Gateway (only if this machine runs gateway)
     if config.run_gateway:
-        if sys.platform == "win32":
-            venv_python = str(root / ".venv" / "Scripts" / "python.exe")
-        else:
-            venv_python = str(root / ".venv" / "bin" / "python")
         services.append(ServiceDef(
             name="Gateway",
             port=8000,
