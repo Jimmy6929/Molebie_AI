@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.services.rag import (
     _chunk_score,
     _expand_with_neighbors,
+    _passes_relevance_floor,
     _quality_label,
     _reorder_for_context,
     _reorder_groups_for_context,
@@ -111,6 +112,34 @@ def test_chunk_score_precedence():
     assert _chunk_score(c) == pytest.approx(0.2)
 
 
+# ───────── _passes_relevance_floor ─────────
+
+
+def test_floor_reranked_chunk_compares_against_rerank_floor():
+    assert _passes_relevance_floor(_chunk(rerank=0.5), 0.3, 0.4) is True
+    assert _passes_relevance_floor(_chunk(rerank=0.2), 0.3, 0.4) is False
+
+
+def test_floor_unreranked_chunk_falls_back_to_similarity_threshold():
+    # Rerank failed or disabled: similarity gates against rag_match_threshold,
+    # NOT the rerank floor — the two scales are unrelated.
+    assert _passes_relevance_floor(_chunk(sim=0.45), 0.3, 0.4) is True
+    assert _passes_relevance_floor(_chunk(sim=0.35), 0.3, 0.4) is False
+
+
+def test_floor_never_compares_rrf_scale_against_rerank_floor():
+    # RRF scores max out around 2/(k+1) ≈ 0.016 — comparing them against a
+    # calibrated rerank floor would drop every chunk on the rerank-failure
+    # path. A chunk carrying rrf + similarity must gate on similarity.
+    assert _passes_relevance_floor(_chunk(rrf=0.016, sim=0.9), 0.3, 0.4) is True
+
+
+def test_floor_fts_only_hit_passes():
+    # No rerank score, no similarity: keyword rank is the only evidence —
+    # kept deliberately (degraded-rerank recall beats blind drops).
+    assert _passes_relevance_floor(_chunk(), 0.3, 0.4) is True
+
+
 # ───────── compute_retrieval_confidence ─────────
 
 
@@ -123,8 +152,13 @@ def test_confidence_empty_is_none():
     [
         (0.7, "HIGH"),
         (0.699, "MODERATE"),
-        (0.3, "MODERATE"),
-        (0.299, "LOW"),
+        # MODERATE floor raised 0.3 → 0.5 (2026-08-14 recalibration): the
+        # 0.3–0.5 band is weakly-related pollution that hijacked general
+        # questions into the strict template. See
+        # gateway/tests/eval/calibration/2026-08-14/DERIVATION.md.
+        (0.5, "MODERATE"),
+        (0.499, "LOW"),
+        (0.3, "LOW"),
         (0.0, "LOW"),
     ],
 )
