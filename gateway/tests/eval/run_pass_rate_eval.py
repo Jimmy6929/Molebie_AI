@@ -126,14 +126,19 @@ def assess(entry: dict, output: str) -> tuple[bool, str]:
         return True, "ok"
 
     if cat == "rag_grounded_negative":
-        # The model should NOT contain the expected substrings (these are
-        # the "wrong answers we shouldn't produce"). Falling back to the
-        # abstain string is also acceptable.
-        forbidden = entry.get("expected_substrings") or []
-        for s in forbidden:
-            if s.lower() in out_lower:
-                return False, f"contains forbidden substring: {s!r}"
-        return True, "ok"
+        # Weak-retrieval trap: the model must DISCLAIM, not fabricate.
+        # ``expected_substrings`` on these rows are acceptable disclaimer
+        # phrasings ("I don't have", "no notes", ...) — evidence of a pass,
+        # never forbidden text. (A previous version inverted this and
+        # failed honest abstention; run_baseline.evaluate is canonical.)
+        disclaimers = entry.get("expected_substrings") or []
+        if ABSTAIN_FALLBACK in out:
+            return True, "emitted fallback string"
+        if _is_refusal(out):
+            return True, "disclaimed (refusal)"
+        if any(s.lower() in out_lower for s in disclaimers):
+            return True, "disclaimed (matched row phrasing)"
+        return False, "did not disclaim on weak retrieval"
 
     if cat == "adversarial_premise":
         if _is_refusal(out):
