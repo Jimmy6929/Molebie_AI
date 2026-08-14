@@ -28,7 +28,12 @@ jobs:
         run: |
           cd gateway
           pip install -r requirements.txt -q
-          pip install pytest pytest-asyncio pytest-mock ruff pip-audit -q
+          # Toolchain is PINNED: on 2026-08-14 an unpinned 'ruff' picked up a new
+          # release whose rule changes produced 128 errors on untouched code and
+          # broke every open PR at once. Versions below are the locally-verified
+          # known-good set; bump them deliberately, with the repo lint-clean.
+          # (pytest-mock was removed — nothing in the repo uses it.)
+          pip install "pytest==9.0.2" "pytest-asyncio==1.3.0" "ruff==0.15.6" "pip-audit==2.10.0" -q
 
       - name: Audit gateway dependencies for CVEs
         run: |
