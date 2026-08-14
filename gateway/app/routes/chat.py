@@ -152,7 +152,7 @@ def _confidence_directive(
 ) -> str | None:
     """Return a directive to append to the system prompt, or None.
 
-    Two cases need a directive on top of the base template:
+    Cases that need a directive on top of the base template:
 
     1. Generative mode + NONE confidence + factual query + tools enabled:
        nudge the model to offer a web search before answering. (Without
@@ -161,7 +161,12 @@ def _confidence_directive(
        turns, no directive — the system prompt already handles "answer
        directly, no preamble".
 
-    2. Lookup mode + LOW confidence: remind the model that the retrieval
+    2. Lookup mode + MODERATE confidence: the strict template alone made
+       the model refuse general questions as "not in your notes" (found
+       by the 2026-08-14 eval). Hedge: ground where the evidence applies,
+       general knowledge where it is silent.
+
+    3. Lookup mode + LOW confidence: remind the model that the retrieval
        was weak — cite [S#] only when actually used, and say so plainly
        if the evidence doesn't answer the question.
 
@@ -177,6 +182,20 @@ def _confidence_directive(
                 "(e.g. \"Want me to look this up online?\")."
             )
         return None
+    if confidence == "MODERATE" and mode == "lookup":
+        # The 2026-08-14 eval's refusal bug lived here: the whole MODERATE
+        # band got the strict evidence-only template with no hedging, so a
+        # general question with one mid-score chunk was answered "not in
+        # your notes". Soften without dropping grounding: use the evidence
+        # where it genuinely applies, fall back to general knowledge where
+        # it is silent.
+        return (
+            "The retrieved evidence is only moderately relevant. Answer "
+            "from it where it genuinely covers the question, citing [S#] "
+            "for those parts; where it is silent, say so briefly and "
+            "answer from general knowledge instead of stretching the "
+            "notes or refusing."
+        )
     if confidence == "LOW" and mode == "lookup":
         # Reachable only via the explicit-lookup override (user literally
         # asked "from my notes"). Strict grounding stays on; just remind
@@ -1058,8 +1077,10 @@ async def send_message(
 
     # Confidence-driven directives: in generative mode on a factual gap with
     # tools available, nudge the model to offer a web search; in lookup mode
-    # with LOW confidence, remind it to cite-when-used and admit gaps. HIGH/
-    # MODERATE/casual turns rely on the base template alone.
+    # with MODERATE confidence, hedge the strict template (ground where the
+    # evidence applies, general knowledge where it is silent); with LOW,
+    # remind it to cite-when-used and admit gaps. HIGH and casual turns rely
+    # on the base template alone.
     directive = _confidence_directive(
         rag_confidence,
         rag_chunks,

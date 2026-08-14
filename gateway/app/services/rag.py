@@ -35,6 +35,31 @@ def _chunk_score(chunk: dict[str, Any]) -> float:
     return float(chunk.get("similarity", 0.0))
 
 
+def _passes_relevance_floor(
+    chunk: dict[str, Any], rerank_floor: float, match_threshold: float
+) -> bool:
+    """Scale-aware relevance gate for one retrieved chunk.
+
+    Rerank scores (0..1, calibrated) compare against ``rerank_floor``.
+    Chunks that were never reranked (reranker off or failed) fall back to
+    vector similarity against the existing ``rag_match_threshold`` — RRF
+    scores are NOT comparable to either scale (max ≈ 1/(k+1) ≈ 0.016 at
+    k=60), so
+    a raw ``_chunk_score`` comparison would wrongly drop every chunk on
+    the rerank-failure path. FTS-only hits carry neither score; keyword
+    rank is their only evidence, so they pass and rely on downstream
+    ordering — degraded-rerank recall beats silently losing exact-phrase
+    matches.
+    """
+    rerank_score = chunk.get("rerank_score")
+    if rerank_score is not None:
+        return float(rerank_score) >= rerank_floor
+    similarity = chunk.get("similarity")
+    if similarity is not None:
+        return float(similarity) >= match_threshold
+    return True
+
+
 def compute_retrieval_confidence(chunks: list[dict[str, Any]]) -> str:
     """Score the retrieved set as NONE / LOW / MODERATE / HIGH.
 
@@ -57,8 +82,10 @@ def compute_retrieval_confidence(chunks: list[dict[str, Any]]) -> str:
 
     REFUSE was removed: low scores route to generative mode silently
     rather than emitting a user-visible refusal. The ``rag_rerank_floor``
-    config knob now drops sub-noise chunks entirely so they collapse to
-    NONE → generative.
+    config knob (0.25 as of the 2026-08-14 recalibration) drops sub-noise
+    chunks entirely — on every retrieval path, via
+    ``_passes_relevance_floor`` after the rerank block — so they collapse
+    to NONE → generative.
     """
     if not chunks:
         return "NONE"
@@ -66,7 +93,14 @@ def compute_retrieval_confidence(chunks: list[dict[str, Any]]) -> str:
     top_score = max(scores)
     if top_score >= 0.7:
         return "HIGH"
-    if top_score >= 0.3:
+    # MODERATE raised 0.3 → 0.5 (2026-08-14 recalibration, post-T4 golden
+    # set + live-vault probes): the 0.3–0.5 band was dominated by weakly-
+    # related chunks that hijacked general questions into the strict
+    # template ("write merge_ranges" scored 0.34 against a Paul Graham
+    # essay and got refused as "not in your notes"). Genuinely grounded
+    # answers cluster ≥ 0.9 (p20 = 0.92); the weakest real one measured
+    # 0.373. Full derivation: gateway/tests/eval/calibration/2026-08-14/.
+    if top_score >= 0.5:
         return "MODERATE"
     return "LOW"
 
@@ -583,24 +617,32 @@ class RAGService:
                         for c in results
                     ],
                 }))
-                # Apply the reranker noise floor: drop chunks below the
-                # configured floor so they never reach the prompt or the
-                # confidence tiering. Default floor=0.0 is a pass-through
-                # until calibration sets a real value.
-                floor = self.settings.rag_rerank_floor
-                if floor > 0.0 and results:
-                    kept = [c for c in results if _chunk_score(c) >= floor]
-                    if len(kept) != len(results):
-                        print(
-                            f"[rag] Dropped {len(results) - len(kept)} chunk(s) "
-                            f"below rerank floor {floor:.3f}"
-                        )
-                    results = kept
             except Exception as exc:
                 print(f"[rag] Reranking failed (using search order): {type(exc).__name__}: {exc}")
                 timings["t_rerank_ms"] = 0
         else:
             timings["t_rerank_ms"] = 0
+
+        # Relevance floor — applied AFTER the rerank block so it holds on
+        # every path: rerank succeeded, rerank raised, or reranker disabled.
+        # It previously lived inside the try above, so a rerank failure or
+        # rag_reranker_enabled=false silently skipped it — the exact gap
+        # that let keyword-only matches hijack unrelated questions. Chunks
+        # dropped here never reach the prompt or the confidence tiering.
+        floor = self.settings.rag_rerank_floor
+        if floor > 0.0 and results:
+            kept = [
+                c for c in results
+                if _passes_relevance_floor(
+                    c, floor, self.settings.rag_match_threshold
+                )
+            ]
+            if len(kept) != len(results):
+                print(
+                    f"[rag] Dropped {len(results) - len(kept)} chunk(s) "
+                    f"below relevance floor (rerank >= {floor:.3f})"
+                )
+            results = kept
 
         # Snapshot the directly-retrieved (post-floor) chunks before any
         # expansion/reorder — wikilink expansion reads their metadata and
