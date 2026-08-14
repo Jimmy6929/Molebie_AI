@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 from app.middleware.auth import JWTPayload, get_current_user
 from app.services.database import get_database_service
+from app.services.ingest_worker import get_ingest_worker
 from app.services.vault_sync import _check_root_allowed, sync_vault
 
 router = APIRouter(prefix="/documents/vault", tags=["Vault Sync"])
@@ -286,5 +287,23 @@ async def disconnect_vault(
     vault = await db.get_vault_source(vault_id, user.user_id)
     if not vault:
         raise HTTPException(status_code=404, detail="Vault not found")
+
+    # Cancel an ingest job that is mid-flight for THIS vault before tearing it
+    # down. Without this the worker keeps writing `documents` rows tagged with
+    # a vault_source_id that no longer exists — orphans no UI query can show
+    # and no later sync or disconnect can ever clean up.
+    active = await db.get_active_ingest_job(user.user_id)
+    if active and active.get("vault_source_id") == vault_id:
+        if await db.set_ingest_job_cancelled(active["id"], user.user_id):
+            await get_ingest_worker().emit(
+                active["id"],
+                "job_cancelled",
+                {
+                    "job_id": active["id"],
+                    "processed_files": active["processed_files"],
+                    "failed_files": active["failed_files"],
+                },
+            )
+
     deleted = await db.delete_vault_source(vault_id, user.user_id)
     return DisconnectResponse(deleted_documents=deleted)
