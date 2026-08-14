@@ -98,6 +98,9 @@ export async function sendMessage(
     body: JSON.stringify({
       message,
       mode,
+      // The UI mode toggle is always an explicit user choice — the gateway
+      // honors it unconditionally (no CoT auto-disable on lookups).
+      mode_source: "user",
       session_id: sessionId || null,
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
@@ -136,6 +139,9 @@ export async function sendMessageStream(
     body: JSON.stringify({
       message,
       mode,
+      // The UI mode toggle is always an explicit user choice — the gateway
+      // honors it unconditionally (no CoT auto-disable on lookups).
+      mode_source: "user",
       session_id: sessionId || null,
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),

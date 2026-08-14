@@ -795,6 +795,48 @@ async def _persist_rag_metrics(
         print(f"[chat] RAG metrics persist failed: {type(exc).__name__}: {exc}")
 
 
+def _decide_thinking_override(
+    *,
+    mode_source: str,
+    inference_mode: str,
+    rag_chunks: list,
+    routing_mode: str,
+    explain_intent: bool,
+    explain_classify_failed: bool,
+    settings,
+) -> tuple[bool | None, str | None]:
+    """Decide whether to force CoT off for this turn (T3: honest thinking).
+
+    Small Qwen models burn thousands of thinking tokens "in circles" on
+    terse fact lookups, so RAG-lookup turns default CoT off — but three
+    honesty rules bound that optimisation (the 2026-08-14 eval found only
+    4/22 thinking-mode answers actually produced reasoning):
+
+      1. An EXPLICIT user mode choice always wins (mode_source == "user").
+         Operators who want unconditional auto-disable still have the
+         inference_thinking_auto_disable_for_rag kill switch.
+      2. Only lookup-routed retrievals qualify — a LOW/generative turn
+         that happened to retrieve a weak chunk keeps CoT.
+      3. Intent-classifier failure fails OPEN (keeps CoT) instead of
+         defaulting to "lookup" and silently stripping reasoning.
+
+    Returns ``(enable_thinking_override, disabled_reason)``; the reason is
+    set only when CoT is disabled and is surfaced to the client via
+    InferenceMetadata / the stream metadata frame.
+    """
+    if inference_mode not in ("thinking", "thinking_harder"):
+        return None, None
+    if not rag_chunks or not settings.inference_thinking_auto_disable_for_rag:
+        return None, None
+    if mode_source == "user":
+        return None, None
+    if routing_mode != "lookup":
+        return None, None
+    if explain_intent or explain_classify_failed:
+        return None, None
+    return False, "rag_lookup_auto_disable"
+
+
 def _shape_stage_events(events: list[dict]) -> tuple[list[dict], float | None]:
     """Reduce raw pipeline events to persistable/streamable stage rows.
 
@@ -1008,10 +1050,19 @@ async def send_message(
     # no-context retrieval rather than failing the whole request — the
     # model can still answer from memory + chat history.
     rag_chunks = []
+    explain_task = None
     if not request.conversation_mode:
         if not rag.enabled:
             print("[chat] RAG disabled — skipping document retrieval")
         elif await rag.user_has_documents(user_id):
+            # Fire explain-vs-lookup intent classification CONCURRENTLY with
+            # retrieval (T3): the classifier needs the instant LLM, retrieval
+            # needs embed+rerank — different backends, so the overlap is free
+            # and removes the serial 0-3s wait whose load-induced timeouts
+            # used to fail closed and strip CoT.
+            explain_task = asyncio.create_task(
+                classify_explain_intent(request.message)
+            )
             t_rag = time.perf_counter()
             try:
                 rag_chunks = await rag.retrieve_context(
@@ -1049,9 +1100,18 @@ async def send_message(
     # Explain-vs-lookup intent. Only worth classifying when we'd otherwise
     # use the strict lookup template — generative mode is already permissive.
     # Drives both template selection and the CoT auto-disable gate below.
+    # Resolve the pre-fired classification. Tri-state (T3): True=explain,
+    # False=lookup, None=classifier failed — a failure must not masquerade
+    # as a confident lookup verdict in the CoT gate below.
     explain_intent = False
-    if routing_mode == "lookup" and rag_chunks and not request.conversation_mode:
-        explain_intent = await classify_explain_intent(request.message)
+    explain_classify_failed = False
+    if explain_task is not None:
+        if routing_mode == "lookup" and rag_chunks:
+            _explain = await explain_task
+            explain_intent = _explain is True
+            explain_classify_failed = _explain is None
+        else:
+            explain_task.cancel()
 
     # Compute tool-calling availability up-front so it can be advertised in
     # the system prompt (otherwise the model has no prior that web_search /
@@ -1152,18 +1212,19 @@ async def send_message(
             "chat.trim_budget", (time.perf_counter() - t_trim) * 1000.0,
         )
 
-    # Force CoT off when RAG context is present on the thinking tier AND the
-    # query is lookup-intent — small Qwen models burn thousands of thinking
-    # tokens "in circles" on terse fact lookups. Explain-intent queries keep
-    # CoT on so the model can reason over the combined context (RAG + history
-    # + system prompt) before synthesizing the multi-paragraph answer.
-    enable_thinking_override: bool | None = None
-    if (rag_chunks
-            and inference_mode in ("thinking", "thinking_harder")
-            and settings.inference_thinking_auto_disable_for_rag
-            and not explain_intent):
-        enable_thinking_override = False
-        print(f"[chat] RAG present on {inference_mode} tier (lookup intent) — disabling CoT")
+    # CoT auto-disable, bounded by the T3 honesty rules — see
+    # _decide_thinking_override for the full policy.
+    enable_thinking_override, thinking_disabled_reason = _decide_thinking_override(
+        mode_source=request.mode_source,
+        inference_mode=inference_mode,
+        rag_chunks=rag_chunks,
+        routing_mode=routing_mode,
+        explain_intent=explain_intent,
+        explain_classify_failed=explain_classify_failed,
+        settings=settings,
+    )
+    if enable_thinking_override is False:
+        print(f"[chat] RAG lookup on defaulted {inference_mode} tier — disabling CoT")
 
     # Decide which inference path to take. Tool calling and self-consistency
     # are mutually exclusive in this first cut — tool calling produces a
@@ -1493,6 +1554,8 @@ async def send_message(
         completion_tokens=inference_result.get("completion_tokens"),
         finish_reason=inference_result.get("finish_reason"),
         rag_metrics=rag_metrics,
+        enable_thinking=inference_result.get("enable_thinking"),
+        thinking_disabled_reason=thinking_disabled_reason,
     )
 
     sources_list = [{"title": r["title"], "url": r["url"]} for r in search_results] if search_results else None
@@ -1777,10 +1840,19 @@ async def send_message_stream(
     # model answer without RAG. The pipeline event records the failure so
     # the operator can see what broke without losing the user's response.
     rag_chunks = []
+    explain_task = None
     if not request.conversation_mode:
         if not rag.enabled:
             print("[chat] RAG disabled — skipping document retrieval")
         elif await rag.user_has_documents(user_id):
+            # Fire explain-vs-lookup intent classification CONCURRENTLY with
+            # retrieval (T3): the classifier needs the instant LLM, retrieval
+            # needs embed+rerank — different backends, so the overlap is free
+            # and removes the serial 0-3s wait whose load-induced timeouts
+            # used to fail closed and strip CoT.
+            explain_task = asyncio.create_task(
+                classify_explain_intent(request.message)
+            )
             t_rag = time.perf_counter()
             try:
                 rag_chunks = await rag.retrieve_context(
@@ -1816,9 +1888,18 @@ async def send_message_stream(
               + (" (explicit lookup phrasing)" if explicit_lookup else ""))
 
     # Explain-vs-lookup intent — same gating as send_message().
+    # Resolve the pre-fired classification. Tri-state (T3): True=explain,
+    # False=lookup, None=classifier failed — a failure must not masquerade
+    # as a confident lookup verdict in the CoT gate below.
     explain_intent = False
-    if routing_mode == "lookup" and rag_chunks and not request.conversation_mode:
-        explain_intent = await classify_explain_intent(request.message)
+    explain_classify_failed = False
+    if explain_task is not None:
+        if routing_mode == "lookup" and rag_chunks:
+            _explain = await explain_task
+            explain_intent = _explain is True
+            explain_classify_failed = _explain is None
+        else:
+            explain_task.cancel()
 
     # Streaming path doesn't use tool_calling (no tool loop on stream), so the
     # TOOLS AVAILABLE hint is suppressed here — advertising tools the model
@@ -1865,15 +1946,19 @@ async def send_message_stream(
     else:
         inference_mode = request.mode.value
 
-    # Force CoT off when RAG context is present on the thinking tier AND the
-    # query is lookup-intent — see send_message() for rationale.
-    enable_thinking_override: bool | None = None
-    if (rag_chunks
-            and inference_mode in ("thinking", "thinking_harder")
-            and settings.inference_thinking_auto_disable_for_rag
-            and not explain_intent):
-        enable_thinking_override = False
-        print(f"[chat] RAG present on {inference_mode} tier (lookup intent) — disabling CoT")
+    # CoT auto-disable, bounded by the T3 honesty rules — see
+    # _decide_thinking_override for the full policy.
+    enable_thinking_override, thinking_disabled_reason = _decide_thinking_override(
+        mode_source=request.mode_source,
+        inference_mode=inference_mode,
+        rag_chunks=rag_chunks,
+        routing_mode=routing_mode,
+        explain_intent=explain_intent,
+        explain_classify_failed=explain_classify_failed,
+        settings=settings,
+    )
+    if enable_thinking_override is False:
+        print(f"[chat] RAG lookup on defaulted {inference_mode} tier — disabling CoT")
 
     async def event_generator():
         """Generate SSE events from inference stream."""
@@ -1995,6 +2080,7 @@ async def send_message_stream(
                 mode=inference_mode,
                 enable_thinking=enable_thinking_override,
                 session_id=session_id,
+                thinking_disabled_reason=thinking_disabled_reason,
             ):
                 rewritten_chunk = chunk
                 try:
