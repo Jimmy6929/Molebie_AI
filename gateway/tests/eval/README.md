@@ -19,7 +19,7 @@ on top of vanilla inference. Two complementary tools, run side by side:
 
 | File | Purpose |
 |------|---------|
-| `golden_set.jsonl`   | 50 hand-curated regression queries across 5 categories. Add 50–100 more from your actual notes for stronger signal. |
+| `golden_set.jsonl`   | 52 hand-curated regression queries across 5 categories. Add 50–100 more from your actual notes for stronger signal. |
 | `promptfoo.yaml`     | Promptfoo config that loads `golden_set.jsonl` and runs against the local gateway / Ollama / vLLM. |
 | `run_baseline.py`    | **The Phase 4 baseline runner.** Per-category pass rate AND per-layer activity (CoVe applied %, Judge fired %, SelfCheck flagged %). |
 | `ablation.sh`        | Boots the gateway four times (baseline / judge-only / cove-only / all-on), runs the baseline against each, drops a one-line summary into `eval-results/summary.txt`. |
@@ -85,15 +85,29 @@ The build plan defaults are a starting point — tune to your numbers:
 
 | Category               | Count shipped | What it tests |
 |------------------------|---------------|---------------|
-| `rag_grounded`         | 15            | Answer + `[S#]` citation lands correctly. |
+| `rag_grounded`         | 17            | Answer + `[S#]` citation lands correctly. |
 | `adversarial_premise`  | 15            | Refuses fake-package / fake-API / fake-paper / fake-CVE. |
 | `must_abstain`         | 10            | Emits the exact `"I don't have that in your notes."` (or accepted refusal). |
 | `tool_call`            | 8             | Correct tool dispatched with sensible arguments. |
 | `rag_grounded_negative`| 2             | Disclaims when retrieval is weak instead of fabricating. |
 
-The shipped 50 are realistic but **generic** — replace ~half with
+The shipped 52 are realistic but **generic** — replace ~half with
 questions sourced from your actual notes for the most-trustworthy
 signal. Replace once and reuse for every Phase-4 before/after run.
+
+**Retrieval regressions (2026-08-14)**: `rag_016` (ports, single-hop from
+`corpus/ports-and-topology.md`) and `rag_017` (SelfCheck/DeBERTa, a 2-doc
+join emulated via AND-mode substrings) were added after the blind eval
+found both misses against a live vault. Note: adding rows shifts the
+percentiles `calibrate_thresholds.py` derives — that is intended; the
+RAG-confidence-gating slice recalibrates against this updated set. The
+`rag_grounded_negative` check in `run_pass_rate_eval.py` was also fixed
+the same day: it previously treated the rows' disclaimer phrasings as
+forbidden text, failing honest abstention and passing fabrication
+(`run_baseline.evaluate` semantics are canonical). Verified live on the
+seeded corpus: `rag_016` passes; `rag_017` is a **known-fail** — retrieval
+does not surface the SelfCheckGPT chunk — kept deliberately as the
+regression target for the retrieval-quality slice.
 
 ## Layer-by-layer expectations
 

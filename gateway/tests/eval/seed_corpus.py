@@ -36,6 +36,7 @@ DEFAULT_CORPUS = [
     "gateway/tests/eval/corpus/prompt-and-citations.md",
     "gateway/tests/eval/corpus/cove-verifier.md",
     "gateway/tests/eval/corpus/selfcheck-and-judge.md",
+    "gateway/tests/eval/corpus/ports-and-topology.md",
 ]
 
 
