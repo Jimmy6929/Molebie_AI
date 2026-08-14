@@ -33,11 +33,26 @@ jobs:
       - name: Audit gateway dependencies for CVEs
         run: |
           cd gateway
-          # PYSEC-2025-185 is a DoS in python-jose's jwe.decrypt path. This codebase
-          # only uses signed JWTs (jwt.encode/jwt.decode in auth.py and auth_service.py)
-          # — no JWE — so the vulnerable code path is unreachable. Revisit if/when
-          # python-jose ships a fixed release, or when we migrate to PyJWT.
-          pip-audit -r requirements.txt --ignore-vuln PYSEC-2025-185
+          # Two advisories are suppressed here. Both are unreachable in this codebase and
+          # both trace back to python-jose; migrating to PyJWT retires both suppressions.
+          #
+          # PYSEC-2025-185 — DoS in python-jose's jwe.decrypt path. This codebase only uses
+          # signed JWTs (jwt.encode/jwt.decode in auth.py and auth_service.py), never JWE,
+          # so the vulnerable path is unreachable.
+          #
+          # PYSEC-2026-1325 (= CVE-2024-23342) — Minerva timing attack on P-256 in `ecdsa`,
+          # a transitive dependency of python-jose. Upstream treats side-channel attacks as
+          # out of scope and declared it WONTFIX, so there is no fixed version to bump to.
+          # The vulnerable code is structurally unreachable, not merely unused by config:
+          # every `ecdsa` import in python-jose 3.5.0 (backends/__init__.py, utils.py) sits
+          # in an `except ImportError` fallback that fires only when `cryptography` is
+          # absent, and the [cryptography] extra guarantees it is present. ECKey therefore
+          # binds to CryptographyECKey and `ecdsa` never enters sys.modules — verified to
+          # hold even for an ES256 round-trip. Our JWTs are HS256 (HMAC,
+          # config.py:jwt_algorithm) and touch no EC code at all.
+          pip-audit -r requirements.txt \
+            --ignore-vuln PYSEC-2025-185 \
+            --ignore-vuln PYSEC-2026-1325
 
       - name: Lint gateway, CLI, and satellite
         run: |
