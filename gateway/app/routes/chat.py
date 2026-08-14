@@ -2093,7 +2093,10 @@ async def send_message_stream(
                     yield "data: " + json.dumps(_final) + "\n\n"
                 except (BrokenPipeError, ConnectionResetError, RuntimeError,
                         asyncio.CancelledError):
-                    client_disconnected = True
+                    # Client vanished after the last content frame — nothing
+                    # left to send them, but the response is complete, so fall
+                    # through to the DB save below.
+                    pass
                 except Exception as _exc:
                     # Timings are best-effort — never break a finished stream.
                     print(f"[chat] terminal frame failed: {_exc}")
