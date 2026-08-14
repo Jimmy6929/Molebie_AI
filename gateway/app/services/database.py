@@ -1189,6 +1189,34 @@ class DatabaseService:
         )
         await db.commit()
 
+    async def insert_pipeline_stage_metrics(
+        self, user_id: str, metrics: dict[str, Any]
+    ) -> None:
+        """One row per chat turn: where the milliseconds went (T6a).
+
+        `metrics["stages"]` arrives pre-serialized as a JSON string so the
+        caller controls shaping; everything else is scalar."""
+        db = await self._get_conn()
+        await db.execute(
+            "INSERT INTO pipeline_stage_metrics "
+            "(id, user_id, session_id, message_id, request_id, route, mode, "
+            "total_ms, stages, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _uuid(),
+                user_id,
+                metrics.get("session_id"),
+                metrics.get("message_id"),
+                metrics.get("request_id"),
+                metrics.get("route"),
+                metrics.get("mode"),
+                metrics.get("total_ms"),
+                metrics.get("stages"),
+                _now(),
+            ),
+        )
+        await db.commit()
+
 
     # ==================== Vault Sources ====================
 
