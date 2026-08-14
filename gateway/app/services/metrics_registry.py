@@ -33,8 +33,20 @@ import asyncio
 import time
 from collections import deque
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
+
+# Request-scoped id (2026-08, T6a). When a chat route sets this, every
+# `record_subsystem()` call made anywhere below it ALSO lands in the
+# per-request pipeline log — attributing deep-service latency (rag.embed,
+# rag.rerank, intent.classify, web.query, …) to the chat turn that caused
+# it, with zero changes at the call sites. Starlette runs each request in
+# its own task, so per-task contextvar isolation makes this leak-free
+# without explicit resets.
+current_request_id: ContextVar[str | None] = ContextVar(
+    "current_request_id", default=None
+)
 
 # Reasonable ceiling — 500 requests covers ~4 minutes of steady 2/s traffic,
 # which is plenty to compute rolling p95 without unbounded memory growth.
@@ -212,6 +224,14 @@ class MetricsRegistry:
                 s.errors_total += 1
             s.latency_recent.append(latency_ms)
             s.events_60s.append((now, latency_ms, ok))
+            # Per-request attribution: mirror into the pipeline log when a
+            # chat route has declared the current request id.
+            req_id = current_request_id.get()
+            if req_id is not None:
+                self._pipeline_append(
+                    req_id=req_id, stage=name, ms=latency_ms,
+                    status="ok" if ok else "fail", note=note,
+                )
 
     @asynccontextmanager
     async def subsystem_timer(self, name: str, note: str | None = None):
@@ -251,22 +271,45 @@ class MetricsRegistry:
         the same req_id+stage).
         """
         async with self._lock:
-            now = time.time()
-            if req_id not in self._pipeline_started_at:
-                self._pipeline_started_at[req_id] = now
-                # Bound the started_at map alongside the event deque.
-                if len(self._pipeline_started_at) > _PIPELINE_MAX_EVENTS:
-                    # Drop the oldest tracked req_id.
-                    oldest = next(iter(self._pipeline_started_at))
-                    self._pipeline_started_at.pop(oldest, None)
-            self._pipeline_events.append({
-                "ts": now,
-                "req_id": req_id,
-                "stage": stage,
-                "ms": ms,
-                "status": status,
-                "note": note,
-            })
+            self._pipeline_append(
+                req_id=req_id, stage=stage, ms=ms, status=status, note=note,
+            )
+
+    def _pipeline_append(
+        self,
+        *,
+        req_id: str,
+        stage: str,
+        ms: float | None,
+        status: str,
+        note: str | None,
+    ) -> None:
+        """Append one pipeline event. Caller must hold ``self._lock``."""
+        now = time.time()
+        if req_id not in self._pipeline_started_at:
+            self._pipeline_started_at[req_id] = now
+            # Bound the started_at map alongside the event deque.
+            if len(self._pipeline_started_at) > _PIPELINE_MAX_EVENTS:
+                # Drop the oldest tracked req_id.
+                oldest = next(iter(self._pipeline_started_at))
+                self._pipeline_started_at.pop(oldest, None)
+        self._pipeline_events.append({
+            "ts": now,
+            "req_id": req_id,
+            "stage": stage,
+            "ms": ms,
+            "status": status,
+            "note": note,
+        })
+
+    async def get_request_events(self, req_id: str) -> list[dict[str, Any]]:
+        """All pipeline events recorded for one request id, oldest first.
+
+        Used at end-of-request to persist a per-turn stage breakdown and to
+        build the terminal SSE frame. Bounded by the pipeline deque, so a
+        request older than the rolling window simply returns fewer events."""
+        async with self._lock:
+            return [dict(e) for e in self._pipeline_events if e["req_id"] == req_id]
 
     async def mark_task(self, name: str, state: str) -> None:
         """Track background-task lifecycle. `state` ∈ {"start","done","fail"}."""

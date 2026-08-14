@@ -456,6 +456,36 @@ CREATE INDEX IF NOT EXISTS idx_satellite_blobs_type
     ON satellite_blobs(blob_type);
 """
 
+_PIPELINE_STAGE_METRICS_SCHEMA_SQL = """
+-- ============================================
+-- PIPELINE STAGE METRICS — per-turn latency breakdown (T6a, 2026-08)
+-- ============================================
+-- One row per chat turn recording where the milliseconds went:
+-- retrieval, memory, intent, prompt assembly, inference, verification.
+-- `stages` is a JSON array of {stage, ms, status[, note]} objects — kept
+-- schemaless on purpose so new stages never need a migration. `message_id`
+-- joins the row to the assistant message it produced (NULL when the turn
+-- stored no message). Written best-effort by the chat routes; a metrics
+-- write failure never breaks a chat turn.
+CREATE TABLE IF NOT EXISTS pipeline_stage_metrics (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    session_id TEXT,
+    message_id TEXT,
+    request_id TEXT NOT NULL,
+    route TEXT NOT NULL,             -- 'chat' | 'chat_stream'
+    mode TEXT,                       -- inference mode used for the turn
+    total_ms REAL,                   -- wall span, first→last stage event
+    stages TEXT NOT NULL,            -- JSON array, see above
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_stage_metrics_user_time
+    ON pipeline_stage_metrics(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pipeline_stage_metrics_message
+    ON pipeline_stage_metrics(message_id);
+"""
+
 
 def _fts5_sql() -> str:
     """Return SQL for FTS5 virtual table creation."""
@@ -663,6 +693,14 @@ def init_database_sync(
                 conn.executescript(_SATELLITE_BLOBS_SCHEMA_SQL)
                 print("[schema] Migrated: added satellite_blobs table")
 
+            # Migrate: pipeline_stage_metrics (per-turn latency breakdown). Idempotent.
+            psm_present = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='pipeline_stage_metrics'"
+            ).fetchone()
+            if not psm_present:
+                conn.executescript(_PIPELINE_STAGE_METRICS_SCHEMA_SQL)
+                print("[schema] Migrated: added pipeline_stage_metrics table")
+
             conn.commit()
             print(f"[schema] Database already initialized at {db_path}")
             conn.close()
@@ -688,6 +726,9 @@ def init_database_sync(
 
         # Create satellite_blobs table (Plan B fleet-wide blob inventory)
         conn.executescript(_SATELLITE_BLOBS_SCHEMA_SQL)
+
+        # Create pipeline_stage_metrics table (per-turn latency breakdown)
+        conn.executescript(_PIPELINE_STAGE_METRICS_SCHEMA_SQL)
 
         # Create FTS5 virtual table
         conn.executescript(_fts5_sql())

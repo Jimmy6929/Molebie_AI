@@ -200,22 +200,28 @@ class MemoryService:
             return []
 
         from app.services.embedding import get_embedding_service
+        from app.services.metrics_registry import get_metrics_registry
         embedding_service = get_embedding_service()
+        registry = get_metrics_registry()
 
         try:
-            query_embedding = await asyncio.wait_for(
-                asyncio.to_thread(embedding_service.embed, query),
-                timeout=timeout,
-            )
+            # Timer sits inside the try so a timeout records as a subsystem
+            # failure (ok=False) before the silent-skip below swallows it.
+            async with registry.subsystem_timer("memory.embed"):
+                query_embedding = await asyncio.wait_for(
+                    asyncio.to_thread(embedding_service.embed, query),
+                    timeout=timeout,
+                )
         except Exception as exc:
-            print(f"[memory] Embedding timed out or failed ({exc}), skipping memory retrieval")
+            print(f"[memory] Embedding timed out or failed ({exc!r}), skipping memory retrieval")
             return []
 
-        memories = await self._search_similar(
-            user_id, query_embedding,
-            threshold=self.retrieval_threshold,
-            limit=self.retrieval_top_k,
-        )
+        async with registry.subsystem_timer("memory.search"):
+            memories = await self._search_similar(
+                user_id, query_embedding,
+                threshold=self.retrieval_threshold,
+                limit=self.retrieval_top_k,
+            )
 
         if memories:
             print(

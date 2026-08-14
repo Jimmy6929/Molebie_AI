@@ -48,7 +48,11 @@ from app.services.inference import (
 from app.services.intent import classify_explain_intent, is_identity_query
 from app.services.judge import get_grounding_judge
 from app.services.memory import get_memory_service
-from app.services.metrics_registry import RequestRecord, get_metrics_registry
+from app.services.metrics_registry import (
+    RequestRecord,
+    current_request_id,
+    get_metrics_registry,
+)
 from app.services.rag import RAGService, compute_retrieval_confidence, get_rag_service
 from app.services.selfcheck import get_selfcheck_service
 from app.services.sse_split import split_oversized_sse_delta
@@ -772,6 +776,67 @@ async def _persist_rag_metrics(
         print(f"[chat] RAG metrics persist failed: {type(exc).__name__}: {exc}")
 
 
+def _shape_stage_events(events: list[dict]) -> tuple[list[dict], float | None]:
+    """Reduce raw pipeline events to persistable/streamable stage rows.
+
+    Drops transient "running" markers (their terminal ok/fail twin carries
+    the ms), keeps event order, and computes total wall span from first to
+    last event timestamp — a sum of stage ms would double-count nested
+    stages (rag.retrieve contains rag.embed/rerank; inference contains the
+    backend call).
+    """
+    stages = []
+    for e in events:
+        if e.get("status") == "running":
+            continue
+        row = {
+            "stage": e["stage"],
+            "ms": round(e["ms"], 1) if e.get("ms") is not None else None,
+            "status": e.get("status", "ok"),
+        }
+        if e.get("note"):
+            row["note"] = e["note"]
+        stages.append(row)
+    total_ms = None
+    if len(events) >= 2:
+        total_ms = round((events[-1]["ts"] - events[0]["ts"]) * 1000.0, 1)
+    return stages, total_ms
+
+
+async def _persist_stage_metrics(
+    db: DatabaseService,
+    registry,
+    req_id: str,
+    *,
+    user_id: str,
+    session_id: str | None,
+    message_id: str | None,
+    route: str,
+    mode: str | None,
+) -> None:
+    """Best-effort persistence of the per-turn stage breakdown (T6a).
+
+    Same contract as ``_persist_rag_metrics``: a metrics-write failure must
+    never break the chat turn.
+    """
+    try:
+        events = await registry.get_request_events(req_id)
+        stages, total_ms = _shape_stage_events(events)
+        if not stages:
+            return
+        await db.insert_pipeline_stage_metrics(user_id, {
+            "session_id": session_id,
+            "message_id": message_id,
+            "request_id": req_id,
+            "route": route,
+            "mode": mode,
+            "total_ms": total_ms,
+            "stages": json.dumps(stages),
+        })
+    except Exception as exc:
+        print(f"[chat] Stage metrics persist failed: {type(exc).__name__}: {exc}")
+
+
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
@@ -897,6 +962,16 @@ async def send_message(
         else:
             hist_messages.append({"role": msg["role"], "content": msg["content"]})
 
+    # Per-request id + contextvar (T6a): the streaming route has had a
+    # pipeline timeline since v2 — this gives the non-streaming path the
+    # same, and the contextvar lets every deep subsystem timer (rag.embed,
+    # intent.classify, memory.embed, …) attribute to this turn.
+    req_id = secrets.token_hex(4)
+    current_request_id.set(req_id)
+    pipeline_metrics = get_metrics_registry()
+    await pipeline_metrics.pipeline_event(req_id, "request.start", status="ok",
+                                          note="non-streaming")
+
     # Retrieve relevant user memories for context injection
     memory_service = get_memory_service()
     memories_text = ""
@@ -918,6 +993,7 @@ async def send_message(
         if not rag.enabled:
             print("[chat] RAG disabled — skipping document retrieval")
         elif await rag.user_has_documents(user_id):
+            t_rag = time.perf_counter()
             try:
                 rag_chunks = await rag.retrieve_context(
                     user_id,
@@ -925,9 +1001,19 @@ async def send_message(
                     conversation_context=hist_messages,
                     brain=_norm_brain(request.brain),
                 )
+                await pipeline_metrics.pipeline_event(
+                    req_id, "rag.retrieve",
+                    ms=(time.perf_counter() - t_rag) * 1000.0, status="ok",
+                    note=f"{len(rag_chunks)} chunks",
+                )
             except Exception as exc:
                 print(f"[chat] RAG retrieval failed — continuing without context: "
                       f"{type(exc).__name__}: {exc}")
+                await pipeline_metrics.pipeline_event(
+                    req_id, "rag.retrieve",
+                    ms=(time.perf_counter() - t_rag) * 1000.0, status="fail",
+                    note=f"{type(exc).__name__}: {str(exc)[:80]}",
+                )
                 rag_chunks = []
 
     rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
@@ -957,6 +1043,7 @@ async def send_message(
         and not request.image
     )
 
+    t_prompt = time.perf_counter()
     messages = [_build_system_message(
         request.conversation_mode,
         summary=session_summary,
@@ -987,6 +1074,12 @@ async def send_message(
     attach_text = await db.fetch_session_attachments_text(session_id, user_id)
     if attach_text:
         messages[0]["content"] += f"\n\n{attach_text}"
+
+    # Covers system-message build + directives + attachments fetch. Web
+    # search is excluded — it carries its own web.* subsystem timers.
+    await pipeline_metrics.record_subsystem(
+        "chat.prompt_assembly", (time.perf_counter() - t_prompt) * 1000.0,
+    )
 
     # Web search: inject real-time results into context (continues the EVIDENCE
     # block under the [W#] namespace — see web_search.format_results_for_context).
@@ -1026,12 +1119,16 @@ async def send_message(
     # configured window is 0.
     context_window = settings.get_context_window_for_mode(inference_mode)
     if context_window > 0:
+        t_trim = time.perf_counter()
         messages = trim_messages_to_budget(
             messages,
             context_window=context_window,
             max_tokens=settings.get_max_tokens_for_mode(inference_mode),
             chars_per_token=settings.token_chars_per_token,
             reserve_fraction=settings.token_budget_reserve_fraction,
+        )
+        await pipeline_metrics.record_subsystem(
+            "chat.trim_budget", (time.perf_counter() - t_trim) * 1000.0,
         )
 
     # Force CoT off when RAG context is present on the thinking tier AND the
@@ -1146,6 +1243,10 @@ async def send_message(
             fallback=bool(result.get("fallback_used")) if result else False,
             error_type=_metrics_error,
         ))
+        await registry.pipeline_event(
+            req_id, f"inference.{inference_mode}", ms=total_ms,
+            status="ok" if ok else "fail",
+        )
 
     # Store assistant response (strip thinking blocks, persist reasoning separately)
     raw = inference_result["content"]
@@ -1165,6 +1266,14 @@ async def send_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to store response"
         )
+
+    # Per-turn stage breakdown, joinable to the assistant message (T6a).
+    await _persist_stage_metrics(
+        db, registry, req_id,
+        user_id=user_id, session_id=session_id,
+        message_id=assistant_msg["id"], route="chat", mode=inference_mode,
+    )
+    await registry.pipeline_event(req_id, "request.done", status="ok")
 
     # Persist web search source links
     if search_results:
@@ -1619,6 +1728,17 @@ async def send_message_stream(
         else:
             hist_messages.append({"role": msg["role"], "content": msg["content"]})
 
+    # Per-request id for the live pipeline panel (so the monitor can show
+    # one timeline per chat turn). Short hex — 8 chars is plenty for the
+    # bounded 50-event window we keep in the registry. Created BEFORE memory
+    # retrieval (T6a) so memory.embed/search attribute to this turn via the
+    # contextvar.
+    req_id = secrets.token_hex(4)
+    current_request_id.set(req_id)
+    pipeline_metrics = get_metrics_registry()
+    await pipeline_metrics.pipeline_event(req_id, "request.start", status="ok",
+                                           note="streaming")
+
     # Retrieve relevant user memories for context injection
     memory_service = get_memory_service()
     memories_text = ""
@@ -1628,14 +1748,6 @@ async def send_message_stream(
             memories_text = memory_service.format_memories_for_context(memories)
         except Exception as exc:
             print(f"[chat] Memory retrieval failed: {exc}")
-
-    # Per-request id for the live pipeline panel (so the monitor can show
-    # one timeline per chat turn). Short hex — 8 chars is plenty for the
-    # bounded 50-event window we keep in the registry.
-    req_id = secrets.token_hex(4)
-    pipeline_metrics = get_metrics_registry()
-    await pipeline_metrics.pipeline_event(req_id, "request.start", status="ok",
-                                           note="streaming")
 
     # RAG retrieval runs BEFORE system-message build so chunks slot into the
     # strict-grounding template — see send_message() for rationale. RAG
@@ -1744,6 +1856,11 @@ async def send_message_stream(
 
     async def event_generator():
         """Generate SSE events from inference stream."""
+        # Re-declare the request id in THIS execution context: the generator
+        # may be iterated by a different task than the route body, and
+        # contextvars don't cross task boundaries. Subsystem timers fired
+        # during streaming (web.*, verify.*) attribute correctly either way.
+        current_request_id.set(req_id)
         full_content = []
         full_reasoning = []
         # Strip <think>...</think> from delta.content as it streams so the
@@ -1823,12 +1940,16 @@ async def send_message_stream(
             stream_context_window = settings.get_context_window_for_mode(inference_mode)
             messages_for_inference = messages
             if stream_context_window > 0:
+                t_trim = time.perf_counter()
                 messages_for_inference = trim_messages_to_budget(
                     messages,
                     context_window=stream_context_window,
                     max_tokens=settings.get_max_tokens_for_mode(inference_mode),
                     chars_per_token=settings.token_chars_per_token,
                     reserve_fraction=settings.token_budget_reserve_fraction,
+                )
+                await registry.record_subsystem(
+                    "chat.trim_budget", (time.perf_counter() - t_trim) * 1000.0,
                 )
 
             await registry.pipeline_event(
@@ -1954,6 +2075,29 @@ async def send_message_stream(
                 note=f"{n_content_deltas} deltas",
             )
 
+            # Terminal frame (T6a): one extensible end-of-stream envelope.
+            # Timings ride it now; T1b's inference metadata and T5's
+            # canonical final_text are designed to ride the same frame.
+            # The webapp's line dispatcher ignores unknown frames, and it
+            # reads past [DONE] until stream close (gateway.ts processLine),
+            # so this is backward-compatible.
+            if not client_disconnected:
+                try:
+                    _events = await registry.get_request_events(req_id)
+                    _stages, _total_ms = _shape_stage_events(_events)
+                    _final = {"final": {
+                        "v": 1,
+                        "request_id": req_id,
+                        "timings": {"total_ms": _total_ms, "stages": _stages},
+                    }}
+                    yield "data: " + json.dumps(_final) + "\n\n"
+                except (BrokenPipeError, ConnectionResetError, RuntimeError,
+                        asyncio.CancelledError):
+                    client_disconnected = True
+                except Exception as _exc:
+                    # Timings are best-effort — never break a finished stream.
+                    print(f"[chat] terminal frame failed: {_exc}")
+
             # Build final content for DB (strip thinking tags, persist reasoning separately)
             raw_content = "".join(full_content)
             content = _finalize_assistant_text(raw_content)
@@ -1972,6 +2116,14 @@ async def send_message_stream(
                         content=save_content,
                         mode_used=inference_mode,
                         reasoning_content=reasoning,
+                    )
+
+                    # Per-turn stage breakdown, joinable to the message (T6a).
+                    await _persist_stage_metrics(
+                        db, registry, req_id,
+                        user_id=user_id, session_id=session_id,
+                        message_id=assistant_msg["id"] if assistant_msg else None,
+                        route="chat_stream", mode=inference_mode,
                     )
 
                     # Persist web search source links
