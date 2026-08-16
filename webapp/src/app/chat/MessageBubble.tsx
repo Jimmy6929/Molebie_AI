@@ -18,6 +18,8 @@ export interface MessageBubbleProps {
   streaming?: boolean;
   mode?: string | null;
   model?: string | null;
+  fallbackUsed?: boolean;
+  thinkingSkipped?: boolean;
   metadata?: Record<string, unknown>;
   streamStartedAt?: number;
   sources?: SearchSource[];
@@ -123,6 +125,9 @@ export default function MessageBubble({
   content,
   streaming = false,
   mode,
+  model,
+  fallbackUsed,
+  thinkingSkipped,
   streamStartedAt,
   sources,
   isSearching,
@@ -189,6 +194,27 @@ export default function MessageBubble({
           {!isUser && sources && sources.length > 0 && (
             <span className="px-1.5 py-0.5 rounded-md text-[9px] bg-[#3399ff]/15 text-[#66bbff]">
               Web
+            </span>
+          )}
+          {/* Honest inference-state pills (T1b): never silently degrade. */}
+          {!isUser && model === "mock" && (
+            <span className="px-1.5 py-0.5 rounded-md text-[9px] bg-[#ff5555]/15 text-[#ff8888]">
+              Mock — no model connected
+            </span>
+          )}
+          {!isUser && model === "error" && (
+            <span className="px-1.5 py-0.5 rounded-md text-[9px] bg-[#ff5555]/15 text-[#ff8888]">
+              Inference error
+            </span>
+          )}
+          {!isUser && fallbackUsed && (
+            <span className="px-1.5 py-0.5 rounded-md text-[9px] bg-[#ffbb33]/15 text-[#ffcc33]">
+              Fell back to Fast
+            </span>
+          )}
+          {!isUser && thinkingSkipped && (
+            <span className="px-1.5 py-0.5 rounded-md text-[9px] bg-[#ffbb33]/15 text-[#ffcc33]">
+              Thinking skipped
             </span>
           )}
         </div>

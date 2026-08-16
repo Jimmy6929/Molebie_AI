@@ -24,9 +24,11 @@ import {
   streamFolderEvents,
   cancelFolderUpload,
   getActiveFolderJob,
+  checkInferenceHealth,
   type SessionInfo,
   type ChatMessage,
   type SearchSource,
+  type StreamMetadata,
   type DocumentInfo,
   type SessionAttachmentInfo,
   type FolderEventStreamHandle,
@@ -60,6 +62,8 @@ interface DisplayMessage {
   content: string;
   mode_used?: string | null;
   model_used?: string | null;
+  fallback_used?: boolean;
+  thinking_skipped?: boolean;
   streaming?: boolean;
   streamStartedAt?: number;
   sources?: SearchSource[];
@@ -133,6 +137,26 @@ export default function ChatPage() {
   const [docUploadStep, setDocUploadStep] = useState<"upload" | "extract" | "chunk" | "embed" | "done" | "error">("upload");
   const [docUploadFilename, setDocUploadFilename] = useState("");
   const [docToast, setDocToast] = useState<string | null>(null);
+  // Persistent inference-health banner (T1b): set when a response reports
+  // mock/error, or when the mount health probe finds no healthy tier.
+  // Cleared when a real model serves a response.
+  const [inferenceBanner, setInferenceBanner] = useState<string | null>(null);
+
+  useEffect(() => {
+    // One-shot probe of the previously-unused /health/inference endpoint:
+    // if neither tier is healthy, every reply will be mock — say so before
+    // the user sends anything.
+    checkInferenceHealth()
+      .then((h) => {
+        const tiers = [h?.instant?.status, h?.thinking?.status];
+        if (!tiers.includes("healthy")) {
+          setInferenceBanner(
+            "No inference backend is reachable — responses will be canned mock text. Start the model servers (molebie-ai run)."
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // ── Folder Ingest ───────────────────────────────────────────────────────
   type FolderJobUI = {
@@ -823,6 +847,22 @@ export default function ChatPage() {
         imageDataUri,
         webSearchEnabled,
         selectedBrain || undefined,
+        (meta: StreamMetadata) => {
+          setMessages((prev) => prev.map((m) => m.streaming ? {
+            ...m,
+            mode_used: meta.mode ?? m.mode_used,
+            model_used: meta.model ?? m.model_used,
+            fallback_used: meta.fallback_used || m.fallback_used,
+            thinking_skipped: !!meta.thinking_disabled_reason || m.thinking_skipped,
+          } : m));
+          if (meta.model === "mock") {
+            setInferenceBanner(
+              "The gateway served a MOCK response — no model is connected. Start the model servers (molebie-ai run)."
+            );
+          } else if (meta.model && meta.model !== "error") {
+            setInferenceBanner(null);
+          }
+        },
       );
       setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m));
 
@@ -921,6 +961,22 @@ export default function ChatPage() {
         undefined,
         webSearchEnabled,
         selectedBrain || undefined,
+        (meta: StreamMetadata) => {
+          setMessages((prev) => prev.map((m) => m.streaming ? {
+            ...m,
+            mode_used: meta.mode ?? m.mode_used,
+            model_used: meta.model ?? m.model_used,
+            fallback_used: meta.fallback_used || m.fallback_used,
+            thinking_skipped: !!meta.thinking_disabled_reason || m.thinking_skipped,
+          } : m));
+          if (meta.model === "mock") {
+            setInferenceBanner(
+              "The gateway served a MOCK response — no model is connected. Start the model servers (molebie-ai run)."
+            );
+          } else if (meta.model && meta.model !== "error") {
+            setInferenceBanner(null);
+          }
+        },
       );
       setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
       loadSessions();
@@ -1249,6 +1305,8 @@ export default function ChatPage() {
                 streaming={msg.streaming}
                 mode={msg.mode_used}
                 model={msg.model_used}
+                fallbackUsed={msg.fallback_used}
+                thinkingSkipped={msg.thinking_skipped}
                 streamStartedAt={msg.streamStartedAt}
                 sources={msg.sources}
                 isSearching={msg.streaming && isSearching}
@@ -1427,6 +1485,12 @@ export default function ChatPage() {
               </div>
             )}
 
+            {/* Inference-health banner (persistent until a real model replies) */}
+            {inferenceBanner && (
+              <div className="mb-2 glass rounded-xl px-4 py-2 text-[11px] text-[#ff8888] bg-[#ff5555]/10 animate-fade-in">
+                {inferenceBanner}
+              </div>
+            )}
             {/* Document upload toast */}
             {docToast && (
               <div className="mb-2 glass rounded-xl px-4 py-2 text-[11px] text-[#66ddff] animate-fade-in">

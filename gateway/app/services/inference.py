@@ -1067,6 +1067,9 @@ class InferenceService:
                 "mode": effective_mode,
                 "model": model,
                 "fallback_used": fallback_used,
+                # Requested mode, present only when the selector fell back —
+                # lets the UI render "Fell back to Fast" honestly (T1b).
+                "original_mode": mode if fallback_used else None,
                 "enable_thinking": resolved_enable_thinking,
                 "thinking_disabled_reason": thinking_disabled_reason,
             }

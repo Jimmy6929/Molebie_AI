@@ -115,6 +115,18 @@ export interface SearchSource {
   url: string;
 }
 
+/** Backend inference state from the stream's metadata frame(s) (T1b).
+ *  A mid-stream fallback emits a second frame; treat later frames as
+ *  authoritative. */
+export interface StreamMetadata {
+  mode?: string;
+  model?: string;
+  fallback_used?: boolean;
+  original_mode?: string | null;
+  enable_thinking?: boolean;
+  thinking_disabled_reason?: string | null;
+}
+
 export async function sendMessageStream(
   token: string,
   message: string,
@@ -129,6 +141,7 @@ export async function sendMessageStream(
   image?: string,
   webSearch?: boolean,
   brain?: string,
+  onMetadata?: (meta: StreamMetadata) => void,
 ): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/chat/stream`, {
     method: "POST",
@@ -202,8 +215,13 @@ export async function sendMessageStream(
       return;
     }
 
-    if (data.metadata && typeof data.metadata.enable_thinking === "boolean") {
-      backendEnableThinking = data.metadata.enable_thinking;
+    if (data.metadata) {
+      // Handle the whole frame here even when enable_thinking is absent —
+      // previously such frames fell through to the delta branch.
+      if (typeof data.metadata.enable_thinking === "boolean") {
+        backendEnableThinking = data.metadata.enable_thinking;
+      }
+      onMetadata?.(data.metadata as StreamMetadata);
       return;
     }
 
@@ -466,7 +484,18 @@ export async function deleteVoiceProfile(
   });
 }
 
-export async function checkInferenceHealth(): Promise<Record<string, unknown>> {
+export interface InferenceTierHealth {
+  status?: string;
+  url?: string;
+  model?: string;
+}
+
+export interface InferenceHealth {
+  instant?: InferenceTierHealth;
+  thinking?: InferenceTierHealth;
+}
+
+export async function checkInferenceHealth(): Promise<InferenceHealth> {
   const res = await fetch(`${GATEWAY_URL}/health/inference`);
   return res.json();
 }

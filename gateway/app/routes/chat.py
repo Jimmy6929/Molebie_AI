@@ -1340,6 +1340,7 @@ async def send_message(
         role="assistant",
         content=clean_content,
         mode_used=inference_result["mode_used"],
+        model_used=inference_result.get("model"),
         tokens_used=inference_result.get("tokens_used"),
         reasoning_content=reasoning,
     )
@@ -1543,6 +1544,15 @@ async def send_message(
         rag_metrics = {**(rag_metrics or {}), "judge": judge_report}
     if selfcheck_report is not None:
         rag_metrics = {**(rag_metrics or {}), "selfcheck": selfcheck_report}
+    # Retrieval routing state rides the free-form rag_metrics dict (no
+    # schema migration needed) so the UI can explain WHY a turn was strict
+    # or generative (T1b).
+    if rag_chunks:
+        rag_metrics = {
+            **(rag_metrics or {}),
+            "retrieval_confidence": rag_confidence,
+            "routing_mode": routing_mode,
+        }
     inference_meta = InferenceMetadata(
         mode_used=inference_result["mode_used"],
         model=inference_result.get("model"),
@@ -1969,6 +1979,11 @@ async def send_message_stream(
         current_request_id.set(req_id)
         full_content = []
         full_reasoning = []
+        # Effective inference state captured from the metadata frame(s) the
+        # inference layer emits (a mid-stream fallback emits a second frame;
+        # later frames win). Used so the DB row records what actually served
+        # the request, not what was requested (T1b).
+        stream_meta: dict = {}
         # Strip <think>...</think> from delta.content as it streams so the
         # user never sees raw reasoning tags. Captured inner text is fed into
         # full_reasoning so the DB row still has the model's chain of thought.
@@ -2086,6 +2101,8 @@ async def send_message_stream(
                 try:
                     if chunk.startswith("data: ") and not chunk.strip().endswith("[DONE]"):
                         data = json.loads(chunk[6:])
+                        if isinstance(data.get("metadata"), dict):
+                            stream_meta.update(data["metadata"])
                         delta = data.get("choices", [{}])[0].get("delta", {})
                         if "content" in delta:
                             visible, captured_reasoning = think_filter.feed(delta["content"])
@@ -2224,7 +2241,10 @@ async def send_message_stream(
                         user_id=user_id,
                         role="assistant",
                         content=save_content,
-                        mode_used=inference_mode,
+                        # Effective mode/model from the metadata frame — the
+                        # requested mode is wrong after a cross-tier fallback.
+                        mode_used=stream_meta.get("mode") or inference_mode,
+                        model_used=stream_meta.get("model"),
                         reasoning_content=reasoning,
                     )
 

@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
     mode_used TEXT CHECK (mode_used IN ('instant', 'thinking', 'thinking_harder')),
+    model_used TEXT,
     tokens_used INTEGER,
     reasoning_content TEXT,
     created_at TEXT NOT NULL
@@ -692,6 +693,17 @@ def init_database_sync(
             if not blobs_present:
                 conn.executescript(_SATELLITE_BLOBS_SCHEMA_SQL)
                 print("[schema] Migrated: added satellite_blobs table")
+
+            # Migrate: chat_messages.model_used (T1b, 2026-08-16) — history
+            # previously always showed model=None because the column never
+            # existed; the UI badges need it to survive a reload. Idempotent.
+            cm_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+            }
+            if cm_cols and "model_used" not in cm_cols:
+                conn.execute("ALTER TABLE chat_messages ADD COLUMN model_used TEXT")
+                print("[schema] Migrated: added chat_messages.model_used")
 
             # Migrate: pipeline_stage_metrics (per-turn latency breakdown). Idempotent.
             psm_present = conn.execute(
