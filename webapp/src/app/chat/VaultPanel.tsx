@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   connectVault,
   disconnectVault,
+  GatewayError,
   listVaults,
   triggerVaultSync,
   updateVault,
@@ -19,6 +20,8 @@ interface Props {
     rootLabel: string;
     totalFiles: number;
   }) => void;
+  /** A sync was refused because another ingest job holds the single-job lock. */
+  onSyncBusy: () => void;
   onDocumentsChanged: () => void;
   onToast: (msg: string) => void;
 }
@@ -32,6 +35,19 @@ function formatLastSync(iso: string | null): string {
   if (ageSec < 3600) return `synced ${Math.floor(ageSec / 60)}m ago`;
   if (ageSec < 86400) return `synced ${Math.floor(ageSec / 3600)}h ago`;
   return `synced ${Math.floor(ageSec / 86400)}d ago`;
+}
+
+/** Shape of the 409 detail the sync endpoint returns while a job is in flight. */
+function busyJobLabel(err: unknown): string | null {
+  if (!(err instanceof GatewayError) || err.status !== 409) return null;
+  const detail = err.detail;
+  if (!detail || typeof detail !== "object") return null;
+  const { job_id: jobId, root_label: rootLabel } = detail as {
+    job_id?: unknown;
+    root_label?: unknown;
+  };
+  if (typeof jobId !== "string") return null;
+  return typeof rootLabel === "string" ? rootLabel.replace(/^vault:/, "") : "another folder";
 }
 
 function summarizeClassification(r: SyncVaultResponse): string {
@@ -48,6 +64,7 @@ function summarizeClassification(r: SyncVaultResponse): string {
 export function VaultPanel({
   token,
   onSyncJobStarted,
+  onSyncBusy,
   onDocumentsChanged,
   onToast,
 }: Props) {
@@ -128,6 +145,14 @@ export function VaultPanel({
       await loadVaults();
       onDocumentsChanged();
     } catch (err) {
+      const busy = busyJobLabel(err);
+      if (busy) {
+        // Not a failure: one ingest job runs at a time per user. Show the job
+        // that holds the lock instead of a raw error blob.
+        onToast(`"${busy}" is already syncing — showing its progress`);
+        onSyncBusy();
+        return;
+      }
       const msg = err instanceof Error ? err.message : "unknown";
       if (msg.includes("API error 400") && msg.includes("no longer exists")) {
         // Vault folder moved/renamed — open the edit form instead of

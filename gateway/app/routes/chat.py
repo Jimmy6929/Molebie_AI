@@ -48,7 +48,11 @@ from app.services.inference import (
 from app.services.intent import classify_explain_intent, is_identity_query
 from app.services.judge import get_grounding_judge
 from app.services.memory import get_memory_service
-from app.services.metrics_registry import RequestRecord, get_metrics_registry
+from app.services.metrics_registry import (
+    RequestRecord,
+    current_request_id,
+    get_metrics_registry,
+)
 from app.services.rag import RAGService, compute_retrieval_confidence, get_rag_service
 from app.services.selfcheck import get_selfcheck_service
 from app.services.sse_split import split_oversized_sse_delta
@@ -148,7 +152,7 @@ def _confidence_directive(
 ) -> str | None:
     """Return a directive to append to the system prompt, or None.
 
-    Two cases need a directive on top of the base template:
+    Cases that need a directive on top of the base template:
 
     1. Generative mode + NONE confidence + factual query + tools enabled:
        nudge the model to offer a web search before answering. (Without
@@ -157,7 +161,12 @@ def _confidence_directive(
        turns, no directive — the system prompt already handles "answer
        directly, no preamble".
 
-    2. Lookup mode + LOW confidence: remind the model that the retrieval
+    2. Lookup mode + MODERATE confidence: the strict template alone made
+       the model refuse general questions as "not in your notes" (found
+       by the 2026-08-14 eval). Hedge: ground where the evidence applies,
+       general knowledge where it is silent.
+
+    3. Lookup mode + LOW confidence: remind the model that the retrieval
        was weak — cite [S#] only when actually used, and say so plainly
        if the evidence doesn't answer the question.
 
@@ -173,6 +182,20 @@ def _confidence_directive(
                 "(e.g. \"Want me to look this up online?\")."
             )
         return None
+    if confidence == "MODERATE" and mode == "lookup":
+        # The 2026-08-14 eval's refusal bug lived here: the whole MODERATE
+        # band got the strict evidence-only template with no hedging, so a
+        # general question with one mid-score chunk was answered "not in
+        # your notes". Soften without dropping grounding: use the evidence
+        # where it genuinely applies, fall back to general knowledge where
+        # it is silent.
+        return (
+            "The retrieved evidence is only moderately relevant. Answer "
+            "from it where it genuinely covers the question, citing [S#] "
+            "for those parts; where it is silent, say so briefly and "
+            "answer from general knowledge instead of stretching the "
+            "notes or refusing."
+        )
     if confidence == "LOW" and mode == "lookup":
         # Reachable only via the explicit-lookup override (user literally
         # asked "from my notes"). Strict grounding stays on; just remind
@@ -772,6 +795,109 @@ async def _persist_rag_metrics(
         print(f"[chat] RAG metrics persist failed: {type(exc).__name__}: {exc}")
 
 
+def _decide_thinking_override(
+    *,
+    mode_source: str,
+    inference_mode: str,
+    rag_chunks: list,
+    routing_mode: str,
+    explain_intent: bool,
+    explain_classify_failed: bool,
+    settings,
+) -> tuple[bool | None, str | None]:
+    """Decide whether to force CoT off for this turn (T3: honest thinking).
+
+    Small Qwen models burn thousands of thinking tokens "in circles" on
+    terse fact lookups, so RAG-lookup turns default CoT off — but three
+    honesty rules bound that optimisation (the 2026-08-14 eval found only
+    4/22 thinking-mode answers actually produced reasoning):
+
+      1. An EXPLICIT user mode choice always wins (mode_source == "user").
+         Operators who want unconditional auto-disable still have the
+         inference_thinking_auto_disable_for_rag kill switch.
+      2. Only lookup-routed retrievals qualify — a LOW/generative turn
+         that happened to retrieve a weak chunk keeps CoT.
+      3. Intent-classifier failure fails OPEN (keeps CoT) instead of
+         defaulting to "lookup" and silently stripping reasoning.
+
+    Returns ``(enable_thinking_override, disabled_reason)``; the reason is
+    set only when CoT is disabled and is surfaced to the client via
+    InferenceMetadata / the stream metadata frame.
+    """
+    if inference_mode not in ("thinking", "thinking_harder"):
+        return None, None
+    if not rag_chunks or not settings.inference_thinking_auto_disable_for_rag:
+        return None, None
+    if mode_source == "user":
+        return None, None
+    if routing_mode != "lookup":
+        return None, None
+    if explain_intent or explain_classify_failed:
+        return None, None
+    return False, "rag_lookup_auto_disable"
+
+
+def _shape_stage_events(events: list[dict]) -> tuple[list[dict], float | None]:
+    """Reduce raw pipeline events to persistable/streamable stage rows.
+
+    Drops transient "running" markers (their terminal ok/fail twin carries
+    the ms), keeps event order, and computes total wall span from first to
+    last event timestamp — a sum of stage ms would double-count nested
+    stages (rag.retrieve contains rag.embed/rerank; inference contains the
+    backend call).
+    """
+    stages = []
+    for e in events:
+        if e.get("status") == "running":
+            continue
+        row = {
+            "stage": e["stage"],
+            "ms": round(e["ms"], 1) if e.get("ms") is not None else None,
+            "status": e.get("status", "ok"),
+        }
+        if e.get("note"):
+            row["note"] = e["note"]
+        stages.append(row)
+    total_ms = None
+    if len(events) >= 2:
+        total_ms = round((events[-1]["ts"] - events[0]["ts"]) * 1000.0, 1)
+    return stages, total_ms
+
+
+async def _persist_stage_metrics(
+    db: DatabaseService,
+    registry,
+    req_id: str,
+    *,
+    user_id: str,
+    session_id: str | None,
+    message_id: str | None,
+    route: str,
+    mode: str | None,
+) -> None:
+    """Best-effort persistence of the per-turn stage breakdown (T6a).
+
+    Same contract as ``_persist_rag_metrics``: a metrics-write failure must
+    never break the chat turn.
+    """
+    try:
+        events = await registry.get_request_events(req_id)
+        stages, total_ms = _shape_stage_events(events)
+        if not stages:
+            return
+        await db.insert_pipeline_stage_metrics(user_id, {
+            "session_id": session_id,
+            "message_id": message_id,
+            "request_id": req_id,
+            "route": route,
+            "mode": mode,
+            "total_ms": total_ms,
+            "stages": json.dumps(stages),
+        })
+    except Exception as exc:
+        print(f"[chat] Stage metrics persist failed: {type(exc).__name__}: {exc}")
+
+
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
@@ -897,6 +1023,16 @@ async def send_message(
         else:
             hist_messages.append({"role": msg["role"], "content": msg["content"]})
 
+    # Per-request id + contextvar (T6a): the streaming route has had a
+    # pipeline timeline since v2 — this gives the non-streaming path the
+    # same, and the contextvar lets every deep subsystem timer (rag.embed,
+    # intent.classify, memory.embed, …) attribute to this turn.
+    req_id = secrets.token_hex(4)
+    current_request_id.set(req_id)
+    pipeline_metrics = get_metrics_registry()
+    await pipeline_metrics.pipeline_event(req_id, "request.start", status="ok",
+                                          note="non-streaming")
+
     # Retrieve relevant user memories for context injection
     memory_service = get_memory_service()
     memories_text = ""
@@ -914,10 +1050,20 @@ async def send_message(
     # no-context retrieval rather than failing the whole request — the
     # model can still answer from memory + chat history.
     rag_chunks = []
+    explain_task = None
     if not request.conversation_mode:
         if not rag.enabled:
             print("[chat] RAG disabled — skipping document retrieval")
         elif await rag.user_has_documents(user_id):
+            # Fire explain-vs-lookup intent classification CONCURRENTLY with
+            # retrieval (T3): the classifier needs the instant LLM, retrieval
+            # needs embed+rerank — different backends, so the overlap is free
+            # and removes the serial 0-3s wait whose load-induced timeouts
+            # used to fail closed and strip CoT.
+            explain_task = asyncio.create_task(
+                classify_explain_intent(request.message)
+            )
+            t_rag = time.perf_counter()
             try:
                 rag_chunks = await rag.retrieve_context(
                     user_id,
@@ -925,9 +1071,19 @@ async def send_message(
                     conversation_context=hist_messages,
                     brain=_norm_brain(request.brain),
                 )
+                await pipeline_metrics.pipeline_event(
+                    req_id, "rag.retrieve",
+                    ms=(time.perf_counter() - t_rag) * 1000.0, status="ok",
+                    note=f"{len(rag_chunks)} chunks",
+                )
             except Exception as exc:
                 print(f"[chat] RAG retrieval failed — continuing without context: "
                       f"{type(exc).__name__}: {exc}")
+                await pipeline_metrics.pipeline_event(
+                    req_id, "rag.retrieve",
+                    ms=(time.perf_counter() - t_rag) * 1000.0, status="fail",
+                    note=f"{type(exc).__name__}: {str(exc)[:80]}",
+                )
                 rag_chunks = []
 
     rag_context_text = rag.format_context(rag_chunks) if rag_chunks else None
@@ -944,9 +1100,18 @@ async def send_message(
     # Explain-vs-lookup intent. Only worth classifying when we'd otherwise
     # use the strict lookup template — generative mode is already permissive.
     # Drives both template selection and the CoT auto-disable gate below.
+    # Resolve the pre-fired classification. Tri-state (T3): True=explain,
+    # False=lookup, None=classifier failed — a failure must not masquerade
+    # as a confident lookup verdict in the CoT gate below.
     explain_intent = False
-    if routing_mode == "lookup" and rag_chunks and not request.conversation_mode:
-        explain_intent = await classify_explain_intent(request.message)
+    explain_classify_failed = False
+    if explain_task is not None:
+        if routing_mode == "lookup" and rag_chunks:
+            _explain = await explain_task
+            explain_intent = _explain is True
+            explain_classify_failed = _explain is None
+        else:
+            explain_task.cancel()
 
     # Compute tool-calling availability up-front so it can be advertised in
     # the system prompt (otherwise the model has no prior that web_search /
@@ -957,6 +1122,7 @@ async def send_message(
         and not request.image
     )
 
+    t_prompt = time.perf_counter()
     messages = [_build_system_message(
         request.conversation_mode,
         summary=session_summary,
@@ -971,8 +1137,10 @@ async def send_message(
 
     # Confidence-driven directives: in generative mode on a factual gap with
     # tools available, nudge the model to offer a web search; in lookup mode
-    # with LOW confidence, remind it to cite-when-used and admit gaps. HIGH/
-    # MODERATE/casual turns rely on the base template alone.
+    # with MODERATE confidence, hedge the strict template (ground where the
+    # evidence applies, general knowledge where it is silent); with LOW,
+    # remind it to cite-when-used and admit gaps. HIGH and casual turns rely
+    # on the base template alone.
     directive = _confidence_directive(
         rag_confidence,
         rag_chunks,
@@ -987,6 +1155,12 @@ async def send_message(
     attach_text = await db.fetch_session_attachments_text(session_id, user_id)
     if attach_text:
         messages[0]["content"] += f"\n\n{attach_text}"
+
+    # Covers system-message build + directives + attachments fetch. Web
+    # search is excluded — it carries its own web.* subsystem timers.
+    await pipeline_metrics.record_subsystem(
+        "chat.prompt_assembly", (time.perf_counter() - t_prompt) * 1000.0,
+    )
 
     # Web search: inject real-time results into context (continues the EVIDENCE
     # block under the [W#] namespace — see web_search.format_results_for_context).
@@ -1026,6 +1200,7 @@ async def send_message(
     # configured window is 0.
     context_window = settings.get_context_window_for_mode(inference_mode)
     if context_window > 0:
+        t_trim = time.perf_counter()
         messages = trim_messages_to_budget(
             messages,
             context_window=context_window,
@@ -1033,19 +1208,23 @@ async def send_message(
             chars_per_token=settings.token_chars_per_token,
             reserve_fraction=settings.token_budget_reserve_fraction,
         )
+        await pipeline_metrics.record_subsystem(
+            "chat.trim_budget", (time.perf_counter() - t_trim) * 1000.0,
+        )
 
-    # Force CoT off when RAG context is present on the thinking tier AND the
-    # query is lookup-intent — small Qwen models burn thousands of thinking
-    # tokens "in circles" on terse fact lookups. Explain-intent queries keep
-    # CoT on so the model can reason over the combined context (RAG + history
-    # + system prompt) before synthesizing the multi-paragraph answer.
-    enable_thinking_override: bool | None = None
-    if (rag_chunks
-            and inference_mode in ("thinking", "thinking_harder")
-            and settings.inference_thinking_auto_disable_for_rag
-            and not explain_intent):
-        enable_thinking_override = False
-        print(f"[chat] RAG present on {inference_mode} tier (lookup intent) — disabling CoT")
+    # CoT auto-disable, bounded by the T3 honesty rules — see
+    # _decide_thinking_override for the full policy.
+    enable_thinking_override, thinking_disabled_reason = _decide_thinking_override(
+        mode_source=request.mode_source,
+        inference_mode=inference_mode,
+        rag_chunks=rag_chunks,
+        routing_mode=routing_mode,
+        explain_intent=explain_intent,
+        explain_classify_failed=explain_classify_failed,
+        settings=settings,
+    )
+    if enable_thinking_override is False:
+        print(f"[chat] RAG lookup on defaulted {inference_mode} tier — disabling CoT")
 
     # Decide which inference path to take. Tool calling and self-consistency
     # are mutually exclusive in this first cut — tool calling produces a
@@ -1146,6 +1325,10 @@ async def send_message(
             fallback=bool(result.get("fallback_used")) if result else False,
             error_type=_metrics_error,
         ))
+        await registry.pipeline_event(
+            req_id, f"inference.{inference_mode}", ms=total_ms,
+            status="ok" if ok else "fail",
+        )
 
     # Store assistant response (strip thinking blocks, persist reasoning separately)
     raw = inference_result["content"]
@@ -1165,6 +1348,14 @@ async def send_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to store response"
         )
+
+    # Per-turn stage breakdown, joinable to the assistant message (T6a).
+    await _persist_stage_metrics(
+        db, registry, req_id,
+        user_id=user_id, session_id=session_id,
+        message_id=assistant_msg["id"], route="chat", mode=inference_mode,
+    )
+    await registry.pipeline_event(req_id, "request.done", status="ok")
 
     # Persist web search source links
     if search_results:
@@ -1363,6 +1554,8 @@ async def send_message(
         completion_tokens=inference_result.get("completion_tokens"),
         finish_reason=inference_result.get("finish_reason"),
         rag_metrics=rag_metrics,
+        enable_thinking=inference_result.get("enable_thinking"),
+        thinking_disabled_reason=thinking_disabled_reason,
     )
 
     sources_list = [{"title": r["title"], "url": r["url"]} for r in search_results] if search_results else None
@@ -1619,6 +1812,17 @@ async def send_message_stream(
         else:
             hist_messages.append({"role": msg["role"], "content": msg["content"]})
 
+    # Per-request id for the live pipeline panel (so the monitor can show
+    # one timeline per chat turn). Short hex — 8 chars is plenty for the
+    # bounded 50-event window we keep in the registry. Created BEFORE memory
+    # retrieval (T6a) so memory.embed/search attribute to this turn via the
+    # contextvar.
+    req_id = secrets.token_hex(4)
+    current_request_id.set(req_id)
+    pipeline_metrics = get_metrics_registry()
+    await pipeline_metrics.pipeline_event(req_id, "request.start", status="ok",
+                                           note="streaming")
+
     # Retrieve relevant user memories for context injection
     memory_service = get_memory_service()
     memories_text = ""
@@ -1629,14 +1833,6 @@ async def send_message_stream(
         except Exception as exc:
             print(f"[chat] Memory retrieval failed: {exc}")
 
-    # Per-request id for the live pipeline panel (so the monitor can show
-    # one timeline per chat turn). Short hex — 8 chars is plenty for the
-    # bounded 50-event window we keep in the registry.
-    req_id = secrets.token_hex(4)
-    pipeline_metrics = get_metrics_registry()
-    await pipeline_metrics.pipeline_event(req_id, "request.start", status="ok",
-                                           note="streaming")
-
     # RAG retrieval runs BEFORE system-message build so chunks slot into the
     # strict-grounding template — see send_message() for rationale. RAG
     # failures (bad embedding model, missing reranker, etc.) must NEVER
@@ -1644,10 +1840,19 @@ async def send_message_stream(
     # model answer without RAG. The pipeline event records the failure so
     # the operator can see what broke without losing the user's response.
     rag_chunks = []
+    explain_task = None
     if not request.conversation_mode:
         if not rag.enabled:
             print("[chat] RAG disabled — skipping document retrieval")
         elif await rag.user_has_documents(user_id):
+            # Fire explain-vs-lookup intent classification CONCURRENTLY with
+            # retrieval (T3): the classifier needs the instant LLM, retrieval
+            # needs embed+rerank — different backends, so the overlap is free
+            # and removes the serial 0-3s wait whose load-induced timeouts
+            # used to fail closed and strip CoT.
+            explain_task = asyncio.create_task(
+                classify_explain_intent(request.message)
+            )
             t_rag = time.perf_counter()
             try:
                 rag_chunks = await rag.retrieve_context(
@@ -1683,9 +1888,18 @@ async def send_message_stream(
               + (" (explicit lookup phrasing)" if explicit_lookup else ""))
 
     # Explain-vs-lookup intent — same gating as send_message().
+    # Resolve the pre-fired classification. Tri-state (T3): True=explain,
+    # False=lookup, None=classifier failed — a failure must not masquerade
+    # as a confident lookup verdict in the CoT gate below.
     explain_intent = False
-    if routing_mode == "lookup" and rag_chunks and not request.conversation_mode:
-        explain_intent = await classify_explain_intent(request.message)
+    explain_classify_failed = False
+    if explain_task is not None:
+        if routing_mode == "lookup" and rag_chunks:
+            _explain = await explain_task
+            explain_intent = _explain is True
+            explain_classify_failed = _explain is None
+        else:
+            explain_task.cancel()
 
     # Streaming path doesn't use tool_calling (no tool loop on stream), so the
     # TOOLS AVAILABLE hint is suppressed here — advertising tools the model
@@ -1732,18 +1946,27 @@ async def send_message_stream(
     else:
         inference_mode = request.mode.value
 
-    # Force CoT off when RAG context is present on the thinking tier AND the
-    # query is lookup-intent — see send_message() for rationale.
-    enable_thinking_override: bool | None = None
-    if (rag_chunks
-            and inference_mode in ("thinking", "thinking_harder")
-            and settings.inference_thinking_auto_disable_for_rag
-            and not explain_intent):
-        enable_thinking_override = False
-        print(f"[chat] RAG present on {inference_mode} tier (lookup intent) — disabling CoT")
+    # CoT auto-disable, bounded by the T3 honesty rules — see
+    # _decide_thinking_override for the full policy.
+    enable_thinking_override, thinking_disabled_reason = _decide_thinking_override(
+        mode_source=request.mode_source,
+        inference_mode=inference_mode,
+        rag_chunks=rag_chunks,
+        routing_mode=routing_mode,
+        explain_intent=explain_intent,
+        explain_classify_failed=explain_classify_failed,
+        settings=settings,
+    )
+    if enable_thinking_override is False:
+        print(f"[chat] RAG lookup on defaulted {inference_mode} tier — disabling CoT")
 
     async def event_generator():
         """Generate SSE events from inference stream."""
+        # Re-declare the request id in THIS execution context: the generator
+        # may be iterated by a different task than the route body, and
+        # contextvars don't cross task boundaries. Subsystem timers fired
+        # during streaming (web.*, verify.*) attribute correctly either way.
+        current_request_id.set(req_id)
         full_content = []
         full_reasoning = []
         # Strip <think>...</think> from delta.content as it streams so the
@@ -1823,12 +2046,16 @@ async def send_message_stream(
             stream_context_window = settings.get_context_window_for_mode(inference_mode)
             messages_for_inference = messages
             if stream_context_window > 0:
+                t_trim = time.perf_counter()
                 messages_for_inference = trim_messages_to_budget(
                     messages,
                     context_window=stream_context_window,
                     max_tokens=settings.get_max_tokens_for_mode(inference_mode),
                     chars_per_token=settings.token_chars_per_token,
                     reserve_fraction=settings.token_budget_reserve_fraction,
+                )
+                await registry.record_subsystem(
+                    "chat.trim_budget", (time.perf_counter() - t_trim) * 1000.0,
                 )
 
             await registry.pipeline_event(
@@ -1853,6 +2080,7 @@ async def send_message_stream(
                 mode=inference_mode,
                 enable_thinking=enable_thinking_override,
                 session_id=session_id,
+                thinking_disabled_reason=thinking_disabled_reason,
             ):
                 rewritten_chunk = chunk
                 try:
@@ -1954,6 +2182,32 @@ async def send_message_stream(
                 note=f"{n_content_deltas} deltas",
             )
 
+            # Terminal frame (T6a): one extensible end-of-stream envelope.
+            # Timings ride it now; T1b's inference metadata and T5's
+            # canonical final_text are designed to ride the same frame.
+            # The webapp's line dispatcher ignores unknown frames, and it
+            # reads past [DONE] until stream close (gateway.ts processLine),
+            # so this is backward-compatible.
+            if not client_disconnected:
+                try:
+                    _events = await registry.get_request_events(req_id)
+                    _stages, _total_ms = _shape_stage_events(_events)
+                    _final = {"final": {
+                        "v": 1,
+                        "request_id": req_id,
+                        "timings": {"total_ms": _total_ms, "stages": _stages},
+                    }}
+                    yield "data: " + json.dumps(_final) + "\n\n"
+                except (BrokenPipeError, ConnectionResetError, RuntimeError,
+                        asyncio.CancelledError):
+                    # Client vanished after the last content frame — nothing
+                    # left to send them, but the response is complete, so fall
+                    # through to the DB save below.
+                    pass
+                except Exception as _exc:
+                    # Timings are best-effort — never break a finished stream.
+                    print(f"[chat] terminal frame failed: {_exc}")
+
             # Build final content for DB (strip thinking tags, persist reasoning separately)
             raw_content = "".join(full_content)
             content = _finalize_assistant_text(raw_content)
@@ -1972,6 +2226,14 @@ async def send_message_stream(
                         content=save_content,
                         mode_used=inference_mode,
                         reasoning_content=reasoning,
+                    )
+
+                    # Per-turn stage breakdown, joinable to the message (T6a).
+                    await _persist_stage_metrics(
+                        db, registry, req_id,
+                        user_id=user_id, session_id=session_id,
+                        message_id=assistant_msg["id"] if assistant_msg else None,
+                        route="chat_stream", mode=inference_mode,
                     )
 
                     # Persist web search source links

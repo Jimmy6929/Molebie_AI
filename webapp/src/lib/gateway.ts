@@ -1,5 +1,26 @@
 import { GATEWAY_URL } from "./gatewayUrl";
 
+/**
+ * Error carrying the HTTP status and parsed `detail` from a gateway response.
+ * `message` keeps the original `API error <status>: <body>` shape, so existing
+ * string checks against it keep working.
+ */
+export class GatewayError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(status: number, body: string) {
+    super(`API error ${status}: ${body}`);
+    this.name = "GatewayError";
+    this.status = status;
+    try {
+      this.detail = (JSON.parse(body) as { detail?: unknown }).detail;
+    } catch {
+      this.detail = undefined;
+    }
+  }
+}
+
 export interface ChatResponse {
   session_id: string;
   message: {
@@ -56,7 +77,7 @@ async function apiCall<T>(
       }
     }
     const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
+    throw new GatewayError(res.status, text);
   }
 
   return res.json();
@@ -77,6 +98,9 @@ export async function sendMessage(
     body: JSON.stringify({
       message,
       mode,
+      // The UI mode toggle is always an explicit user choice — the gateway
+      // honors it unconditionally (no CoT auto-disable on lookups).
+      mode_source: "user",
       session_id: sessionId || null,
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
@@ -115,6 +139,9 @@ export async function sendMessageStream(
     body: JSON.stringify({
       message,
       mode,
+      // The UI mode toggle is always an explicit user choice — the gateway
+      // honors it unconditionally (no CoT auto-disable on lookups).
+      mode_source: "user",
       session_id: sessionId || null,
       conversation_mode: conversationMode,
       ...(image ? { image } : {}),
@@ -130,7 +157,7 @@ export async function sendMessageStream(
       window.location.href = "/login";
     }
     const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
+    throw new GatewayError(res.status, text);
   }
 
   // Get session ID from header (if CORS exposes it)

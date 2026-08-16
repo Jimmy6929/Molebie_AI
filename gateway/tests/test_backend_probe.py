@@ -63,6 +63,18 @@ def _models_response(model_id: str = "qwen3-instant", server: str | None = None)
     )
 
 
+def _multi_models_response(model_ids: list[str]) -> httpx.Response:
+    """A /models list with several entries, as mlx_vlm/Ollama return: the whole
+    local cache, in whatever order the server happens to scan it."""
+    return httpx.Response(
+        200,
+        json={
+            "object": "list",
+            "data": [{"id": m, "object": "model"} for m in model_ids],
+        },
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_probe_singleton():
     """Probe is a module-level singleton; reset around every test so probe
@@ -101,6 +113,18 @@ class TestFingerprintFromResponse:
     def test_returns_none_for_non_json(self):
         resp = httpx.Response(200, text="not json")
         assert _fingerprint_from_response(resp) is None
+
+    def test_prefers_configured_model_regardless_of_list_order(self):
+        expected = hashlib.sha256(b"qwen3-instant").hexdigest()
+        first = _multi_models_response(["other-model", "qwen3-instant"])
+        second = _multi_models_response(["qwen3-instant", "other-model"])
+        assert _fingerprint_from_response(first, "qwen3-instant") == expected
+        assert _fingerprint_from_response(second, "qwen3-instant") == expected
+
+    def test_falls_back_to_first_entry_when_configured_model_absent(self):
+        resp = _multi_models_response(["other-model", "another-model"])
+        expected = hashlib.sha256(b"other-model").hexdigest()
+        assert _fingerprint_from_response(resp, "qwen3-instant") == expected
 
 
 # ─────────────────────────── probe → BackendHealth wiring ───────────────────────────
@@ -179,6 +203,47 @@ class TestProbeDrivesBackendHealth:
             await probe._client.aclose()
         assert backend.health.drift_open is False
         assert backend.health.state == CircuitState.CLOSED
+
+    async def test_cache_reorder_does_not_trip_drift(self):
+        # mlx_vlm/Ollama list the whole model cache in arbitrary order; a
+        # reorder (server restart, new download) must not read as drift.
+        backend = _make_backend("local-instant", "instant")
+        backend.model = "qwen3-instant"
+        probe = await _probe_with(
+            backend, response=_multi_models_response(["other-model", "qwen3-instant"])
+        )
+        with patch.object(
+            httpx.AsyncClient,
+            "get",
+            new=AsyncMock(
+                return_value=_multi_models_response(["qwen3-instant", "other-model"])
+            ),
+        ):
+            probe._client = httpx.AsyncClient(timeout=2.0)
+            await probe._probe_one(backend)
+            await probe._client.aclose()
+        assert backend.health.drift_open is False
+        assert backend.health.state == CircuitState.CLOSED
+        assert probe._get_pools()["instant"].expected_fingerprint == hashlib.sha256(
+            b"qwen3-instant"
+        ).hexdigest()
+
+    async def test_drift_trips_when_configured_model_vanishes(self):
+        backend = _make_backend("local-instant", "instant")
+        backend.model = "qwen3-instant"
+        probe = await _probe_with(
+            backend, response=_multi_models_response(["other-model", "qwen3-instant"])
+        )
+        with patch.object(
+            httpx.AsyncClient,
+            "get",
+            new=AsyncMock(return_value=_multi_models_response(["other-model"])),
+        ):
+            probe._client = httpx.AsyncClient(timeout=2.0)
+            await probe._probe_one(backend)
+            await probe._client.aclose()
+        assert backend.health.drift_open is True
+        assert probe.latest()["local-instant"].last_error == "fingerprint_drift"
 
     async def test_three_consecutive_probe_failures_trip_open(self):
         backend = _make_backend("local-instant", "instant")

@@ -155,7 +155,7 @@ class BackendProbe:
         latency_ms: float,
         now: float,
     ) -> None:
-        fingerprint = _fingerprint_from_response(resp)
+        fingerprint = _fingerprint_from_response(resp, backend.model)
         server_version = resp.headers.get("server")
 
         backend.server_version = server_version
@@ -260,13 +260,21 @@ class BackendProbe:
             return None
 
 
-def _fingerprint_from_response(resp: httpx.Response) -> str | None:
+def _fingerprint_from_response(
+    resp: httpx.Response, configured_model: str | None = None
+) -> str | None:
     """Compute a stable hash from an OpenAI-shape /v1/models response.
 
-    Minimal: hashes ``data[0]["id"]`` only. Ephemeral fields (``created``,
+    Prefers the backend's *configured* model id when it appears anywhere in
+    the list: multi-model servers (mlx_vlm, Ollama) advertise their whole
+    local cache in arbitrary order, so list position carries no signal — what
+    matters is that the model we route requests to is still offered. Falls
+    back to ``data[0]["id"]`` when the configured model is absent, which
+    preserves the original semantics for single-model servers (vLLM,
+    llama.cpp list exactly one entry) and still catches the "operator pointed
+    at a different model entirely" case. Ephemeral fields (``created``,
     request counters, uptime) are deliberately excluded so a server restart
-    doesn't trigger spurious drift. This catches the "operator pointed at a
-    different model entirely" case; it does NOT catch "same id, different
+    doesn't trigger spurious drift. It does NOT catch "same id, different
     weights underneath" — no OpenAI-compatible server reliably exposes a
     weight checksum, so that case is unsolvable here. Defer to the future
     ``/molebie/satellite/info`` endpoint once satellites land.
@@ -278,12 +286,16 @@ def _fingerprint_from_response(resp: httpx.Response) -> str | None:
     data = body.get("data") if isinstance(body, dict) else None
     if not isinstance(data, list) or not data:
         return None
-    first = data[0]
-    if not isinstance(first, dict):
+    ids = [
+        entry.get("id")
+        for entry in data
+        if isinstance(entry, dict)
+        and isinstance(entry.get("id"), str)
+        and entry.get("id")
+    ]
+    if not ids:
         return None
-    model_id = first.get("id")
-    if not isinstance(model_id, str) or not model_id:
-        return None
+    model_id = configured_model if configured_model in ids else ids[0]
     return hashlib.sha256(model_id.encode("utf-8")).hexdigest()
 
 
