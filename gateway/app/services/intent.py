@@ -73,12 +73,17 @@ _PROMPT = (
 )
 
 
-async def classify_explain_intent(message: str) -> bool:
-    """Return True iff the question is best served by an explanatory answer.
+async def classify_explain_intent(message: str) -> bool | None:
+    """Classify the question's intent: True = explain, False = lookup,
+    None = classification FAILED (timeout / error) — the caller must not
+    treat a failure as a confident "lookup" verdict.
 
-    Fail-closed: any error / timeout returns False (caller will use the
-    strict lookup template, current behaviour). Latency is bounded by
-    ``intent_classify_timeout`` (default 3.0s).
+    The tri-state matters for the CoT auto-disable gate (T3): the old
+    fail-closed bool meant every classifier timeout under load silently
+    stripped chain-of-thought from thinking-mode turns. Definite
+    non-answers (classifier disabled, empty message) still return False —
+    those are genuine "no explain intent" verdicts, not failures. Latency
+    is bounded by ``intent_classify_timeout`` (default 3.0s).
     """
     settings = get_settings()
     if not settings.intent_classify_enabled:
@@ -92,7 +97,7 @@ async def classify_explain_intent(message: str) -> bool:
         return await _classify_inner(cleaned)
 
 
-async def _classify_inner(message: str) -> bool:
+async def _classify_inner(message: str) -> bool | None:
     settings = get_settings()
     try:
         from app.services.inference import get_inference_service
@@ -114,5 +119,7 @@ async def _classify_inner(message: str) -> bool:
         print(f"[intent] LLM classify: '{preview}' → {answer} → explain={is_explain}")
         return is_explain
     except Exception as exc:
-        print(f"[intent] LLM classify failed ({exc}), defaulting to lookup")
-        return False
+        # repr(): str(TimeoutError()) is the empty string, which made every
+        # load-induced timeout log as an anonymous "failed ()".
+        print(f"[intent] LLM classify failed ({exc!r}) — intent unknown")
+        return None

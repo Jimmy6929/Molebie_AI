@@ -951,6 +951,9 @@ class InferenceService:
                     "model": data.get("model", model),
                     "finish_reason": choice.get("finish_reason"),
                     "fallback_used": False,
+                    # Resolved CoT flag actually sent to the backend (T3) —
+                    # surfaced to the client via InferenceMetadata.
+                    "enable_thinking": enable_thinking,
                 }
         except httpx.ConnectError:
             ctx = "cold start?" if mode in ("thinking", "thinking_harder") else "is pod running?"
@@ -995,9 +998,15 @@ class InferenceService:
         enable_thinking: bool | None = None,
         session_id: str | None = None,
         voice_mode: bool = False,
+        thinking_disabled_reason: str | None = None,
     ) -> AsyncIterator[str]:
         """
         Generate a streaming response from the LLM (SSE format).
+
+        ``thinking_disabled_reason`` is route-level context (why CoT was
+        forced off, e.g. "rag_lookup_auto_disable") passed through verbatim
+        into the metadata frame so the client can render an honest
+        "Thinking skipped" state (T3).
 
         Routes through ``BackendSelector`` — see :meth:`generate_response`
         for the routing/affinity semantics. If the primary stream fails
@@ -1059,6 +1068,7 @@ class InferenceService:
                 "model": model,
                 "fallback_used": fallback_used,
                 "enable_thinking": resolved_enable_thinking,
+                "thinking_disabled_reason": thinking_disabled_reason,
             }
             yield f"data: {json.dumps({'metadata': meta})}\n\n"
 
@@ -1230,6 +1240,7 @@ class InferenceService:
             "model": "error",
             "finish_reason": "stop",
             "fallback_used": False,
+            "enable_thinking": None,   # unknown — the call never completed
             "_error": reason,
         }
 
@@ -1308,6 +1319,7 @@ class InferenceService:
             "model": "mock",
             "finish_reason": "stop",
             "fallback_used": False,
+            "enable_thinking": False,
         }
 
     async def _mock_stream(
