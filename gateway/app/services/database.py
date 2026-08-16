@@ -244,6 +244,7 @@ class DatabaseService:
         mode_used: str | None = None,
         tokens_used: int | None = None,
         reasoning_content: str | None = None,
+        model_used: str | None = None,
         **_kwargs,
     ) -> dict[str, Any] | None:
         db = await self._get_conn()
@@ -251,9 +252,9 @@ class DatabaseService:
         mid = _uuid()
         await db.execute(
             "INSERT INTO chat_messages "
-            "(id, session_id, user_id, role, content, mode_used, tokens_used, reasoning_content, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (mid, session_id, user_id, role, content, mode_used, tokens_used, reasoning_content, now),
+            "(id, session_id, user_id, role, content, mode_used, model_used, tokens_used, reasoning_content, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (mid, session_id, user_id, role, content, mode_used, model_used, tokens_used, reasoning_content, now),
         )
         # Update session updated_at
         await db.execute(
