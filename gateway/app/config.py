@@ -324,9 +324,18 @@ class Settings(BaseSettings):
     # Calibrated 2026-05 from a 50-query golden-set run on this corpus:
     # adversarial/must_abstain top-1 scores cluster below 0.35 with rare
     # outliers up to 0.66; rag_grounded scores are bimodal with a "weak"
-    # cluster at 0.0–0.45 and a "strong" cluster at 0.65–1.0. 0.05 keeps
-    # only the obvious-noise chunks out without collapsing the LOW tier.
-    rag_rerank_floor: float = 0.05
+    # cluster at 0.0–0.45 and a "strong" cluster at 0.65–1.0.
+    #
+    # Raised 0.05 → 0.25 (2026-08-14 recalibration, post-T4 golden set +
+    # live-vault probes): truly-unanswerable queries top out at 0.19
+    # (must_abstain max) while the weakest genuinely-grounded answer
+    # measured 0.373 — 0.25 sits between with margin on both sides, so
+    # pure keyword noise (a riddle scoring 0.13 against Paul Graham
+    # essays) is dropped entirely while no real answer loses a chunk.
+    # Applied on every retrieval path (rerank ok / failed / disabled) via
+    # _passes_relevance_floor. Derivation frozen under
+    # gateway/tests/eval/calibration/2026-08-14/.
+    rag_rerank_floor: float = 0.25
 
     # ── Parent-Child Neighbor Expansion ───────────────────────
     # After reranking, also pull chunk_index ± 1 from each retrieved

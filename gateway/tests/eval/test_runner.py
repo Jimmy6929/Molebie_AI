@@ -256,3 +256,91 @@ def test_percentile_simple():
 
 def test_percentile_empty():
     assert rb._percentile([], 90) == 0.0
+
+
+# ── run_pass_rate_eval.assess() — negative-category semantics ──────────────
+# Regression tests for the inverted rag_grounded_negative check (2026-08-14):
+# the old assess() treated the rows' disclaimer phrasings as FORBIDDEN text,
+# failing honest abstention and passing fabrication. run_baseline.evaluate
+# is canonical; both runners must agree on these cases.
+
+import json  # noqa: E402
+
+import run_pass_rate_eval as rp  # noqa: E402
+
+_NEGATIVE_ENTRY = {
+    "category": "rag_grounded_negative",
+    "expected_substrings": ["I don't have", "no notes", "not found"],
+    "any_substring": True,
+}
+
+
+def test_negative_passes_on_exact_fallback_string():
+    ok, reason = rp.assess(_NEGATIVE_ENTRY, "I don't have that in your notes.")
+    assert ok is True
+
+
+def test_negative_passes_on_row_disclaimer_phrasing():
+    ok, reason = rp.assess(
+        _NEGATIVE_ENTRY, "That fact was not found in your notes, sorry."
+    )
+    assert ok is True
+
+
+def test_negative_fails_on_fabrication():
+    fabricated = "Your note records Mount Everest's elevation as 8,849 metres [S1]."
+    ok, reason = rp.assess(_NEGATIVE_ENTRY, fabricated)
+    assert ok is False
+    assert "disclaim" in reason
+
+
+def test_negative_runners_agree():
+    """run_baseline and run_pass_rate_eval must give the same verdict on the
+    same negative-category texts (they diverged before the 2026-08-14 fix)."""
+    abstain = "I don't have that in your notes."
+    fabricated = "The quarterly review deadline in your notes is March 3rd [S1]."
+    for text, expected in ((abstain, True), (fabricated, False)):
+        assert rp.assess(_NEGATIVE_ENTRY, text)[0] is expected
+        assert rb.evaluate(_NEGATIVE_ENTRY, text, [])["pass"] is expected
+
+
+# ── golden-set + corpus data integrity ─────────────────────────────────────
+# The retrieval-regression rows added from the 2026-08-14 eval (G3/G5
+# findings) must stay AND-mode + must_cite, and every DEFAULT_CORPUS file
+# must exist so ablation.sh seeds what the rows assume.
+
+
+def _load_golden() -> dict[str, dict]:
+    path = HERE / "golden_set.jsonl"
+    rows = [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+    return {r["id"]: r for r in rows}
+
+
+def test_ports_regression_row_shape():
+    row = _load_golden()["rag_016"]
+    assert row["category"] == "rag_grounded"
+    assert row["must_cite"] is True
+    assert not row.get("any_substring", False)  # AND-mode over all four ports
+    assert set(row["expected_substrings"]) == {"3000", "8000", "8080", "8081"}
+
+
+def test_multihop_regression_row_shape():
+    row = _load_golden()["rag_017"]
+    assert row["category"] == "rag_grounded"
+    assert row["must_cite"] is True
+    assert not row.get("any_substring", False)  # AND-mode emulates the 2-doc join
+    assert set(row["expected_substrings"]) == {"SelfCheck", "DeBERTa"}
+
+
+def test_default_corpus_files_exist():
+    import seed_corpus
+
+    repo_root = HERE.parent.parent.parent
+    missing = [p for p in seed_corpus.DEFAULT_CORPUS if not (repo_root / p).is_file()]
+    assert not missing, f"DEFAULT_CORPUS entries missing on disk: {missing}"
+
+
+def test_ports_corpus_doc_contains_all_expected_ports():
+    doc = (HERE / "corpus" / "ports-and-topology.md").read_text()
+    for port in ("3000", "8000", "8080", "8081"):
+        assert port in doc

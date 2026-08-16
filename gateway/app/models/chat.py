@@ -29,6 +29,16 @@ class ChatRequest(BaseModel):
     image: str | None = Field(None, description="Base64-encoded image as data URI (data:image/...;base64,...)")
     web_search: bool = Field(False, description="When true, force web search for this message")
     brain: str | None = Field(None, description="Scope RAG to one brain (top-level vault folder). null / 'All' = search everything")
+    mode_source: str = Field(
+        "default",
+        pattern="^(user|default)$",
+        description=(
+            "Whether `mode` was explicitly chosen by the user ('user') or "
+            "filled in by a client default ('default'). An explicit choice "
+            "is honored unconditionally — the RAG-lookup CoT auto-disable "
+            "only applies to defaulted modes."
+        ),
+    )
 
 
 class ChatMessage(BaseModel):
@@ -57,6 +67,12 @@ class InferenceMetadata(BaseModel):
     completion_tokens: int | None = None
     finish_reason: str | None = None
     rag_metrics: dict[str, Any] | None = None  # RAG pipeline metrics (timing, scores)
+    # What the backend actually told the model about CoT (T3): the chat
+    # route can disable thinking on defaulted-mode RAG lookups even when
+    # the tier default is on. None = unknown (e.g. inference error path).
+    enable_thinking: bool | None = None
+    # Set only when the route disabled CoT, e.g. "rag_lookup_auto_disable".
+    thinking_disabled_reason: str | None = None
 
 
 class ChatResponse(BaseModel):

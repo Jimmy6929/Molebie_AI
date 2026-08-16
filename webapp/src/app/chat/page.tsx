@@ -546,14 +546,15 @@ export default function ChatPage() {
     setFolderJob(null);
   }
 
-  // Auto-reattach to an in-progress folder job on page mount.
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    (async () => {
+  // Show the progress panel for whatever ingest job is currently in flight.
+  // Used on mount, and again whenever a sync is refused because that job still
+  // holds the single-job-per-user lock.
+  const reattachActiveFolderJob = useCallback(
+    async (isStale: () => boolean = () => false) => {
+      if (!token) return;
       try {
         const active = await getActiveFolderJob(token);
-        if (cancelled || !active) return;
+        if (isStale() || !active) return;
         if (active.status !== "pending" && active.status !== "running") return;
         setFolderJob({
           jobId: active.job_id,
@@ -572,11 +573,20 @@ export default function ChatPage() {
       } catch (err) {
         console.error("Failed to reattach folder job:", err);
       }
-    })();
+    },
+    [token, attachFolderEventStream],
+  );
+
+  // Auto-reattach to an in-progress folder job on page mount. The stale check
+  // keeps a slow response from opening an EventSource after unmount, which the
+  // unmount cleanup has already run past.
+  useEffect(() => {
+    let cancelled = false;
+    void reattachActiveFolderJob(() => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [token, attachFolderEventStream]);
+  }, [reattachActiveFolderJob]);
 
   // Tear down EventSource on unmount.
   useEffect(() => {
@@ -1373,6 +1383,7 @@ export default function ChatPage() {
                 <VaultPanel
                   token={token}
                   onSyncJobStarted={handleVaultSyncStarted}
+                  onSyncBusy={reattachActiveFolderJob}
                   onDocumentsChanged={loadDocuments}
                   onToast={(msg) => {
                     setDocToast(msg);

@@ -248,6 +248,26 @@ class IngestWorker:
 
     # ---------------------- Per-file ----------------------
 
+    async def _skip_file(
+        self, job_id: str, file_id: str, rel: str, reason: str
+    ) -> None:
+        """Mark a file skipped and tell subscribers why."""
+        db = get_database_service()
+        await db.update_ingest_file_status(
+            file_id, "skipped", error_message=reason, finished_at=_now_iso()
+        )
+        await db.bump_ingest_job_counts(job_id, skipped=1)
+        await self.emit(
+            job_id,
+            "file_skipped",
+            {"file_id": file_id, "relative_path": rel, "reason": reason},
+        )
+
+    async def _vault_gone(self, vault_source_id: str, user_id: str) -> bool:
+        """True once the owning vault has been disconnected."""
+        db = get_database_service()
+        return await db.get_vault_source(vault_source_id, user_id) is None
+
     async def _process_one_file(
         self, job_id: str, file_row: dict[str, Any]
     ) -> None:
@@ -273,19 +293,19 @@ class IngestWorker:
         )
 
         if not storage_path:
-            await db.update_ingest_file_status(
-                file_id, "skipped",
-                error_message="no_bytes",
-                finished_at=_now_iso(),
-            )
-            await db.bump_ingest_job_counts(job_id, skipped=1)
-            await self.emit(
-                job_id,
-                "file_skipped",
-                {"file_id": file_id, "relative_path": rel, "reason": "no_bytes"},
-            )
+            await self._skip_file(job_id, file_id, rel, "no_bytes")
             return
 
+        # A vault can be disconnected while its own sync job is still running.
+        # Disconnect deletes every document the vault owns, so anything written
+        # afterwards is an orphan: tagged with a vault_source_id no query can
+        # resolve, and unreachable by any later sync or disconnect.
+        vault_source_id = file_row.get("vault_source_id")
+        if vault_source_id and await self._vault_gone(vault_source_id, user_id):
+            await self._skip_file(job_id, file_id, rel, "vault_disconnected")
+            return
+
+        doc_id: str | None = None
         try:
             data = await asyncio.to_thread(storage.download_document, storage_path)
 
@@ -338,6 +358,14 @@ class IngestWorker:
                     row["content_contextualized"] = meta["content_contextualized"]
                 chunk_rows.append(row)
 
+            # Embedding takes tens of seconds per file; the disconnect may have
+            # landed during it and taken our freshly-inserted document row with
+            # it. Re-check before writing chunks against a dangling document_id.
+            if vault_source_id and await self._vault_gone(vault_source_id, user_id):
+                await db.delete_document(doc_id, user_id)
+                await self._skip_file(job_id, file_id, rel, "vault_disconnected")
+                return
+
             for i in range(0, len(chunk_rows), 20):
                 await db.insert_chunks(chunk_rows[i:i + 20])
 
@@ -362,6 +390,14 @@ class IngestWorker:
         except Exception as exc:  # noqa: BLE001
             err = f"{type(exc).__name__}: {exc}"
             print(f"[ingest_worker] file {rel} failed: {err}")
+            # Drop the document row created before the failure — otherwise a
+            # failed file leaves a permanently 'processing' document behind,
+            # possibly with a partial set of chunks already indexed.
+            if doc_id is not None:
+                try:
+                    await db.delete_document(doc_id, user_id)
+                except Exception:  # noqa: BLE001
+                    pass
             await db.update_ingest_file_status(
                 file_id, "failed",
                 error_message=err,
