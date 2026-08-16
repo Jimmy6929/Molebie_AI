@@ -245,6 +245,53 @@ class TestProbeDrivesBackendHealth:
         assert backend.health.drift_open is True
         assert probe.latest()["local-instant"].last_error == "fingerprint_drift"
 
+    async def test_timeout_while_machine_busy_does_not_count(self):
+        # A generation in flight anywhere on the machine starves probes on
+        # shared-GPU hosts; that must not feed the breaker (2026-08-14
+        # silent-mock incident, reproduced 3x during eval verification).
+        backend = _make_backend("local-instant", "instant")
+        backend.in_flight = 1
+        probe = await _probe_with(backend, raise_exc=httpx.TimeoutException("starved"))
+        assert backend.health.consecutive_failures == 0
+        assert backend.health.state == CircuitState.CLOSED
+        snap = probe.latest()["local-instant"]
+        assert snap.status == "busy"
+        assert "not counted" in (snap.last_error or "")
+
+    async def test_timeout_on_other_tier_backend_also_shields(self):
+        # The tiers share one GPU: thinking-tier load shields instant-tier
+        # probes too. Busy-ness is machine-wide.
+        instant = _make_backend("local-instant", "instant")
+        thinking = _make_backend("local-thinking", "thinking")
+        thinking.in_flight = 2
+        pools = _make_pools(instant, thinking)
+        probe = BackendProbe(lambda: pools)
+        probe._client = httpx.AsyncClient(timeout=2.0)
+        with patch.object(
+            httpx.AsyncClient, "get",
+            new=AsyncMock(side_effect=httpx.TimeoutException("starved")),
+        ):
+            await probe._probe_one(instant)
+        await probe._client.aclose()
+        assert instant.health.consecutive_failures == 0
+        assert probe.latest()["local-instant"].status == "busy"
+
+    async def test_timeout_while_idle_still_counts(self):
+        backend = _make_backend("local-instant", "instant")
+        assert backend.in_flight == 0
+        probe = await _probe_with(backend, raise_exc=httpx.TimeoutException("slow"))
+        assert backend.health.consecutive_failures == 1
+        assert probe.latest()["local-instant"].status == "down"
+
+    async def test_connect_error_counts_even_while_busy(self):
+        # An active refusal is a real health signal a busy GPU cannot
+        # explain — it must keep tripping the breaker.
+        backend = _make_backend("local-instant", "instant")
+        backend.in_flight = 3
+        probe = await _probe_with(backend, raise_exc=httpx.ConnectError("refused"))
+        assert backend.health.consecutive_failures == 1
+        assert probe.latest()["local-instant"].status == "down"
+
     async def test_three_consecutive_probe_failures_trip_open(self):
         backend = _make_backend("local-instant", "instant")
         for _ in range(3):
