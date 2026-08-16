@@ -10,6 +10,12 @@ Status semantics (the probe's *snapshot* status, distinct from the
 ``BackendHealth.state`` circuit on the same backend):
   * up    — HTTP 2xx within the timeout
   * down  — HTTP error, timeout, or connection refused
+  * busy  — probe timed out while inference is in flight somewhere on the
+            machine. NOT counted as a failure: on shared-GPU hosts a long
+            generation starves the probe's event loop / HTTP round-trip,
+            and treating that as backend death tripped the breaker and
+            silently served mock mid-conversation (2026-08-14 incident,
+            reproduced 3x during eval verification).
   * cold  — up but no successful chat request served in the last 5 min
             (combined here from the metrics registry, informational only)
 
@@ -37,7 +43,7 @@ from app.services.inference_pool import (
 
 _COLD_THRESHOLD_SEC = 5 * 60
 _PROBE_INTERVAL_SEC = 5.0
-_PROBE_TIMEOUT_SEC = 2.0
+_PROBE_TIMEOUT_SEC = 5.0
 
 
 @dataclass(slots=True)
@@ -46,7 +52,7 @@ class BackendSnapshot:
     tier: str
     url: str | None
     model: str | None
-    status: str           # 'up' | 'down' | 'cold' | 'not_configured'
+    status: str           # 'up' | 'down' | 'busy' | 'cold' | 'not_configured'
     last_latency_ms: float | None = None
     last_error: str | None = None
     last_checked_at: float = 0.0
@@ -144,8 +150,27 @@ class BackendProbe:
                     backend, f"HTTP {resp.status_code}", latency_ms, now
                 )
         except httpx.TimeoutException:
-            self._handle_failure(backend, "timeout", None, now)
+            if self._machine_busy():
+                # Expected starvation, not a health signal: a generation or
+                # embedding burst anywhere on this machine (the tiers share
+                # the GPU) delays the probe past its timeout. Snapshot it as
+                # "busy" for the operator but feed NEITHER success nor
+                # failure into the breaker — the request path remains the
+                # truthful failure signal under load.
+                self._record_snapshot(
+                    backend,
+                    status="busy",
+                    last_latency_ms=None,
+                    last_error="probe timeout while inference in flight (not counted)",
+                    now=now,
+                    fingerprint=backend.model_fingerprint,
+                    server_version=backend.server_version,
+                )
+            else:
+                self._handle_failure(backend, "timeout", None, now)
         except httpx.TransportError as exc:
+            # Connection refused/reset counts even under load — the server
+            # actively rejected us, which a busy GPU cannot explain.
             self._handle_failure(backend, type(exc).__name__, None, now)
 
     async def _handle_success(
@@ -252,6 +277,17 @@ class BackendProbe:
             server_version=server_version,
             circuit_state=backend.health.state,
         )
+
+    def _machine_busy(self) -> bool:
+        """True when any backend in any pool has a request in flight.
+
+        Machine-wide (not per-backend) on purpose: the tiers share one GPU,
+        so a thinking-tier generation starves probes to the instant tier
+        just as thoroughly as to its own."""
+        try:
+            return any(b.in_flight > 0 for b in self._backends())
+        except Exception:
+            return False
 
     def _pool_for(self, backend: InferenceBackend) -> BackendPool | None:
         try:
