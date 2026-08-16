@@ -537,7 +537,9 @@ async def _run_tool_loop(
         working_messages.append(
             {
                 "role": "assistant",
-                "content": _finalize_assistant_text(result.get("content") or ""),
+                "content": _finalize_assistant_text(
+                    result.get("content") or "", strip_scaffolding=False,
+                ),
                 "tool_calls": tool_calls,
             }
         )
@@ -750,14 +752,80 @@ def _strip_thinking(content: str) -> str:
     return content.strip()
 
 
-def _finalize_assistant_text(raw: str) -> str:
+# Self-correction scaffolding (T5). Qwen3.5 appends corrections rather
+# than replacing errors (arXiv 2504.09586): the wrong bold headline stays
+# and the right answer lands in a terminal block. Both signals must fire
+# before anything is stripped — conservative by construction.
+_CORRECTION_MARKER_RE = re.compile(
+    r"(?im)^\s*\*{0,2}\s*(?:"
+    r"wait[,—\s]"
+    r"|actually[,\s]"
+    r"|correction\b"
+    r"|\*?correction on\b"
+    r"|let(?:'s| me| us)? re(?:calculate|check|-?evaluate|-?read|-?verify)"
+    r")"
+)
+_TERMINAL_BLOCK_RE = re.compile(
+    r"(?im)^\s*(?:#{1,4}\s+)?\*{0,2}"
+    r"(?:final answer(?:\s+formulation)?|final schedule|summary|conclusion)\b"
+)
+
+
+def _strip_scaffolding(text: str) -> str:
+    """Presentation-layer strip of appended-correction scaffolding (T5).
+
+    Keeps ONLY the terminal answer block when the response shows the
+    append-not-replace pattern. Fires only when ALL hold, else returns the
+    text untouched (fixture-tested against the 2026-08-14 eval transcripts):
+
+      1. A self-correction marker ("Wait,", "Actually,", "Correction",
+         "let me recalculate/re-evaluate/...") appears somewhere.
+      2. A terminal answer heading (Final Answer / Final Schedule /
+         Summary / Conclusion) starts a line in the LATTER part of the
+         text (past 40% — never nukes a short prefix).
+      3. At least one correction marker precedes that heading (the block
+         is the model's own repair, not ordinary structure).
+      4. The kept block still carries content beyond its heading.
+      5. The kept block contains no further correction markers — a
+         terminal answer that keeps second-guessing (e.g. a truncated
+         reasoning spiral) is not a terminal answer; pass it through.
+
+    Generation is untouched — reasoning-then-answer stays optimal for
+    small models; this is a display/persistence transform. Idempotent —
+    but via the POSITION gate, not the marker gate: the kept block still
+    starts with a terminal heading, so on a second pass the match sits at
+    offset 0, fails the 40% position check, and bounces. Loosening that
+    gate would silently break idempotence.
+    """
+    matches = list(_TERMINAL_BLOCK_RE.finditer(text))
+    if not matches:
+        return text
+    cut = matches[-1].start()
+    if cut < len(text) * 0.4:
+        return text
+    head = text[:cut]
+    if not _CORRECTION_MARKER_RE.search(head):
+        return text
+    tail = text[cut:].strip()
+    body = _TERMINAL_BLOCK_RE.sub("", tail, count=1).strip(" :*\n")
+    if not re.search(r"\w", body):
+        return text
+    if _CORRECTION_MARKER_RE.search(tail):
+        return text
+    return tail
+
+
+def _finalize_assistant_text(raw: str, strip_scaffolding: bool = True) -> str:
     """Single chokepoint for any text leaving inference toward DB / UI / next-turn.
 
     1. Closes orphan ``<think>`` openers (truncation at max_tokens leaves these
        — without a closing tag the regex in ``_strip_thinking`` can't match
        and the raw reasoning would leak to the user).
     2. Strips ``<think>...</think>`` blocks.
-    3. Trims.
+    3. Strips appended-correction scaffolding (see ``_strip_scaffolding``)
+       unless ``strip_scaffolding=False`` — the tool loop passes False so
+       the model's own working context keeps full fidelity mid-loop.
+    4. Trims.
 
     Idempotent — safe to call twice. Use this at every site where assistant
     content crosses into a place that mustn't see reasoning: user-visible
@@ -768,7 +836,10 @@ def _finalize_assistant_text(raw: str) -> str:
         return ""
     if "<think>" in raw and "</think>" not in raw:
         raw = raw + "</think>"
-    return _strip_thinking(raw)
+    text = _strip_thinking(raw)
+    if strip_scaffolding and get_settings().answer_strip_scaffolding_enabled:
+        text = _strip_scaffolding(text)
+    return text
 
 
 async def _persist_rag_metrics(
@@ -2205,6 +2276,13 @@ async def send_message_stream(
             # The webapp's line dispatcher ignores unknown frames, and it
             # reads past [DONE] until stream close (gateway.ts processLine),
             # so this is backward-compatible.
+            # Build final content BEFORE the terminal frame so the canonical
+            # text (post scaffolding-strip, T5) can ride it — the client
+            # swaps its streamed text for final_text, keeping displayed ==
+            # stored even though the strip happens after tokens rendered.
+            raw_content = "".join(full_content)
+            content = _finalize_assistant_text(raw_content)
+
             if not client_disconnected:
                 try:
                     _events = await registry.get_request_events(req_id)
@@ -2213,6 +2291,10 @@ async def send_message_stream(
                         "v": 1,
                         "request_id": req_id,
                         "timings": {"total_ms": _total_ms, "stages": _stages},
+                        # Canonical answer text as persisted (T5). The client
+                        # replaces its accumulated stream with this — a visible
+                        # "settle" only when scaffolding was actually stripped.
+                        "final_text": content,
                     }}
                     yield "data: " + json.dumps(_final) + "\n\n"
                 except (BrokenPipeError, ConnectionResetError, RuntimeError,
@@ -2225,9 +2307,6 @@ async def send_message_stream(
                     # Timings are best-effort — never break a finished stream.
                     print(f"[chat] terminal frame failed: {_exc}")
 
-            # Build final content for DB (strip thinking tags, persist reasoning separately)
-            raw_content = "".join(full_content)
-            content = _finalize_assistant_text(raw_content)
 
             reasoning = "".join(full_reasoning) if full_reasoning else _extract_thinking(raw_content)
             if not reasoning:

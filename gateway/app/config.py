@@ -132,6 +132,15 @@ class Settings(BaseSettings):
     # splitting (kill switch).
     streaming_max_chunk_chars: int = 40
 
+    # ── Answer scaffolding strip (T5, 2026-08-16) ───────────────
+    # Qwen3.5 appends corrections instead of replacing errors ("(a) **180
+    # minutes** ... Wait, let me recalculate ... **Summary:** (a) 11h15m"),
+    # so skimmers read the wrong bold headline. When a response contains
+    # BOTH a self-correction marker AND a terminal answer block (Final
+    # Answer / Summary / Conclusion), the presentation layer keeps only the
+    # terminal block. Conservative: either signal absent → text untouched.
+    answer_strip_scaffolding_enabled: bool = True
+
     # Legacy / shared fallback (used when per-mode settings are empty)
     inference_model_name: str = "default"
     inference_max_tokens: int = 2048
