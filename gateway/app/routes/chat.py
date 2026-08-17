@@ -1107,12 +1107,17 @@ async def send_message(
     # Retrieve relevant user memories for context injection
     memory_service = get_memory_service()
     memories_text = ""
+    memory_task = None
     if memory_service.enabled and not request.conversation_mode:
-        try:
-            memories = await memory_service.retrieve_relevant_memories(user_id, request.message)
-            memories_text = memory_service.format_memories_for_context(memories)
-        except Exception as exc:
-            print(f"[chat] Memory retrieval failed: {exc}")
+        # Fired CONCURRENTLY with RAG retrieval below (T6b): memory needs
+        # its own embed+search that used to sit serially on the wall path.
+        # Sharing RAG's query embedding was rejected — RAG embeds the
+        # REWRITTEN query, memory embeds the raw message: different texts.
+        # Model access stays safe: both paths embed via the shared
+        # EmbeddingService.embed_async lock.
+        memory_task = asyncio.create_task(
+            memory_service.retrieve_relevant_memories(user_id, request.message)
+        )
 
     # RAG retrieval runs BEFORE system-message build so chunks can be slotted
     # into the strict-grounding template (system_rag.txt) instead of being
@@ -1192,6 +1197,14 @@ async def send_message(
         and not request.conversation_mode
         and not request.image
     )
+
+    if memory_task is not None:
+        try:
+            memories_text = memory_service.format_memories_for_context(
+                await memory_task
+            )
+        except Exception as exc:
+            print(f"[chat] Memory retrieval failed: {exc}")
 
     t_prompt = time.perf_counter()
     messages = [_build_system_message(
@@ -1907,12 +1920,17 @@ async def send_message_stream(
     # Retrieve relevant user memories for context injection
     memory_service = get_memory_service()
     memories_text = ""
+    memory_task = None
     if memory_service.enabled and not request.conversation_mode:
-        try:
-            memories = await memory_service.retrieve_relevant_memories(user_id, request.message)
-            memories_text = memory_service.format_memories_for_context(memories)
-        except Exception as exc:
-            print(f"[chat] Memory retrieval failed: {exc}")
+        # Fired CONCURRENTLY with RAG retrieval below (T6b): memory needs
+        # its own embed+search that used to sit serially on the wall path.
+        # Sharing RAG's query embedding was rejected — RAG embeds the
+        # REWRITTEN query, memory embeds the raw message: different texts.
+        # Model access stays safe: both paths embed via the shared
+        # EmbeddingService.embed_async lock.
+        memory_task = asyncio.create_task(
+            memory_service.retrieve_relevant_memories(user_id, request.message)
+        )
 
     # RAG retrieval runs BEFORE system-message build so chunks slot into the
     # strict-grounding template — see send_message() for rationale. RAG
@@ -1981,6 +1999,14 @@ async def send_message_stream(
             explain_classify_failed = _explain is None
         else:
             explain_task.cancel()
+
+    if memory_task is not None:
+        try:
+            memories_text = memory_service.format_memories_for_context(
+                await memory_task
+            )
+        except Exception as exc:
+            print(f"[chat] Memory retrieval failed: {exc}")
 
     # Streaming path doesn't use tool_calling (no tool loop on stream), so the
     # TOOLS AVAILABLE hint is suppressed here — advertising tools the model

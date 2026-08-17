@@ -8,6 +8,7 @@ and formats matching chunks as context for injection into the LLM prompt.
 
 import asyncio
 import json
+import threading
 import time
 from typing import Any
 
@@ -349,6 +350,16 @@ class RAGService:
     ):
         self.settings = settings
         self.embedding = embedding_service
+        # Serialize reranker calls explicitly (T6b): rerank used to run
+        # inline on the event loop, freezing the gateway for up to ~5s per
+        # call AND implicitly serializing access. asyncio.to_thread
+        # unfreezes the loop; a THREAD lock taken inside the worker
+        # preserves one-at-a-time model access even if the request task is
+        # cancelled mid-rerank (the worker can't be cancelled — an asyncio
+        # lock would release and admit a concurrent caller). Query
+        # embedding is serialized the same way inside
+        # EmbeddingService.embed_async, shared with memory retrieval.
+        self._rerank_thread_lock = threading.Lock()
         self.db = db
         self.enabled = settings.rag_enabled
         self.match_count = settings.rag_match_count
@@ -535,7 +546,11 @@ class RAGService:
         t0 = time.monotonic()
         print(f"[rag] Embedding query ({len(search_query)} chars)...")
         async with metrics.subsystem_timer("rag.embed", note=f"{len(search_query)} chars"):
-            query_embedding = self.embedding.embed(search_query)
+            # Off the event loop (T6b): a sync embed here froze the gateway
+            # (SSE heartbeats, probes, concurrent requests) for its full
+            # duration. embed_async serializes model access via the shared
+            # service-level lock (memory retrieval uses the same path).
+            query_embedding = await self.embedding.embed_async(search_query)
         # Embedding model is loaded by now — declare it (idempotent).
         await metrics.set_model_state(
             "embedding",
@@ -587,9 +602,16 @@ class RAGService:
                     "rag.rerank",
                     note=f"top-{self.settings.rag_rerank_top_k} from {len(results)}",
                 ):
-                    results = reranker.rerank(
-                        query, results, top_k=self.settings.rag_rerank_top_k
-                    )
+                    # Off the event loop, serialized — same rationale as
+                    # the embed call above.
+                    def _locked_rerank(chunks=results):
+                        with self._rerank_thread_lock:
+                            return reranker.rerank(
+                                query, chunks,
+                                top_k=self.settings.rag_rerank_top_k,
+                            )
+
+                    results = await asyncio.to_thread(_locked_rerank)
                 if results:
                     top_score = results[0].get("rerank_score")
                 # Reranker model is loaded by now — declare it (idempotent).
