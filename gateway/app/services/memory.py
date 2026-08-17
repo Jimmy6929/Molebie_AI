@@ -189,7 +189,7 @@ class MemoryService:
         self,
         user_id: str,
         query: str,
-        timeout: float = 5.0,
+        timeout: float | None = None,
     ) -> list[dict[str, Any]]:
         """Retrieve memories relevant to the current query.
 
@@ -198,6 +198,8 @@ class MemoryService:
         """
         if not self.enabled:
             return []
+        if timeout is None:
+            timeout = self.settings.memory_retrieval_timeout
 
         from app.services.embedding import get_embedding_service
         from app.services.metrics_registry import get_metrics_registry
@@ -207,9 +209,13 @@ class MemoryService:
         try:
             # Timer sits inside the try so a timeout records as a subsystem
             # failure (ok=False) before the silent-skip below swallows it.
+            # embed_async (T6b) serializes model access with RAG's query
+            # embedding — memory retrieval now runs concurrently with RAG
+            # retrieval, so the shared lock replaces the event loop's old
+            # implicit serialization.
             async with registry.subsystem_timer("memory.embed"):
                 query_embedding = await asyncio.wait_for(
-                    asyncio.to_thread(embedding_service.embed, query),
+                    embedding_service.embed_async(query),
                     timeout=timeout,
                 )
         except Exception as exc:

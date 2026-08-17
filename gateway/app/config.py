@@ -424,6 +424,10 @@ class Settings(BaseSettings):
     memory_dedup_threshold: float = 0.9    # cosine sim above this = duplicate
     memory_retrieval_threshold: float = 0.5
     memory_retrieval_top_k: int = 5
+    # Query-time memory retrieval budget (T6b). Was a hardcoded 5.0 default
+    # arg — under load the embed regularly blew through it and memory
+    # context silently vanished; now tunable per deployment.
+    memory_retrieval_timeout: float = 5.0
     memory_max_per_user: int = 200         # max stored memories per user
     memory_llm_mode: str = "instant"       # LLM tier for extraction
     memory_extract_max_tokens: int = 400   # max tokens for extraction response

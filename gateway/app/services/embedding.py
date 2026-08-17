@@ -6,6 +6,9 @@ Dimension configured via EMBEDDING_MODEL in .env.
 """
 
 
+import asyncio
+import threading
+
 from app.config import Settings, get_settings
 
 
@@ -13,6 +16,14 @@ class EmbeddingService:
     """Generate text embeddings using a local sentence-transformers model."""
 
     def __init__(self, settings: Settings):
+        # One lock for ALL query-time embedding (T6b) — see embed_async.
+        # A threading.Lock taken INSIDE the worker thread, not an asyncio
+        # lock: if a caller is cancelled (memory's retrieval timeout), the
+        # to_thread worker cannot be cancelled and keeps running — an
+        # asyncio lock would release at the await point and let the next
+        # caller hit the model concurrently with the zombie. The thread
+        # lock serializes at the model boundary regardless of cancellation.
+        self._embed_thread_lock = threading.Lock()
         self.model_name = settings.embedding_model
         self.local_files_only = settings.embedding_local_only
         self._expected_dim = settings.embedding_dim
@@ -78,6 +89,22 @@ class EmbeddingService:
         """Return the embedding dimension (loads model if needed)."""
         self._load_model()
         return self._dimension
+
+    async def embed_async(self, text: str, prefix: str = "search_query") -> list[float]:
+        """Async wrapper: runs ``embed`` on a worker thread, serialized by a
+        single service-level lock (T6b).
+
+        Callers used to invoke ``embed`` inline (RAG) or on ad-hoc threads
+        (memory); once memory retrieval runs CONCURRENTLY with RAG
+        retrieval, two threads could hit the model at once — the event
+        loop's implicit serialization is gone, so this lock is the explicit
+        replacement. All query-time embedding goes through here.
+        """
+        def _locked_embed() -> list[float]:
+            with self._embed_thread_lock:
+                return self.embed(text, prefix)
+
+        return await asyncio.to_thread(_locked_embed)
 
     def embed(self, text: str, prefix: str = "search_query") -> list[float]:
         """Embed a single text string."""
