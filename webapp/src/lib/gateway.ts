@@ -142,6 +142,7 @@ export async function sendMessageStream(
   webSearch?: boolean,
   brain?: string,
   onMetadata?: (meta: StreamMetadata) => void,
+  onFinal?: (finalText: string) => void,
 ): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/chat/stream`, {
     method: "POST",
@@ -222,6 +223,15 @@ export async function sendMessageStream(
         backendEnableThinking = data.metadata.enable_thinking;
       }
       onMetadata?.(data.metadata as StreamMetadata);
+      return;
+    }
+
+    if (data.final) {
+      // Terminal frame: the gateway's canonical answer text (post
+      // scaffolding-strip). Swap it in so displayed == stored.
+      if (typeof data.final.final_text === "string" && onFinal) {
+        onFinal(data.final.final_text);
+      }
       return;
     }
 

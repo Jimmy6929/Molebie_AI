@@ -863,6 +863,11 @@ export default function ChatPage() {
             setInferenceBanner(null);
           }
         },
+        (finalText) => {
+          // Canonical text from the terminal frame (post scaffolding-strip):
+          // keep what the user sees identical to what the DB stores.
+          setMessages((prev) => prev.map((m) => m.streaming ? { ...m, content: finalText } : m));
+        },
       );
       setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m));
 
@@ -976,6 +981,11 @@ export default function ChatPage() {
           } else if (meta.model && meta.model !== "error") {
             setInferenceBanner(null);
           }
+        },
+        (finalText) => {
+          // Canonical text from the terminal frame (post scaffolding-strip):
+          // keep what the user sees identical to what the DB stores.
+          setMessages((prev) => prev.map((m) => m.streaming ? { ...m, content: finalText } : m));
         },
       );
       setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
