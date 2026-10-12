@@ -10,9 +10,13 @@ from cli.models.config import MolebieConfig
 
 
 def _find_project_root() -> Path:
-    """Walk up from cwd looking for the project root (contains .env.example + gateway/)."""
+    """Find the project root (contains .env.example + gateway/).
+
+    Walks up from cwd, then falls back to the checkout this CLI is installed from.
+    """
     current = Path.cwd().resolve()
-    for directory in [current, *current.parents]:
+    install_root = Path(__file__).resolve().parents[2]
+    for directory in [current, *current.parents, install_root]:
         if (directory / ".env.example").exists() and (directory / "gateway").is_dir():
             return directory
     raise FileNotFoundError(
