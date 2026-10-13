@@ -101,6 +101,9 @@ def compute_retrieval_confidence(chunks: list[dict[str, Any]]) -> str:
     # essay and got refused as "not in your notes"). Genuinely grounded
     # answers cluster ≥ 0.9 (p20 = 0.92); the weakest real one measured
     # 0.373. Full derivation: gateway/tests/eval/calibration/2026-08-14/.
+    # Re-checked 2026-10-13 with the official reranker prompt: grounded
+    # top-1 ≥ 0.844, unanswerable ≤ 0.009 — both cut-offs unchanged
+    # (gateway/tests/eval/calibration/2026-10-13/).
     if top_score >= 0.5:
         return "MODERATE"
     return "LOW"
