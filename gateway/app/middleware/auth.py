@@ -5,10 +5,9 @@ Validates gateway-issued JWT tokens signed with JWT_SECRET.
 """
 
 
+import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
-from jose.exceptions import JWTClaimsError
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
@@ -47,7 +46,7 @@ def verify_jwt(token: str, settings: Settings) -> JWTPayload:
             },
         )
         return JWTPayload(**payload)
-    except (JWTError, JWTClaimsError) as e:
+    except jwt.InvalidTokenError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}",

@@ -4,16 +4,9 @@ fastapi==0.136.1
 uvicorn[standard]==0.46.0
 
 # JWT and authentication
-# python-jose 3.5.0 fixes PYSEC-2024-232/233 and relaxes pyasn1 to allow the patched 0.6.x.
-# Two advisories on this dependency are unreachable here and are ignored by the CI pip-audit
-# step; see .github/workflows/ci.yml for the full per-ID justification:
-#   - PYSEC-2025-185  — DoS in jose.jwe.decrypt; we only sign/verify JWTs, never decrypt JWEs.
-#   - PYSEC-2026-1325 — Minerva timing attack in the transitive `ecdsa` package (WONTFIX
-#     upstream, so no fixed version exists). The [cryptography] extra makes jose bind ECKey to
-#     CryptographyECKey, so jose.backends.ecdsa_backend is never imported; we also sign with
-#     HS256 (HMAC), which touches no EC code at all.
-# Both advisories disappear if we migrate off python-jose to PyJWT, which has no `ecdsa` dep.
-python-jose[cryptography]==3.5.0
+# PyJWT replaced python-jose (2026-10-13): jose carried three advisories with no fixed
+# release. Tokens are HS256, which PyJWT signs with the standard library alone.
+PyJWT==2.15.1
 pydantic==2.13.4
 # 2.14.2 fixes GHSA-4xgf-cpjx-pc3j: NestedSecretsSettingsSource followed symlinks out of
 # secrets_dir. We do not use secrets_dir, but the patch bump is free and keeps the audit clean.
