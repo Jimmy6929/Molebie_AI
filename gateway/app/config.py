@@ -428,7 +428,14 @@ class Settings(BaseSettings):
     memory_extract_interval: int = 6       # extract facts every N messages
     memory_max_facts_per_extraction: int = 5
     memory_dedup_threshold: float = 0.9    # cosine sim above this = duplicate
-    memory_retrieval_threshold: float = 0.5
+    # Lowered 0.5 → 0.38 (2026-10-13) with the Qwen3-Embedding query
+    # instruction, which shifts query↔fact cosines down while pulling
+    # matches and noise apart: on 15 matched and 15 unrelated questions
+    # against 30 stored facts, matches bottomed at 0.41 and unrelated
+    # questions topped out at 0.34 (without the instruction: 0.53 vs 0.55,
+    # overlapping). Tuned for the default embedder — an embedder without a
+    # query prompt keeps its old scale, so set this back to 0.5 there.
+    memory_retrieval_threshold: float = 0.38
     memory_retrieval_top_k: int = 5
     # Query-time memory retrieval budget (T6b). Was a hardcoded 5.0 default
     # arg — under load the embed regularly blew through it and memory

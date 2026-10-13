@@ -109,7 +109,13 @@ class EmbeddingService:
     def embed(self, text: str, prefix: str = "search_query") -> list[float]:
         """Embed a single text string."""
         self._load_model()
-        vector = self._model.encode(text, normalize_embeddings=True)
+        # Instruction-aware models (Qwen3-Embedding) ship a "query" prompt
+        # and are trained to get it on the query side only; documents go in
+        # bare. Models that define no such prompt are unaffected.
+        prompt_name = (
+            "query" if prefix == "search_query" and "query" in self._model.prompts else None
+        )
+        vector = self._model.encode(text, prompt_name=prompt_name, normalize_embeddings=True)
         return vector.tolist()
 
     def embed_batch(self, texts: list[str], batch_size: int = 32, prefix: str = "search_document") -> list[list[float]]:
