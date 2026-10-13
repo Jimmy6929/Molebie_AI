@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import statistics
 import sys
 from pathlib import Path
 
@@ -40,6 +41,23 @@ def _ensure_gateway_on_path() -> None:
 _ensure_gateway_on_path()
 
 from app.services.rag import get_rag_service  # noqa: E402
+
+
+def _reciprocal_rank(entry: dict, chunks: list[dict]) -> float:
+    """1/rank of the best-scored chunk carrying an expected substring, or 0
+    when the returned chunks together don't satisfy the row (same all/any
+    rule as ``run_baseline.evaluate``, applied to retrieved text instead of
+    the model's answer)."""
+    expected = [s.lower() for s in entry["expected_substrings"]]
+    texts = [c.get("content", "").lower() for c in
+             sorted(chunks, key=lambda c: c.get("rerank_score") or 0, reverse=True)]
+    check = any if entry.get("any_substring") else all
+    if not check(s in "\n".join(texts) for s in expected):
+        return 0.0
+    for rank, text in enumerate(texts, 1):
+        if any(s in text for s in expected):
+            return 1.0 / rank
+    return 0.0
 
 
 async def main() -> int:
@@ -83,18 +101,41 @@ async def main() -> int:
         return 3
 
     fail = 0
-    for i, e in enumerate(entries, 1):
-        qid = e.get("id", f"q{i}")
-        cat = e.get("category", "?")
-        query = e["query"]
-        print(f"[harness] ── {i}/{len(entries)}  {qid}  [{cat}]  {query!r}", file=sys.stderr)
-        try:
-            chunks = await rag.retrieve_context(args.user_id, query)
-            print(f"[harness] returned {len(chunks)} chunk(s)", file=sys.stderr)
-        except Exception as exc:
-            fail += 1
-            print(f"[harness] FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+    reciprocal_ranks: list[float] = []
+    rerank_ms: list[float] = []
+    try:
+        for i, e in enumerate(entries, 1):
+            qid = e.get("id", f"q{i}")
+            cat = e.get("category", "?")
+            query = e["query"]
+            print(f"[harness] ── {i}/{len(entries)}  {qid}  [{cat}]  {query!r}", file=sys.stderr)
+            try:
+                chunks = await rag.retrieve_context(args.user_id, query)
+                print(f"[harness] returned {len(chunks)} chunk(s)", file=sys.stderr)
+            except Exception as exc:
+                fail += 1
+                print(f"[harness] FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+                continue
+            if chunks:
+                rerank_ms.append(chunks[0].get("_rag_timings", {}).get("t_rerank_ms", 0))
+            if cat == "rag_grounded" and e.get("expected_substrings"):
+                rr = _reciprocal_rank(e, chunks)
+                reciprocal_ranks.append(rr)
+                if rr == 0:
+                    print(f"[harness] MISS {qid}", file=sys.stderr)
+    finally:
+        # aiosqlite's worker thread is non-daemon: an open connection keeps
+        # the process alive after main() returns.
+        await rag.db.close()
 
+    if reciprocal_ranks:
+        n = len(reciprocal_ranks)
+        hits = sum(1 for rr in reciprocal_ranks if rr > 0)
+        print(f"[harness] retrieval: hit_rate={hits}/{n} ({hits / n:.3f})  "
+              f"mrr={sum(reciprocal_ranks) / n:.3f}", file=sys.stderr)
+    if rerank_ms:
+        print(f"[harness] rerank: p50={statistics.median(rerank_ms):.0f}ms  "
+              f"max={max(rerank_ms):.0f}ms  (n={len(rerank_ms)})", file=sys.stderr)
     print(f"[harness] done. {len(entries) - fail} ok, {fail} failed", file=sys.stderr)
     return 0 if fail == 0 else 1
 
