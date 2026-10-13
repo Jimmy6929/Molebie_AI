@@ -46,7 +46,7 @@ def verify_jwt(token: str, settings: Settings) -> JWTPayload:
             },
         )
         return JWTPayload(**payload)
-    except jwt.InvalidTokenError as e:
+    except jwt.PyJWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}",

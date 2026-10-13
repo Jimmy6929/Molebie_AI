@@ -57,7 +57,7 @@ class AuthService:
                 algorithms=[self.jwt_algorithm],
                 options={"verify_aud": False},
             )
-        except jwt.InvalidTokenError as e:
+        except jwt.PyJWTError as e:
             raise ValueError(f"Invalid token: {e}")
 
     async def register(self, email: str, password: str) -> dict[str, Any]:
