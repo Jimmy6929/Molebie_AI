@@ -216,3 +216,14 @@ async def test_fts_search_scopes_to_folders(isolated_data_dir):
 
     everything = await db.fts_search_chunks(USER_ID, "content", limit=10)
     assert sorted(r["filename"] for r in everything) == ["a.md", "p.md"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_use_shares_one_connection(isolated_data_dir):
+    """Hybrid search gathers vector + FTS, so the first two _get_conn calls
+    can overlap. Both must get the same connection — a second one would be
+    unreachable by close() and its worker thread keeps the process alive."""
+    from app.services.database import get_database_service
+    db = get_database_service()
+    first, second = await asyncio.gather(db._get_conn(), db._get_conn())
+    assert first is second
