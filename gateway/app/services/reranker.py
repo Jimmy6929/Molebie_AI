@@ -24,6 +24,7 @@ import threading
 from typing import Any
 
 from app.config import Settings, get_settings
+from app.services.document_processor import with_embedding_prefix
 
 # Qwen3-Reranker uses a fixed instruction template — see the model card.
 _QWEN_INSTRUCTION = (
@@ -39,6 +40,18 @@ _QWEN_PREFIX = (
 )
 _QWEN_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 _QWEN_MAX_LENGTH = 8192
+
+
+def _rerank_text(chunk: dict[str, Any]) -> str:
+    """The chunk behind its heading path (``h1 > h2 > h3``). Scoring the bare
+    body let a short intro chunk that names the note's subject outrank the
+    chunk holding the answer, which sits under a heading and never repeats
+    it. The note title is left out on purpose: a one-word title like
+    "Software" lifted unrelated questions over the MODERATE line
+    (gateway/tests/eval/calibration/2026-10-14/)."""
+    metadata = chunk.get("metadata")
+    breadcrumb = metadata.get("breadcrumb", []) if isinstance(metadata, dict) else []
+    return with_embedding_prefix(chunk.get("content", ""), breadcrumb or [], None)
 
 
 def _is_qwen_style(model_name: str) -> bool:
@@ -184,12 +197,12 @@ class RerankerService:
         self._load_model()
 
         if self._impl == "cross_encoder":
-            pairs = [(query, c.get("content", "")) for c in chunks]
+            pairs = [(query, _rerank_text(c)) for c in chunks]
             scores = self._model.predict(pairs)
             for chunk, score in zip(chunks, scores, strict=False):
                 chunk["rerank_score"] = float(score)
         elif self._impl == "qwen_causal":
-            scores = self._qwen_scores(query, [c.get("content", "") for c in chunks])
+            scores = self._qwen_scores(query, [_rerank_text(c) for c in chunks])
             for chunk, score in zip(chunks, scores, strict=True):
                 chunk["rerank_score"] = score
         else:
