@@ -131,7 +131,14 @@ class DatabaseService:
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
-            self._conn = await get_connection(self.data_dir)
+            conn = await get_connection(self.data_dir)
+            # Two callers can both see None across the await (hybrid search
+            # gathers vector + FTS). Keep the first connection and close the
+            # loser — otherwise it leaks, and close() can never reach it.
+            if self._conn is None:
+                self._conn = conn
+            else:
+                await conn.close()
         return self._conn
 
     async def close(self) -> None:
