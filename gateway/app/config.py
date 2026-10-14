@@ -317,7 +317,8 @@ class Settings(BaseSettings):
     rag_reranker_enabled: bool = True
     # Qwen3-Reranker: same family as the generator, beats BGE-reranker-v2-m3
     # on MTEB-R/CMTEB/MTEB-Code, 32K ctx, Apache 2.0. Loaded via the
-    # AutoModelForCausalLM yes/no-logit path inside RerankerService;
+    # AutoModelForCausalLM yes/no-logit path inside RerankerService, which
+    # scores all candidates in one batch on MPS/CUDA when available;
     # CrossEncoder-style models still work via the same service.
     rag_reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
     # Bumped from 5: more chunks reach the prompt for better coverage now
@@ -344,6 +345,11 @@ class Settings(BaseSettings):
     # Applied on every retrieval path (rerank ok / failed / disabled) via
     # _passes_relevance_floor. Derivation frozen under
     # gateway/tests/eval/calibration/2026-08-14/.
+    #
+    # Re-checked 2026-10-13 after the reranker moved to the model card's
+    # chat wrapper: unanswerable queries now top out at 0.009 and the
+    # weakest answer-bearing chunk at 0.488, so 0.25 holds with more room
+    # (gateway/tests/eval/calibration/2026-10-13/).
     rag_rerank_floor: float = 0.25
 
     # ── Parent-Child Neighbor Expansion ───────────────────────
