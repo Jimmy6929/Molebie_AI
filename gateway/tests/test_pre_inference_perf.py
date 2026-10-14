@@ -64,7 +64,7 @@ async def test_embed_async_serializes_concurrent_callers():
 def test_embed_uses_the_models_query_prompt(prompts, prefix, expected):
     """Queries get the model's own "query" prompt when it defines one;
     documents and prompt-less models are embedded bare."""
-    import numpy as np
+    from types import SimpleNamespace
 
     class _Model:
         def __init__(self):
@@ -73,7 +73,7 @@ def test_embed_uses_the_models_query_prompt(prompts, prefix, expected):
 
         def encode(self, text, prompt_name=None, normalize_embeddings=False):
             self.seen = prompt_name
-            return np.zeros(2)
+            return SimpleNamespace(tolist=lambda: [0.0, 0.0])
 
     svc = EmbeddingService(get_settings())
     svc._model = _Model()
