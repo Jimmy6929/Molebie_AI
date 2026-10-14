@@ -190,6 +190,17 @@ def chunk_text(text: str, chunk_size: int = 512, chunk_overlap: int = 64) -> lis
     return [c["text"] for c in structured]
 
 
+def with_embedding_prefix(
+    text: str,
+    breadcrumb: list[str],
+    note_title: str | None,
+) -> str:
+    """``text`` behind its ``breadcrumb | note_title`` prefix — the text the
+    embedder indexes. The reranker reuses it with ``note_title=None``."""
+    prefix = _embedding_prefix(breadcrumb, note_title)
+    return f"{prefix}\n\n{text}" if prefix else text
+
+
 def _embedding_prefix(
     breadcrumb: list[str],
     note_title: str | None,
@@ -305,10 +316,10 @@ class DocumentProcessor:
         # The original chunk text (without prefix) is what we store in
         # `content` and what the model sees at inference time.
         chunk_texts = [c["text"] for c in structured_chunks]
-        embed_texts: list[str] = []
-        for c in structured_chunks:
-            prefix = _embedding_prefix(c.get("breadcrumb", []), note_title)
-            embed_texts.append(f"{prefix}\n\n{c['text']}" if prefix else c["text"])
+        embed_texts = [
+            with_embedding_prefix(c["text"], c.get("breadcrumb", []), note_title)
+            for c in structured_chunks
+        ]
 
         print(f"[doc_processor] Extracted {len(text)} chars → {len(chunk_texts)} chunks")
 
