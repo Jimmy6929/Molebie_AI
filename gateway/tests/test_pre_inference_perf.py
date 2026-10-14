@@ -53,6 +53,34 @@ async def test_embed_async_serializes_concurrent_callers():
     assert active["max"] == 1
 
 
+@pytest.mark.parametrize(
+    ("prompts", "prefix", "expected"),
+    [
+        ({"query": "Instruct: …\nQuery:", "document": ""}, "search_query", "query"),
+        ({"query": "Instruct: …\nQuery:", "document": ""}, "search_document", None),
+        ({}, "search_query", None),
+    ],
+)
+def test_embed_uses_the_models_query_prompt(prompts, prefix, expected):
+    """Queries get the model's own "query" prompt when it defines one;
+    documents and prompt-less models are embedded bare."""
+    from types import SimpleNamespace
+
+    class _Model:
+        def __init__(self):
+            self.prompts = prompts
+            self.seen = "unset"
+
+        def encode(self, text, prompt_name=None, normalize_embeddings=False):
+            self.seen = prompt_name
+            return SimpleNamespace(tolist=lambda: [0.0, 0.0])
+
+    svc = EmbeddingService(get_settings())
+    svc._model = _Model()
+    svc.embed("where do I live?", prefix=prefix)
+    assert svc._model.seen == expected
+
+
 @pytest.mark.asyncio
 async def test_memory_timeout_resolves_from_settings():
     """timeout=None must resolve from memory_retrieval_timeout — a hanging
