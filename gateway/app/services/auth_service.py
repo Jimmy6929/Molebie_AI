@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt
 
 from app.config import Settings, get_settings
 from app.schema import DEFAULT_USER_ID
@@ -57,7 +57,7 @@ class AuthService:
                 algorithms=[self.jwt_algorithm],
                 options={"verify_aud": False},
             )
-        except JWTError as e:
+        except jwt.PyJWTError as e:
             raise ValueError(f"Invalid token: {e}")
 
     async def register(self, email: str, password: str) -> dict[str, Any]:

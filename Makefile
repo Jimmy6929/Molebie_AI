@@ -182,7 +182,7 @@ verify:
 	cd gateway && pytest tests/ -v
 	pytest cli/tests satellite_storage/tests gateway/training/tests -q
 	@echo "🔒 [3/3] Dependency audit (pip-audit)..."
-	cd gateway && pip-audit -r requirements.txt --ignore-vuln PYSEC-2025-185
+	cd gateway && pip-audit -r requirements.txt
 	@echo ""
 	@echo "✅ verify passed — the same checks CI enforces on every PR."
 
